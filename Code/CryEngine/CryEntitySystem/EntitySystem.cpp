@@ -18,7 +18,6 @@
 #include "Entity.h"
 #include "EntityCVars.h"
 #include "EntityClassRegistry.h"
-#include "ComponentEventDistributer.h"
 #include "ScriptBind_Entity.h"
 #include "PhysicsEventListener.h"
 #include "AreaManager.h"
@@ -27,11 +26,11 @@
 #include "EntityArchetype.h"
 #include "PartitionGrid.h"
 #include "ProximityTriggerSystem.h"
-#include "EntityObject.h"
+#include "EntitySlot.h"
 #include <CryNetwork/ISerialize.h>
+#include "NetEntity.h"
 #include "EntityLayer.h"
 #include "EntityLoadManager.h"
-#include "EntityPoolManager.h"
 #include <CrySystem/Profilers/IStatoscope.h>
 #include <CryEntitySystem/IBreakableManager.h>
 #include <CryGame/IGame.h>
@@ -41,6 +40,7 @@
 #include <CryCore/TypeInfo_impl.h>  // CRY_ARRAY_COUNT
 #include "BSPTree3D.h"
 
+#include <CryCore/StlUtils.h>
 #include <CryRenderer/IRenderer.h>
 #include <Cry3DEngine/I3DEngine.h>
 #include <CrySystem/ILog.h>
@@ -56,10 +56,11 @@
 #include <CryPhysics/IDeferredCollisionEvent.h>
 #include <CryNetwork/IRemoteCommand.h>
 
+#include "Schematyc/EntityObjectDebugger.h"
+
 #pragma warning(disable: 6255)  // _alloca indicates failure by raising a stack overflow exception. Consider using _malloca instead. (Note: _malloca requires _freea.)
 
-stl::PoolAllocatorNoMT<sizeof(CRenderProxy)>* g_Alloc_RenderProxy = 0;
-stl::PoolAllocatorNoMT<sizeof(CEntityObject), 8>* g_Alloc_EntitySlot = 0;
+stl::PoolAllocatorNoMT<sizeof(CEntitySlot), 16>* g_Alloc_EntitySlot = 0;
 
 namespace
 {
@@ -87,41 +88,8 @@ void OnRemoveEntityCVarChange(ICVar* pArgs)
 	}
 }
 
-//////////////////////////////////////////////////////////////////////////
-void OnActivateEntityCVarChange(ICVar* pArgs)
-{
-	if (gEnv->pEntitySystem)
-	{
-		const char* szEntity = pArgs->GetString();
-		IEntity* pEnt = gEnv->pEntitySystem->FindEntityByName(szEntity);
-		if (pEnt)
-		{
-			CEntity* pcEnt = (CEntity*)(pEnt);
-			pcEnt->Activate(true);
-		}
-	}
-}
-
-//////////////////////////////////////////////////////////////////////////
-void OnDeactivateEntityCVarChange(ICVar* pArgs)
-{
-	if (gEnv->pEntitySystem)
-	{
-		const char* szEntity = pArgs->GetString();
-		IEntity* pEnt = gEnv->pEntitySystem->FindEntityByName(szEntity);
-		if (pEnt)
-		{
-			CEntity* pcEnt = (CEntity*)(pEnt);
-			pcEnt->Activate(false);
-		}
-	}
-}
-
 //////////////////////////////////////////////////////////////////////
 SEntityLoadParams::SEntityLoadParams()
-	: pReuseEntity(NULL)
-	, bCallInit(true)
-	, clonedLayerId(-1)
 {
 	AddRef();
 }
@@ -129,9 +97,6 @@ SEntityLoadParams::SEntityLoadParams()
 //////////////////////////////////////////////////////////////////////
 SEntityLoadParams::SEntityLoadParams(CEntity* pReuseEntity, SEntitySpawnParams& resetParams)
 	: spawnParams(resetParams)
-	, pReuseEntity(pReuseEntity)
-	, bCallInit(true)
-	, clonedLayerId(-1)
 {
 	assert(pReuseEntity);
 
@@ -151,43 +116,12 @@ SEntityLoadParams& SEntityLoadParams::operator=(const SEntityLoadParams& other)
 	{
 		spawnParams = other.spawnParams;
 		spawnParams.entityNode = other.spawnParams.entityNode;
-		pReuseEntity = other.pReuseEntity;
 		bCallInit = other.bCallInit;
-		clonedLayerId = other.clonedLayerId;
 
 		AddRef();
 	}
 
 	return *this;
-}
-
-//////////////////////////////////////////////////////////////////////
-void SEntityLoadParams::UseClonedEntityNode(const XmlNodeRef sourceEntityNode, XmlNodeRef parentNode)
-{
-	MEMSTAT_CONTEXT(EMemStatContextTypes::MSC_Other, EMemStatContextFlags::MSF_Instance, "SEntityLoadParams Clone Xml");
-
-	// Create clone of entity node to avoid adding reference to host XML
-	bool bCloned = false;
-	if (sourceEntityNode)
-	{
-		if (parentNode)
-			spawnParams.entityNode = parentNode->newChild(sourceEntityNode->getTag());
-		else
-			spawnParams.entityNode = gEnv->pSystem->CreateXmlNode(sourceEntityNode->getTag());
-
-		bCloned = CloneXmlNode(sourceEntityNode, spawnParams.entityNode);
-	}
-
-	if (bCloned)
-	{
-		// Use the char* from the cloned node
-		spawnParams.sName = spawnParams.entityNode->getAttr("Name");
-		spawnParams.sLayerName = spawnParams.entityNode->getAttr("Layer");
-	}
-	else
-	{
-		spawnParams.entityNode = NULL;
-	}
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -249,13 +183,9 @@ void SEntityLoadParams::RemoveRef()
 
 //////////////////////////////////////////////////////////////////////
 CEntitySystem::CEntitySystem(ISystem* pSystem)
-	: m_entityTimeoutList(gEnv->pTimer)
 {
-	CRenderProxy::SetTimeoutList(&m_entityTimeoutList);
-
 	// Assign allocators.
-	g_Alloc_RenderProxy = new stl::PoolAllocatorNoMT<sizeof(CRenderProxy)>(stl::FHeap().FreeWhenEmpty(true));
-	g_Alloc_EntitySlot = new stl::PoolAllocatorNoMT<sizeof(CEntityObject), 8>(stl::FHeap().FreeWhenEmpty(true));
+	g_Alloc_EntitySlot = new stl::PoolAllocatorNoMT<sizeof(CEntitySlot), 16>(stl::FHeap().FreeWhenEmpty(true));
 
 	m_onEventSinks.reserve(5);
 	for (size_t i = 0; i < SinkMaxEventSubscriptionCount; ++i)
@@ -267,7 +197,7 @@ CEntitySystem::CEntitySystem(ISystem* pSystem)
 	m_pClassRegistry = 0;
 	m_pEntityScriptBinding = NULL;
 
-	CVar::Init(gEnv->pConsole);
+	CVar::Init();
 
 	m_bTimersPause = false;
 	m_nStartPause.SetSeconds(-1.0f);
@@ -275,10 +205,8 @@ CEntitySystem::CEntitySystem(ISystem* pSystem)
 	m_pAreaManager = new CAreaManager(this);
 	m_pBreakableManager = new CBreakableManager(this);
 	m_pEntityArchetypeManager = new CEntityArchetypeManager;
-	m_pEventDistributer = new CComponentEventDistributer(CVar::pUpdateType->GetIVal());
 
 	m_pEntityLoadManager = new CEntityLoadManager(this);
-	m_pEntityPoolManager = new CEntityPoolManager(this);
 
 	m_pPartitionGrid = new CPartitionGrid;
 	m_pProximityTriggerSystem = new CProximityTriggerSystem;
@@ -302,16 +230,14 @@ CEntitySystem::CEntitySystem(ISystem* pSystem)
 	if (gEnv->pConsole != 0)
 	{
 		REGISTER_STRING_CB("es_removeEntity", "", VF_CHEAT, "Removes an entity", OnRemoveEntityCVarChange);
-		REGISTER_STRING_CB("es_activateEntity", "", VF_CHEAT, "Activates an entity", OnActivateEntityCVarChange);
-		REGISTER_STRING_CB("es_deactivateEntity", "", VF_CHEAT, "Deactivates an entity", OnDeactivateEntityCVarChange);
 	}
+
+	m_pEntityObjectDebugger.reset(new CEntityObjectDebugger);
 }
 
 //////////////////////////////////////////////////////////////////////
 CEntitySystem::~CEntitySystem()
 {
-	CRenderProxy::SetTimeoutList(0);
-
 	Unload();
 
 	SAFE_DELETE(m_pClassRegistry);
@@ -323,9 +249,7 @@ CEntitySystem::~CEntitySystem()
 	SAFE_DELETE(m_pAreaManager);
 	SAFE_DELETE(m_pEntityArchetypeManager);
 	SAFE_DELETE(m_pEntityScriptBinding);
-	SAFE_DELETE(m_pEventDistributer);
 	SAFE_DELETE(m_pEntityLoadManager);
-	SAFE_DELETE(m_pEntityPoolManager);
 
 	SAFE_DELETE(m_pPhysicsEventListener);
 
@@ -333,7 +257,6 @@ CEntitySystem::~CEntitySystem()
 	SAFE_DELETE(m_pPartitionGrid);
 	SAFE_DELETE(m_pBreakableManager);
 
-	SAFE_DELETE(g_Alloc_RenderProxy);
 	SAFE_DELETE(g_Alloc_EntitySlot);
 	//ShutDown();
 }
@@ -362,7 +285,6 @@ bool CEntitySystem::Init(ISystem* pSystem)
 	// Should reallocate grid if level size change.
 	m_pPartitionGrid->AllocateGrid(4096, 4096);
 
-	m_entityTimeoutList.Clear();
 	m_bLocked = false;
 
 	return true;
@@ -386,7 +308,7 @@ void CEntitySystem::RegisterPhysicCallbacks()
 	if (m_pPhysicsEventListener)
 		m_pPhysicsEventListener->RegisterPhysicCallbacks();
 #if !defined(_RELEASE)
-	CPhysicalProxy::EnableValidation();
+	CEntityPhysics::EnableValidation();
 #endif
 }
 
@@ -395,7 +317,7 @@ void CEntitySystem::UnregisterPhysicCallbacks()
 	if (m_pPhysicsEventListener)
 		m_pPhysicsEventListener->UnregisterPhysicCallbacks();
 #if !defined(_RELEASE)
-	CPhysicalProxy::DisableValidation();
+	CEntityPhysics::DisableValidation();
 #endif
 }
 
@@ -413,12 +335,9 @@ void CEntitySystem::Unload()
 
 	UnloadAreas();
 
-	CEntity::ClearStaticData();
-
 	stl::free_container(m_currentTimers);
 	m_pEntityArchetypeManager->Reset();
 
-	stl::free_container(m_tempActiveEntities);
 	stl::free_container(m_deferredUsedEntities);
 }
 
@@ -435,15 +354,12 @@ void CEntitySystem::PurgeHeaps()
 
 void CEntitySystem::Reset()
 {
+	LOADING_TIME_PROFILE_SECTION;
+
 	m_pPartitionGrid->BeginReset();
 	m_pProximityTriggerSystem->BeginReset();
 
 	m_pEntityLoadManager->Reset();
-
-	m_pEventDistributer->Reset();
-
-	assert(m_pEntityPoolManager);
-	m_pEntityPoolManager->Reset();
 
 	// Flush the physics linetest and events queue
 	if (gEnv->pPhysicalWorld)
@@ -494,23 +410,23 @@ void CEntitySystem::Reset()
 
 	ClearEntityArray();
 	m_mapActiveEntities.clear();
-	m_tempActiveEntitiesValid = false;
+
 	stl::free_container(m_deletedEntities);
 	m_guidMap.clear();
 
 	ResetAreas();
 
 	m_EntitySaltBuffer.Reset();
+
+	// Always reserve the legacy game rules and local player entity id's
+	ReserveEntityId(1);
+	ReserveEntityId(LOCAL_PLAYER_ENTITY_ID);
+
 	m_timersMap.clear();
 
-	for (int i = 0; i < ENTITY_EVENT_LAST; i++)
-	{
-		m_eventListeners[i].clear();
-	}
 	m_pProximityTriggerSystem->Reset();
 	m_pPartitionGrid->Reset();
 
-	m_entityTimeoutList.Clear();
 	m_bReseting = false;
 
 	CheckInternalConsistency();
@@ -525,7 +441,7 @@ void CEntitySystem::AddSink(IEntitySystemSink* pSink, uint32 subscriptions, uint
 	{
 		for (uint i = 0; i < SinkMaxEventSubscriptionCount; ++i)
 		{
-			if ((subscriptions & (1 << i)) && (i != static_log2<IEntitySystem::OnEvent>::value))
+			if ((subscriptions & (1 << i)) && (i != stl::static_log2<IEntitySystem::OnEvent>::value))
 			{
 				assert(!stl::find(m_sinks[i], pSink));
 				m_sinks[i].push_back(pSink);
@@ -567,7 +483,7 @@ void CEntitySystem::RemoveSink(IEntitySystemSink* pSink)
 //////////////////////////////////////////////////////////////////////////
 bool CEntitySystem::OnBeforeSpawn(SEntitySpawnParams& params)
 {
-	EntitySystemSinks& sinks = m_sinks[static_log2 < IEntitySystem::OnBeforeSpawn > ::value];
+	EntitySystemSinks& sinks = m_sinks[stl::static_log2<IEntitySystem::OnBeforeSpawn> ::value];
 	EntitySystemSinks::iterator si = sinks.begin();
 	EntitySystemSinks::iterator siEnd = sinks.end();
 
@@ -583,7 +499,7 @@ bool CEntitySystem::OnBeforeSpawn(SEntitySpawnParams& params)
 //////////////////////////////////////////////////////////////////////////
 void CEntitySystem::OnEntityReused(IEntity* pEntity, SEntitySpawnParams& params)
 {
-	EntitySystemSinks& sinks = m_sinks[static_log2 < IEntitySystem::OnReused > ::value];
+	EntitySystemSinks& sinks = m_sinks[stl::static_log2<IEntitySystem::OnReused>::value];
 	EntitySystemSinks::iterator si = sinks.begin();
 	EntitySystemSinks::iterator siEnd = sinks.end();
 
@@ -591,11 +507,6 @@ void CEntitySystem::OnEntityReused(IEntity* pEntity, SEntitySpawnParams& params)
 	{
 		(*si)->OnReused(pEntity, params);
 	}
-
-	assert(m_pEntityPoolManager);
-	CEntity* pCEntity = (CEntity*)pEntity;
-	if (pCEntity && pCEntity->IsPoolControlled())
-		m_pEntityPoolManager->OnPoolEntityInUse(pCEntity, params.prevId);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -615,6 +526,7 @@ EntityId CEntitySystem::GenerateEntityId(bool bStaticId)
 //////////////////////////////////////////////////////////////////////
 IEntity* CEntitySystem::SpawnEntity(SEntitySpawnParams& params, bool bAutoInit)
 {
+	LOADING_TIME_PROFILE_SECTION_ARGS((params.pClass ? params.pClass->GetName() : "Unknown"));
 	FUNCTION_PROFILER(m_pISystem, PROFILE_ENTITY);
 
 #ifndef _RELEASE
@@ -657,12 +569,9 @@ IEntity* CEntitySystem::SpawnEntity(SEntitySpawnParams& params, bool bAutoInit)
 
 	MEMSTAT_CONTEXT_FMT(EMemStatContextTypes::MSC_Other, EMemStatContextFlags::MSF_Instance, "SpawnEntity %s", params.pClass ? params.pClass->GetName() : "WITH NO CLASS");
 
-	assert(params.pClass != NULL);   // Class must always be specified
-
-	if (!params.pClass)
+	if (params.pClass == nullptr)
 	{
-		CryWarning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_WARNING, "Trying to spawn entity %s with no entity class. Spawning refused.", params.sName);
-		return NULL;
+		params.pClass = m_pClassRegistry->GetDefaultClass();
 	}
 
 	if (m_bLocked)
@@ -689,7 +598,7 @@ IEntity* CEntitySystem::SpawnEntity(SEntitySpawnParams& params, bool bAutoInit)
 	{
 		// get entity id and mark it
 		params.id = GenerateEntityId(params.bStaticEntityId);
-
+		
 		if (!params.id)
 		{
 			EntityWarning("CEntitySystem::SpawnEntity Failed, Can't spawn entity %s. ID range is full (internal error)", (const char*)params.sName);
@@ -706,7 +615,7 @@ IEntity* CEntitySystem::SpawnEntity(SEntitySpawnParams& params, bool bAutoInit)
 			pEntity = m_EntityArray[IdToHandle(params.id).GetIndex()];
 
 			if (pEntity)
-				EntityWarning("Entity with id=%d, %s already spawned on this client...override", pEntity->GetId(), pEntity->GetEntityTextDescription());
+				EntityWarning("Entity with id=%d, %s already spawned on this client...override", pEntity->GetId(), pEntity->GetEntityTextDescription().c_str());
 			else
 				m_EntitySaltBuffer.InsertKnownHandle(IdToHandle(params.id));
 		}
@@ -718,28 +627,19 @@ IEntity* CEntitySystem::SpawnEntity(SEntitySpawnParams& params, bool bAutoInit)
 
 	if (!pEntity)
 	{
-		// Is this entity class pooled, if so take entity from pool.
-		if (params.bCreatedThroughPool && m_pEntityPoolManager->IsClassUsingPools(params.pClass))
+		// Makes new entity.
+		pEntity = new CEntity(params);
+		// put it into the entity map
+		m_EntityArray[IdToHandle(params.id).GetIndex()] = pEntity;
+
+		if (!params.guid.IsNull())
+			RegisterEntityGuid(params.guid, params.id);
+
+		if (bAutoInit)
 		{
-			pEntity = m_pEntityPoolManager->PrepareDynamicFromPool(params, bAutoInit);
-		}
-
-		if (!pEntity)
-		{
-			// Makes new entity.
-			pEntity = new CEntity(params);
-			// put it into the entity map
-			m_EntityArray[IdToHandle(params.id).GetIndex()] = pEntity;
-
-			if (params.guid)
-				RegisterEntityGuid(params.guid, params.id);
-
-			if (bAutoInit)
+			if (!InitEntity(pEntity, params))   // calls DeleteEntity() on failure
 			{
-				if (!InitEntity(pEntity, params))   // calls DeleteEntity() on failure
-				{
-					return NULL;
-				}
+				return NULL;
 			}
 		}
 	}
@@ -750,59 +650,6 @@ IEntity* CEntitySystem::SpawnEntity(SEntitySpawnParams& params, bool bAutoInit)
 	}
 	//
 	return pEntity;
-}
-
-//////////////////////////////////////////////////////////////////////////
-bool CEntitySystem::ResetEntityId(CEntity* pEntity, EntityId newEntityId)
-{
-	assert(pEntity);
-	if (!pEntity)
-		return false;
-
-	// New entity Id must not currently be in use either!
-	bool bNewHandleInUse = false;
-	if (newEntityId)
-	{
-		const CSaltHandle<> newHandle = IdToHandle(newEntityId);
-		bNewHandleInUse = m_EntitySaltBuffer.IsUsed(newHandle.GetIndex());
-		if (bNewHandleInUse)
-		{
-			// If the buffer marks it as in use but no entity exists in the array, this means the id was
-			//	reserved, so it is still okay to use.
-			CEntity* pUsedEntity = m_EntityArray[newHandle.GetIndex()];
-			if (pUsedEntity)
-			{
-				assert(false);
-				return false;
-			}
-		}
-	}
-
-	// Remove the old salt handle reference
-	const EntityId oldEntityId = pEntity->GetId();
-	const CSaltHandle<> oldHandle = IdToHandle(oldEntityId);
-	if (m_EntitySaltBuffer.IsUsed(oldHandle.GetIndex()))
-	{
-		//m_EntitySaltBuffer.Remove(oldHandle); // TODO What if it was reserved?
-		m_EntityArray[oldHandle.GetIndex()] = NULL;
-	}
-
-	RemoveEntityFromActiveList(pEntity);
-
-	// Inform the distributer of any change!
-	m_pEventDistributer->RemapEntityID(pEntity->GetId(), newEntityId);
-
-	if (newEntityId)
-	{
-		const CSaltHandle<> newHandle = IdToHandle(newEntityId);
-
-		if (!bNewHandleInUse)
-			m_EntitySaltBuffer.InsertKnownHandle(newHandle);
-
-		m_EntityArray[newHandle.GetIndex()] = pEntity;
-	}
-
-	return true;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -828,7 +675,7 @@ bool CEntitySystem::InitEntity(IEntity* pEntity, SEntitySpawnParams& params)
 		return false;
 	}
 
-	EntitySystemSinks& sinks = m_sinks[static_log2 < IEntitySystem::OnSpawn > ::value];
+	EntitySystemSinks& sinks = m_sinks[stl::static_log2<IEntitySystem::OnSpawn>::value];
 	EntitySystemSinks::iterator si = sinks.begin();
 	EntitySystemSinks::iterator siEnd = sinks.end();
 
@@ -853,28 +700,19 @@ void CEntitySystem::DeleteEntity(CEntity* pEntity)
 
 	if (pEntity)
 	{
-		CRY_ASSERT_MESSAGE(!pEntity->IsFromPool(), "About to delete an entity who is still marked as coming from the pool");
-
-		if (gEnv->pGame)
+		if (gEnv->pGameFramework)
 		{
-			IGameFramework* pFramework = gEnv->pGame->GetIGameFramework();
+			INetContext* pContext = gEnv->pGameFramework->GetNetContext();
 
-			if (pFramework)
+			if (pContext)
 			{
-				INetContext* pContext = pFramework->GetNetContext();
-
-				if (pContext)
+				if (pContext->IsBound(pEntity->GetId()))
 				{
-					if (pContext->IsBound(pEntity->GetId()))
-					{
-						// If the network is still there and this entity is still bound to it force an unbind.
-						pContext->UnbindObject(pEntity->GetId());
-					}
+					// If the network is still there and this entity is still bound to it force an unbind.
+					pContext->UnbindObject(pEntity->GetId());
 				}
 			}
 		}
-
-		m_pEventDistributer->OnEntityDeleted(pEntity);
 
 		pEntity->ShutDown();
 
@@ -884,10 +722,13 @@ void CEntitySystem::DeleteEntity(CEntity* pEntity)
 		m_EntityArray[IdToHandle(pEntity->GetId()).GetIndex()] = 0;
 		m_EntitySaltBuffer.Remove(IdToHandle(pEntity->GetId()));
 
-		if (pEntity->m_guid)
+		if (!pEntity->m_guid.IsNull())
 			UnregisterEntityGuid(pEntity->m_guid);
 
 		delete pEntity;
+
+		// Make sure 3dengine does not keep references to this entity
+		gEnv->p3DEngine->OnEntityDeleted(pEntity);
 	}
 }
 
@@ -906,7 +747,7 @@ void CEntitySystem::ClearEntityArray()
 		m_EntityArray[dwI] = 0;
 	}
 
-	m_tempActiveEntitiesValid = false;
+	m_bSupportLegacy64bitGuids = false;
 
 	CheckInternalConsistency();
 }
@@ -944,13 +785,9 @@ void CEntitySystem::RemoveEntity(EntityId entity, bool bForceRemoveNow)
 			return;
 		}
 
-		if (pEntity->IsFromPool())
+		if (!pEntity->m_bGarbage)
 		{
-			m_pEntityPoolManager->ReturnToPool(entity, false);
-		}
-		else if (!pEntity->m_bGarbage)
-		{
-			EntitySystemSinks& sinks = m_sinks[static_log2 < IEntitySystem::OnRemove > ::value];
+			EntitySystemSinks& sinks = m_sinks[stl::static_log2<IEntitySystem::OnRemove>::value];
 			EntitySystemSinks::iterator si = sinks.begin();
 			EntitySystemSinks::iterator siEnd = sinks.end();
 
@@ -1012,8 +849,7 @@ void CEntitySystem::RemoveEntityFromActiveList(CEntity* pEntity)
 	{
 		m_mapActiveEntities.erase(pEntity->GetId());
 		ActivatePrePhysicsUpdateForEntity(pEntity, false);
-		m_tempActiveEntitiesValid = false;
-		pEntity->m_bActive = false;
+
 		if (pEntity->m_bInActiveList)
 		{
 			pEntity->m_bInActiveList = false;
@@ -1021,9 +857,6 @@ void CEntitySystem::RemoveEntityFromActiveList(CEntity* pEntity)
 			pEntity->SendEvent(event);
 		}
 	}
-
-	assert(pEntity && m_mapActiveEntities.count(pEntity->GetId()) == 0);
-	assert(pEntity && m_mapPrePhysicsEntities.count(pEntity->GetId()) == 0);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -1052,21 +885,6 @@ CEntity* CEntitySystem::GetEntityFromID(EntityId id) const
 	}
 
 	return 0;
-}
-
-//////////////////////////////////////////////////////////////////////////
-EntityId CEntitySystem::GetClonedEntityId(EntityId origId, EntityId refId) const
-{
-	CEntity* pEntity = GetEntityFromID(refId);
-
-	// If the reference entity exists, and it's from a cloned layer, use the entity load
-	// manager to remap the original id to the cloned version in that layer.
-	if (pEntity != NULL && pEntity->GetCloneLayerId() != -1)
-	{
-		return m_pEntityLoadManager->GetClonedId(pEntity->GetCloneLayerId(), origId);
-	}
-
-	return origId;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1119,7 +937,7 @@ IEntity* CEntitySystem::GetEntityFromPhysics(IPhysicalEntity* pPhysEntity) const
 		pEntity = (CEntity*)pPhysEntity->GetForeignData(PHYS_FOREIGN_ID_ENTITY);
 	return pEntity;
 
-	//CPhysicalProxy *pPhysProxy = (CPhysicalProxy*)pPhysEntity->GetForeignData(PHYS_FOREIGN_ID_ENTITY);
+	//CEntityPhysics *pPhysProxy = (CEntityPhysics*)pPhysEntity->GetForeignData(PHYS_FOREIGN_ID_ENTITY);
 	//if (pPhysProxy)
 	//return pPhysProxy->GetEntity();
 	//return NULL;
@@ -1165,41 +983,12 @@ void CEntitySystem::UpdateDeletedEntities()
 }
 
 //////////////////////////////////////////////////////////////////////
-void CEntitySystem::UpdateNotSeenTimeouts()
-{
-	FUNCTION_PROFILER(m_pISystem, PROFILE_ENTITY);
-
-	float timeoutVal = float(CVar::pNotSeenTimeout->GetIVal());
-	if (timeoutVal == 0.0f)
-		return;
-
-	while (EntityId timeoutEntityId = m_entityTimeoutList.PopTimeoutEntity(timeoutVal))
-	{
-		CEntity* pEntity = GetEntityFromID(timeoutEntityId);
-		if (pEntity)
-		{
-			SEntityEvent entityEvent(ENTITY_EVENT_NOT_SEEN_TIMEOUT);
-			entityEvent.nParam[2] = timeoutEntityId;
-			pEntity->SendEvent(entityEvent);
-			SendEventViaEntityEvent(pEntity, entityEvent);
-		}
-	}
-}
-
-//////////////////////////////////////////////////////////////////////
 void CEntitySystem::PrePhysicsUpdate()
 {
 	CRY_PROFILE_REGION(PROFILE_ENTITY, "EntitySystem::PrePhysicsUpdate");
 	CRYPROFILE_SCOPE_PROFILE_MARKER("EntitySystem::PrePhysicsUpdate");
 
-	if (static_cast<CComponentEventDistributer*>(m_pEventDistributer)->IsEnabled())
-	{
-		DoPrePhysicsUpdateFast();
-	}
-	else
-	{
-		DoPrePhysicsUpdate();
-	}
+	DoPrePhysicsUpdate();
 }
 
 //update the entity system
@@ -1215,8 +1004,6 @@ void CEntitySystem::Update()
 		UpdateTimers();
 
 		UpdateEngineCVars();
-
-		m_pEntityPoolManager->Update();
 
 #if defined(USE_GEOM_CACHES)
 		m_pGeomCacheAttachmentManager->Update();
@@ -1234,8 +1021,6 @@ void CEntitySystem::Update()
 		// Delete entities that must be deleted.
 		if (!m_deletedEntities.empty())
 			UpdateDeletedEntities();
-
-		UpdateNotSeenTimeouts();
 
 		if (CVar::pEntityBBoxes->GetIVal() != 0)
 		{
@@ -1270,6 +1055,9 @@ void CEntitySystem::Update()
 		}
 
 		PurgeDeferredCollisionEvents();
+
+		// Doesn't depend on anything, previously called in CGameObject::PostUpdate()
+		CNetEntity::UpdateSchedulingProfiles();
 	}
 
 	if (CVar::pDrawAreas->GetIVal() != 0 || CVar::pDrawAreaDebug->GetIVal() != 0)
@@ -1277,9 +1065,6 @@ void CEntitySystem::Update()
 
 	if (CVar::pDrawAreaGrid->GetIVal() != 0)
 		m_pAreaManager->DrawGrid();
-
-	if (CVar::es_DebugPool != 0)
-		m_pEntityPoolManager->DebugDraw();
 
 	if (CVar::es_DebugEntityUsage > 0)
 		DebugDrawEntityUsage();
@@ -1291,6 +1076,8 @@ void CEntitySystem::Update()
 
 	if (CVar::es_LayerDebugInfo > 0)
 		DebugDrawLayerInfo();
+
+	m_pEntityObjectDebugger->Update();
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1299,10 +1086,32 @@ void CEntitySystem::DebugDrawEntityUsage()
 	static float fLastUpdate = 0.0f;
 	float fCurrTime = gEnv->pTimer->GetFrameStartTime().GetSeconds();
 
-	typedef std::pair<EntityId, uint32>        TEntityPair;
-	typedef std::vector<TEntityPair>           TEntities;
-	typedef std::map<IEntityClass*, TEntities> TClassEntitiesMap;
-	static TClassEntitiesMap classEntitiesMap;
+	struct SEntityClassDebugInfo
+	{
+		SEntityClassDebugInfo() = default;
+		SEntityClassDebugInfo(IEntityClass* pEntityClass) : pClass(pEntityClass) {}
+
+		IEntityClass* pClass;
+
+		size_t memoryUsage = 0;
+		uint32 numEntities = 0;
+		uint32 numActiveEntities = 0;
+		uint32 numNotHiddenEntities = 0;
+
+		// Amount of memory used by hidden entities
+		size_t hiddenMemoryUsage = 0;
+	};
+
+	static std::vector<SEntityClassDebugInfo> debuggedEntityClasses;
+
+	enum class EEntityUsageSortMode
+	{
+		None = 0,
+		ActiveInstances,
+		MemoryUsage
+	};
+
+	EEntityUsageSortMode sortMode = (EEntityUsageSortMode)CVar::es_DebugEntityUsageSortMode;
 
 	ICrySizer* pSizer = gEnv->pSystem->CreateSizer();
 
@@ -1313,43 +1122,81 @@ void CEntitySystem::DebugDrawEntityUsage()
 		string sFilter = CVar::es_DebugEntityUsageFilter;
 		sFilter.MakeLower();
 
-		classEntitiesMap.clear();
-		std::vector<CEntity*>::const_iterator itEntity = m_EntityArray.begin();
-		std::vector<CEntity*>::const_iterator itEntityEnd = m_EntityArray.end();
-		for (; itEntity != itEntityEnd; ++itEntity)
+		debuggedEntityClasses.clear();
+		debuggedEntityClasses.reserve(GetClassRegistry()->GetClassCount());
+
+		for (CEntity* pEntity : m_EntityArray)
 		{
-			const CEntity* pEntity = *itEntity;
-			if (pEntity)
+			if (pEntity == nullptr)
 			{
-				if (!sFilter.empty())
-				{
-					IEntityClass* pClass = pEntity->GetClass();
-					string szName = pClass->GetName();
-					szName.MakeLower();
-					if (szName.find(sFilter) == string::npos)
-						continue;
-				}
-
-				// Calculate memory usage
-
-				const uint32 prevMemoryUsage = pSizer->GetTotalSize();
-
-				pEntity->GetMemoryUsage(pSizer);
-
-				const uint32 uMemoryUsage = pSizer->GetTotalSize() - prevMemoryUsage;
-
-				classEntitiesMap[pEntity->GetClass()].push_back(TEntityPair(pEntity->GetId(), uMemoryUsage));
+				continue;
 			}
+
+			IEntityClass* pEntityClass = pEntity->GetClass();
+
+			if (!sFilter.empty())
+			{
+				string szName = pEntityClass->GetName();
+				szName.MakeLower();
+				if (szName.find(sFilter) == string::npos)
+					continue;
+			}
+
+			auto debuggedEntityClassIterator = std::find_if(debuggedEntityClasses.begin(), debuggedEntityClasses.end(), [pEntityClass](const SEntityClassDebugInfo& classInfo)
+			{
+				return classInfo.pClass == pEntityClass;
+			});
+
+			if (debuggedEntityClassIterator == debuggedEntityClasses.end())
+			{
+				debuggedEntityClasses.emplace_back(pEntityClass);
+				debuggedEntityClassIterator = --debuggedEntityClasses.end();
+			}
+
+			// Calculate memory usage
+			const uint32 prevMemoryUsage = pSizer->GetTotalSize();
+			pEntity->GetMemoryUsage(pSizer);
+			const uint32 uMemoryUsage = pSizer->GetTotalSize() - prevMemoryUsage;
+			pSizer->Reset();
+
+			debuggedEntityClassIterator->memoryUsage += uMemoryUsage;
+			debuggedEntityClassIterator->numEntities++;
+
+			if (pEntity->IsActivatedForUpdates())
+			{
+				debuggedEntityClassIterator->numActiveEntities++;
+			}
+
+			if (pEntity->IsHidden())
+			{
+				debuggedEntityClassIterator->hiddenMemoryUsage += uMemoryUsage;
+			}
+			else
+			{
+				debuggedEntityClassIterator->numNotHiddenEntities++;
+			}
+		}
+
+		if (sortMode == EEntityUsageSortMode::ActiveInstances)
+		{
+			std::sort(debuggedEntityClasses.begin(), debuggedEntityClasses.end(), [](const SEntityClassDebugInfo& classInfoLeft, const SEntityClassDebugInfo& classInfoRight)
+			{
+				return classInfoLeft.numActiveEntities > classInfoRight.numActiveEntities;
+			});
+		}
+		else if (sortMode == EEntityUsageSortMode::MemoryUsage)
+		{
+			std::sort(debuggedEntityClasses.begin(), debuggedEntityClasses.end(), [](const SEntityClassDebugInfo& classInfoLeft, const SEntityClassDebugInfo& classInfoRight)
+			{
+				return classInfoLeft.memoryUsage > classInfoRight.memoryUsage;
+			});
 		}
 	}
 
 	pSizer->Release();
 
-	if (!classEntitiesMap.empty())
+	if (!debuggedEntityClasses.empty())
 	{
-		IRenderer* pRenderer = gEnv->pRenderer;
-		assert(pRenderer);
-
 		float fColumnY = 11.0f;
 		const float colWhite[] = { 1.0f, 1.0f, 1.0f, 1.0f };
 		const float colGreen[] = { 0.0f, 1.0f, 0.0f, 1.0f };
@@ -1357,7 +1204,7 @@ void CEntitySystem::DebugDrawEntityUsage()
 		const float fColumnX_Class = 50.0f;
 		const float fColumnX_TotalCount = 250.0f;
 		const float fColumnX_ActiveCount = 350.0f;
-		const float fColumnX_HiddenCount = 450.0f;
+		const float fColumnX_NotHiddenCount = 450.0f;
 		const float fColumnX_MemoryUsage = 550.0f;
 		const float fColumnX_MemoryHidden = 650.0f;
 
@@ -1369,58 +1216,22 @@ void CEntitySystem::DebugDrawEntityUsage()
 			sTitle.append("]");
 		}
 
-		pRenderer->Draw2dLabel(fColumnX_Class, fColumnY, 1.2f, colWhite, false, "%s", sTitle.c_str());
-		pRenderer->Draw2dLabel(fColumnX_TotalCount, fColumnY, 1.2f, colWhite, true, "Total / Pool Counts");
-		pRenderer->Draw2dLabel(fColumnX_ActiveCount, fColumnY, 1.2f, colWhite, true, "Active");
-		pRenderer->Draw2dLabel(fColumnX_HiddenCount, fColumnY, 1.2f, colWhite, true, "Hidden");
-		pRenderer->Draw2dLabel(fColumnX_MemoryUsage, fColumnY, 1.2f, colWhite, true, "Memory Usage");
-		pRenderer->Draw2dLabel(fColumnX_MemoryHidden, fColumnY, 1.2f, colWhite, true, "[Only Hidden]");
+		IRenderAuxText::Draw2dLabel(fColumnX_Class, fColumnY, 1.2f, colWhite, false, "%s", sTitle.c_str());
+		IRenderAuxText::Draw2dLabel(fColumnX_ActiveCount, fColumnY, 1.2f, colWhite, true, "Active");
+		IRenderAuxText::Draw2dLabel(fColumnX_NotHiddenCount, fColumnY, 1.2f, colWhite, true, "Not Hidden");
+		IRenderAuxText::Draw2dLabel(fColumnX_MemoryUsage, fColumnY, 1.2f, colWhite, true, "Memory Usage");
+		IRenderAuxText::Draw2dLabel(fColumnX_MemoryHidden, fColumnY, 1.2f, colWhite, true, "[Only Hidden]");
 		fColumnY += 15.0f;
 
-		TClassEntitiesMap::const_iterator itClass = classEntitiesMap.begin();
-		TClassEntitiesMap::const_iterator itClassEnd = classEntitiesMap.end();
-		for (; itClass != itClassEnd; ++itClass)
+		for (const SEntityClassDebugInfo& debugEntityClassInfo : debuggedEntityClasses)
 		{
-			IEntityClass* pClass = itClass->first;
-			const char* szName = pClass->GetName();
+			const char* szName = debugEntityClassInfo.pClass->GetName();
 
-			// Skip if empty
-			const TEntities& entities = itClass->second;
-			if (entities.empty())
-				continue;
-
-			// Generate counts
-			uint32 uTotalCount = 0, uActiveCount = 0, uHiddenCount = 0, uTotalMemory = 0, uHiddenMemory = 0;
-			TEntities::const_iterator itEntity = entities.begin();
-			TEntities::const_iterator itEntityEnd = entities.end();
-			for (; itEntity != itEntityEnd; ++itEntity)
-			{
-				EntityId entityId = itEntity->first;
-				const CEntity* pEntity = GetEntityFromID(entityId);
-				if (!pEntity)
-					continue;
-
-				uTotalCount++;
-				uTotalMemory += itEntity->second;
-
-				if (pEntity->IsActive())
-				{
-					uActiveCount++;
-				}
-
-				if (pEntity->IsHidden())
-				{
-					uHiddenCount++;
-					uHiddenMemory += itEntity->second;
-				}
-			}
-
-			pRenderer->Draw2dLabel(fColumnX_Class, fColumnY, 1.0f, colWhite, false, "%s", szName);
-			pRenderer->Draw2dLabel(fColumnX_TotalCount, fColumnY, 1.0f, colWhite, true, "%u / %u", uTotalCount, m_pEntityPoolManager->GetPoolSizeByClass(szName));
-			pRenderer->Draw2dLabel(fColumnX_ActiveCount, fColumnY, 1.0f, colWhite, true, "%u", uActiveCount);
-			pRenderer->Draw2dLabel(fColumnX_HiddenCount, fColumnY, 1.0f, colWhite, true, "%u", uHiddenCount);
-			pRenderer->Draw2dLabel(fColumnX_MemoryUsage, fColumnY, 1.0f, colWhite, true, "%u (%uKb)", uTotalMemory, uTotalMemory / 1000);
-			pRenderer->Draw2dLabel(fColumnX_MemoryHidden, fColumnY, 1.0f, colGreen, true, "%u (%uKb)", uHiddenMemory, uHiddenMemory / 1000);
+			IRenderAuxText::Draw2dLabel(fColumnX_Class, fColumnY, 1.0f, colWhite, false, "%s", szName);
+			IRenderAuxText::Draw2dLabel(fColumnX_ActiveCount, fColumnY, 1.0f, colWhite, true, "%u", debugEntityClassInfo.numActiveEntities);
+			IRenderAuxText::Draw2dLabel(fColumnX_NotHiddenCount, fColumnY, 1.0f, colWhite, true, "%u", debugEntityClassInfo.numNotHiddenEntities);
+			IRenderAuxText::Draw2dLabel(fColumnX_MemoryUsage, fColumnY, 1.0f, colWhite, true, "%u (%uKb)", debugEntityClassInfo.memoryUsage, debugEntityClassInfo.memoryUsage / 1000);
+			IRenderAuxText::Draw2dLabel(fColumnX_MemoryHidden, fColumnY, 1.0f, colGreen, true, "%u (%uKb)", debugEntityClassInfo.hiddenMemoryUsage, debugEntityClassInfo.hiddenMemoryUsage / 1000);
 			fColumnY += 12.0f;
 		}
 	}
@@ -1435,15 +1246,7 @@ void DrawText(const float x, const float y, ColorF c, const char* format, ...)
 {
 	va_list args;
 	va_start(args, format);
-
-	SDrawTextInfo ti;
-	ti.flags = eDrawText_FixedSize | eDrawText_2D | eDrawText_Monospace;
-	ti.xscale = ti.yscale = 1.2f;
-	ti.color[0] = c.r;
-	ti.color[1] = c.g;
-	ti.color[2] = c.b;
-	ti.color[3] = c.a;
-	gEnv->pRenderer->DrawTextQueued(Vec3(x, y, 1.0f), ti, format, args);
+	IRenderAuxText::DrawText(Vec3(x, y, 1.0f), 1.2f, c, eDrawText_FixedSize | eDrawText_2D | eDrawText_Monospace, format, args);
 	va_end(args);
 }
 }
@@ -1698,23 +1501,6 @@ private:
 	CEntity** m_ppEntities;
 };
 
-void CEntitySystem::UpdateTempActiveEntities()
-{
-	if (!m_tempActiveEntitiesValid)
-	{
-		int i = 0;
-		int numActive = m_mapActiveEntities.size();
-		m_tempActiveEntities.resize(numActive);
-		for (EntitiesMap::iterator it = m_mapActiveEntities.begin(); it != m_mapActiveEntities.end(); ++it)
-		{
-			m_tempActiveEntities[i++] = it->first;
-		}
-		if (CVar::es_SortUpdatesByClass)
-			std::sort(m_tempActiveEntities.begin(), m_tempActiveEntities.end(), CCompareEntityIdsByClass(&m_EntityArray[0]));
-		m_tempActiveEntitiesValid = true;
-	}
-}
-
 //////////////////////////////////////////////////////////////////////////
 void CEntitySystem::DoUpdateLoop(float fFrameTime)
 {
@@ -1755,29 +1541,24 @@ void CEntitySystem::DoUpdateLoop(float fFrameTime)
 
 	if (!bProfileEntities)
 	{
-		// Copy active entity ids into temporary buffer, this is needed because some entity can be added or deleted during Update call.
-		UpdateTempActiveEntities();
-		int numActive = m_tempActiveEntities.size();
-		for (int i = 0; i < numActive; i++)
+		auto entityUpdateLambda = [this, &ctx](EntityId eid)
 		{
-			CEntity* pEntity = GetEntityFromID(m_tempActiveEntities[i]);
-			if (pEntity)
+			CEntity* pEntity = (CEntity*)GetEntity(eid);
+			if (pEntity && !pEntity->m_bGarbage)
 			{
 #ifdef _DEBUG
-				INDENT_LOG_DURING_SCOPE(true, "While updating %s...", pEntity->GetEntityTextDescription());
+				INDENT_LOG_DURING_SCOPE(true, "While updating %s...", pEntity->GetEntityTextDescription().c_str());
 #endif
 				pEntity->Update(ctx);
 			}
-		}
+		};
+		// Copy active entity ids into temporary buffer, this is needed because some entity can be added or deleted during Update call.
+		m_mapActiveEntities.for_each(entityUpdateLambda);
 	}
 	else
 	{
 		if (bProfileEntitiesToLog)
 			CryLogAlways("================= Entity Update Times =================");
-
-		char szProfInfo[256];
-		//		int prevNumUpdated;
-		float fProfileStartTime;
 
 		float xpos = 10;
 		float ypos = 70;
@@ -1787,78 +1568,75 @@ void CEntitySystem::DoUpdateLoop(float fFrameTime)
 
 		int nCounter = 0;
 
-		// Copy active entity ids into temporary buffer, this is needed because some entity can be added or deleted during Update call.
-		int i = 0;
-		UpdateTempActiveEntities();
-		int numActive = m_tempActiveEntities.size();
-		for (i = 0; i < numActive; i++)
+		auto entityUpdateLambda = [this, &ctx, &xpos, &ypos, &nCounter, bProfileEntitiesToLog, bProfileEntitiesDesigner](EntityId eid)
 		{
-			CEntity* ce = GetEntityFromID(m_tempActiveEntities[i]);
-
-			fProfileStartTime = gEnv->pTimer->GetAsyncCurTime();
-			//			prevNumUpdated = ctx.numUpdatedEntities;
-
-			if (!ce || ce->m_bGarbage)
-				continue;
+			CEntity* ce = GetEntityFromID(eid);
+			if (ce && !ce->m_bGarbage)
+			{
+				char szProfInfo[256];
+				float fProfileStartTime = gEnv->pTimer->GetAsyncCurTime();
 
 #ifdef _DEBUG
-			INDENT_LOG_DURING_SCOPE(true, "While updating %s...", ce->GetEntityTextDescription());
+				INDENT_LOG_DURING_SCOPE(true, "While updating %s...", ce->GetEntityTextDescription().c_str());
 #endif
-			ce->Update(ctx);
-			ctx.numUpdatedEntities++;
+				ce->Update(ctx);
+				ctx.numUpdatedEntities++;
 
-			//if (prevNumUpdated != ctx.numUpdatedEntities || bProfileEntitiesAll)
-			{
-				float time = gEnv->pTimer->GetAsyncCurTime() - fProfileStartTime;
-				if (time < 0)
-					time = 0;
-
-				float timeMs = time * 1000.0f;
-				if (bProfileEntitiesToLog || bProfileEntitiesDesigner)
 				{
-					bool bAIEnabled = false;
-					bool bIsAI = false;
+					float time = gEnv->pTimer->GetAsyncCurTime() - fProfileStartTime;
+					if (time < 0)
+						time = 0;
 
-					if (IAIObject* aiObject = ce->GetAI())
+					float timeMs = time * 1000.0f;
+					if (bProfileEntitiesToLog || bProfileEntitiesDesigner)
 					{
-						bIsAI = true;
-						if (!(bAIEnabled = aiObject->IsEnabled()))
-							bAIEnabled = aiObject->GetProxy()->GetLinkedDriverEntityId() != 0;
-					}
+						bool bAIEnabled = false;
+						bool bIsAI = false;
 
-					CRenderProxy* pProxy = ce->GetRenderProxy();
-
-					float fDiff = -1;
-					if (pProxy)
-					{
-						fDiff = gEnv->pTimer->GetCurrTime() - pProxy->GetLastSeenTime();
-						if (bProfileEntitiesToLog)
-							CryLogAlways("(%d) %.3f ms : %s (was last visible %0.2f seconds ago)-AI =%s (%s)", nCounter, timeMs, ce->GetEntityTextDescription(), fDiff, bIsAI ? "" : "NOT an AI", bAIEnabled ? "true" : "false");
-					}
-					else
-					{
-						if (bProfileEntitiesToLog)
-							CryLogAlways("(%d) %.3f ms : %s -AI =%s (%s) ", nCounter, timeMs, ce->GetEntityTextDescription(), bIsAI ? "" : "NOT an AI", bAIEnabled ? "true" : "false");
-					}
-
-					if (bProfileEntitiesDesigner && (pProxy && bIsAI))
-					{
-						if (((fDiff > 180) && ce->HasAI()) || !bAIEnabled)
+						if (IAIObject* aiObject = ce->GetAI())
 						{
-							if ((fDiff > 180) && ce->HasAI())
-								cry_sprintf(szProfInfo, "Entity: %s is updated, but is not visible for more then 3 min", ce->GetEntityTextDescription());
-							else
-								cry_sprintf(szProfInfo, "Entity: %s is force being updated, but is not required by AI", ce->GetEntityTextDescription());
-							float colors[4] = { 1, 1, 1, 1 };
-							gEnv->pRenderer->Draw2dLabel(xpos, ypos, 1.5f, colors, false, "%s", szProfInfo);
-							ypos += 12;
+							bIsAI = true;
+							if (!(bAIEnabled = aiObject->IsEnabled()))
+								bAIEnabled = aiObject->GetProxy()->GetLinkedDriverEntityId() != 0;
+						}
+
+						CEntityRender* pProxy = ce->GetEntityRender();
+
+						float fDiff = -1;
+						if (pProxy)
+						{
+							fDiff = gEnv->pTimer->GetCurrTime() - pProxy->GetLastSeenTime();
+							if (bProfileEntitiesToLog)
+								CryLogAlways("(%d) %.3f ms : %s (was last visible %0.2f seconds ago)-AI =%s (%s)", nCounter, timeMs, ce->GetEntityTextDescription().c_str(), fDiff, bIsAI ? "" : "NOT an AI", bAIEnabled ? "true" : "false");
+						}
+						else
+						{
+							if (bProfileEntitiesToLog)
+								CryLogAlways("(%d) %.3f ms : %s -AI =%s (%s) ", nCounter, timeMs, ce->GetEntityTextDescription().c_str(), bIsAI ? "" : "NOT an AI", bAIEnabled ? "true" : "false");
+						}
+
+						if (bProfileEntitiesDesigner && (pProxy && bIsAI))
+						{
+							if (((fDiff > 180) && ce->HasAI()) || !bAIEnabled)
+							{
+								if ((fDiff > 180) && ce->HasAI())
+									cry_sprintf(szProfInfo, "Entity: %s is updated, but is not visible for more then 3 min", ce->GetEntityTextDescription().c_str());
+								else
+									cry_sprintf(szProfInfo, "Entity: %s is force being updated, but is not required by AI", ce->GetEntityTextDescription().c_str());
+								float colors[4] = { 1, 1, 1, 1 };
+								IRenderAuxText::Draw2dLabel(xpos, ypos, 1.5f, colors, false, "%s", szProfInfo);
+								ypos += 12;
+							}
 						}
 					}
-				}
 
-				DebugDraw(ce, timeMs);
+					DebugDraw(ce, timeMs);
+				}
 			}
-		} //it
+		};
+
+		// Update entities.
+		m_mapActiveEntities.for_each(entityUpdateLambda);
 
 		int nNumRenderable = 0;
 		int nNumPhysicalize = 0;
@@ -1875,14 +1653,14 @@ void CEntitySystem::DoUpdateLoop(float fFrameTime)
 				if (!ce)
 					continue;
 
-				if (ce->GetProxy(ENTITY_PROXY_RENDER))
+				if (ce->GetRenderNode())
 					nNumRenderable++;
-				if (ce->GetProxy(ENTITY_PROXY_PHYSICS))
+				if (ce->GetPhysicalEntity())
 					nNumPhysicalize++;
 				if (ce->GetProxy(ENTITY_PROXY_SCRIPT))
 					nNumScriptable++;
 
-				if (ce->m_bGarbage || ce->GetUpdateStatus())
+				if (ce->m_bGarbage || ce->ShouldActivate())
 					continue;
 
 				DebugDraw(ce, 0);
@@ -1915,7 +1693,7 @@ void CEntitySystem::DoUpdateLoop(float fFrameTime)
 
 					if (ce)
 					{
-						CryLogAlways("(%u) : %s ", dwRet, ce->GetEntityTextDescription());
+						CryLogAlways("(%u) : %s ", dwRet, ce->GetEntityTextDescription().c_str());
 						++dwRet;
 					}
 				} //dwI
@@ -1924,13 +1702,16 @@ void CEntitySystem::DoUpdateLoop(float fFrameTime)
 
 		}
 
-		if (bDebug)
-			cry_sprintf(szProfInfo, "Entities: Total=%d, Active=%d, Renderable=%d, Phys=%d, Script=%d", numEnts, ctx.numUpdatedEntities,
-			            nNumRenderable, nNumPhysicalize, nNumScriptable);
-		else
-			cry_sprintf(szProfInfo, "Entities: Total=%d Active=%d", numEnts, ctx.numUpdatedEntities);
-		float colors[4] = { 1, 1, 1, 1 };
-		gEnv->pRenderer->Draw2dLabel(10, 10, 1.5, colors, false, "%s", szProfInfo);
+		{
+			char szProfInfo[256];
+			if (bDebug)
+				cry_sprintf(szProfInfo, "Entities: Total=%d, Active=%d, Renderable=%d, Phys=%d, Script=%d", numEnts, ctx.numUpdatedEntities,
+				            nNumRenderable, nNumPhysicalize, nNumScriptable);
+			else
+				cry_sprintf(szProfInfo, "Entities: Total=%d Active=%d", numEnts, ctx.numUpdatedEntities);
+			float colors[4] = { 1, 1, 1, 1 };
+			IRenderAuxText::Draw2dLabel(10, 10, 1.5, colors, false, "%s", szProfInfo);
+		}
 	}
 }
 
@@ -1966,12 +1747,6 @@ bool CEntitySystem::IsIDUsed(EntityId nID) const
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntitySystem::SendEventViaEntityEvent(IEntity* piEntity, SEntityEvent& event)
-{
-	m_pEventDistributer->SendEvent(event);
-}
-
-//////////////////////////////////////////////////////////////////////////
 void CEntitySystem::SendEventToAll(SEntityEvent& event)
 {
 	uint32 dwMaxUsed = (uint32)m_EntitySaltBuffer.GetMaxUsed() + 1;
@@ -1982,28 +1757,6 @@ void CEntitySystem::SendEventToAll(SEntityEvent& event)
 
 		if (pEntity)
 			pEntity->SendEvent(event);
-	}
-
-	if (event.event == ENTITY_EVENT_RESET)
-	{
-		// This stuff is necessary because the reset event currently recreates
-		// the character instance and thus removes all attachment data previously set up.
-		for (uint32 dwI = 0; dwI < dwMaxUsed; ++dwI)
-		{
-			CEntity* pEntity = m_EntityArray[dwI];
-
-			if (pEntity)
-			{
-				// Restore the bone attachment by the deprecated CharAttachHelper.
-				if (strcmp(pEntity->GetClass()->GetName(), "CharacterAttachHelper") == 0
-				    && pEntity->GetParent())
-				{
-					SEntityEvent attachEvent(ENTITY_EVENT_ATTACH_THIS);
-					attachEvent.nParam[0] = pEntity->GetParent()->GetId();
-					pEntity->SendEvent(attachEvent);
-				}
-			}
-		}
 	}
 }
 
@@ -2018,7 +1771,7 @@ void CEntitySystem::GetMemoryStatistics(ICrySizer* pSizer) const
 		SIZER_COMPONENT_NAME(pSizer, "Entities");
 		pSizer->AddObject(m_EntityArray);
 		pSizer->AddContainer(m_deletedEntities);
-		pSizer->AddContainer(m_mapActiveEntities);
+
 	}
 
 	for (uint i = 0; i < SinkMaxEventSubscriptionCount; ++i)
@@ -2026,11 +1779,6 @@ void CEntitySystem::GetMemoryStatistics(ICrySizer* pSizer) const
 	pSizer->AddObject(m_pPartitionGrid);
 	pSizer->AddObject(m_pProximityTriggerSystem);
 	pSizer->AddObject(this, sizeof(*this));
-
-	{
-		SIZER_COMPONENT_NAME(pSizer, "EntityPool");
-		m_pEntityPoolManager->GetMemoryStatistics(pSizer);
-	}
 
 	{
 		SIZER_COMPONENT_NAME(pSizer, "EntityLoad");
@@ -2064,7 +1812,7 @@ void CEntitySystem::AddTimerEvent(SEntityTimerEvent& event, CTimeValue startTime
 	{
 		CEntity* pEntity = GetEntityFromID(event.entityId);
 		if (pEntity)
-			CryLogAlways("SetTimer (timerID=%d,time=%dms) for Entity %s", event.nTimerId, event.nMilliSeconds, pEntity->GetEntityTextDescription());
+			CryLogAlways("SetTimer (timerID=%d,time=%dms) for Entity %s", event.nTimerId, event.nMilliSeconds, pEntity->GetEntityTextDescription().c_str());
 	}
 }
 
@@ -2187,12 +1935,11 @@ void CEntitySystem::UpdateTimers()
 				entityEvent.nParam[1] = event.nMilliSeconds;
 				entityEvent.nParam[2] = event.entityId;
 				pEntity->SendEvent(entityEvent);
-				SendEventViaEntityEvent(pEntity, entityEvent);
 
 				if (CVar::es_DebugTimers)
 				{
 					if (pEntity)
-						CryLogAlways("OnTimer Event (timerID=%d,time=%dms) for Entity %s (which is %s)", event.nTimerId, event.nMilliSeconds, pEntity->GetEntityTextDescription(), pEntity->IsActive() ? "active" : "inactive");
+						CryLogAlways("OnTimer Event (timerID=%d,time=%dms) for Entity %s (which is %s)", event.nTimerId, event.nMilliSeconds, pEntity->GetEntityTextDescription().c_str(), pEntity->IsActivatedForUpdates() ? "active" : "inactive");
 				}
 			}
 		}
@@ -2221,11 +1968,9 @@ EntityId CEntitySystem::ReserveUnknownEntityId()
 //////////////////////////////////////////////////////////////////////////
 void CEntitySystem::ActivateEntity(CEntity* pEntity, bool bActivate)
 {
-	assert(pEntity == GetEntityFromID(pEntity->GetId()));
-
 	if (bActivate)
 	{
-		m_mapActiveEntities[pEntity->GetId()] = pEntity;
+		m_mapActiveEntities.insert(pEntity->GetId());
 
 		if (!pEntity->m_bInActiveList)
 		{
@@ -2245,8 +1990,6 @@ void CEntitySystem::ActivateEntity(CEntity* pEntity, bool bActivate)
 			pEntity->SendEvent(event);
 		}
 	}
-
-	m_tempActiveEntitiesValid = false;
 }
 
 void CEntitySystem::ActivatePrePhysicsUpdateForEntity(CEntity* pEntity, bool bActivate)
@@ -2254,18 +1997,10 @@ void CEntitySystem::ActivatePrePhysicsUpdateForEntity(CEntity* pEntity, bool bAc
 	const EntityId entityID = pEntity->GetId();
 	if (bActivate)
 	{
-		if (m_mapPrePhysicsEntities.count(entityID) == 0)
-		{
-			m_pEventDistributer->EnableEventForEntity(pEntity->GetId(), ENTITY_EVENT_PREPHYSICSUPDATE, true);
-		}
 		m_mapPrePhysicsEntities.insert(entityID);
 	}
 	else
 	{
-		if (m_mapPrePhysicsEntities.count(entityID) > 0)
-		{
-			m_pEventDistributer->EnableEventForEntity(pEntity->GetId(), ENTITY_EVENT_PREPHYSICSUPDATE, false);
-		}
 		m_mapPrePhysicsEntities.erase(entityID);
 	}
 
@@ -2273,7 +2008,7 @@ void CEntitySystem::ActivatePrePhysicsUpdateForEntity(CEntity* pEntity, bool bAc
 
 bool CEntitySystem::IsPrePhysicsActive(CEntity* pEntity)
 {
-	return m_mapPrePhysicsEntities.find(pEntity->GetId()) != m_mapPrePhysicsEntities.end();
+	return m_mapPrePhysicsEntities.count(pEntity->GetId()) > 0;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2288,54 +2023,6 @@ void CEntitySystem::OnEntityEvent(CEntity* pEntity, SEntityEvent& event)
 		if (sink.subscriptions & (1ll << event.event))
 			sink.pSink->OnEvent(pEntity, event);
 	}
-
-	// Just an optimization, most entities do not have event listeners.
-	if (pEntity->m_bHaveEventListeners)
-	{
-		// Copy listeners to local list
-		// This is a local workaround for the issue where listeners where removed from the container
-		// in the listener->OnEntityEvent() while iterating over the container, corrupting the iterator
-		//
-		// Note: This assumes that listeners that have been removed from the container
-		// and are in the local list are still valid
-		// Copy to local list
-		uint32 nNumElements = 0;
-		EventListenersMap& entitiesMap = m_eventListeners[event.event];
-		EventListenersMap::iterator itBegin = entitiesMap.lower_bound(pEntity->m_nID);
-		EventListenersMap::iterator itEnd = entitiesMap.end();
-
-		// Count num elements
-		EventListenersMap::iterator it = itBegin;
-		while (it != itEnd && it->first == pEntity->m_nID)
-		{
-			++nNumElements;
-			++it;
-		}
-
-		if (nNumElements > 0)
-		{
-			// Allocate listener list on stack
-			IEntityEventListener** ppListeners = (IEntityEventListener**)alloca(sizeof(IEntityEventListener*) * nNumElements);
-
-			// Copy all listener pointers to list on stack
-			it = itBegin;
-			for (uint32 i = 0; i < nNumElements; ++i)
-			{
-				ppListeners[i] = it->second;
-				++it;
-			}
-
-			// Iterate over all listeners
-			for (uint32 i = 0; i < nNumElements; ++i)
-			{
-				IEntityEventListener* pListener = ppListeners[i];
-				ENTITY_EVENT_ENTITY_LISTENER(pListener);
-
-				if (pListener)
-					pListener->OnEntityEvent(pEntity, event);
-			}
-		}
-	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2343,16 +2030,23 @@ bool CEntitySystem::OnLoadLevel(const char* szLevelPath)
 {
 	int nTerrainSize = gEnv->p3DEngine ? gEnv->p3DEngine->GetTerrainSize() : 0;
 	ResizeProximityGrid(nTerrainSize, nTerrainSize);
-
-	assert(m_pEntityPoolManager);
-	return m_pEntityPoolManager->OnLoadLevel(szLevelPath);
+	return true;
 }
 
 //////////////////////////////////////////////////////////////////////////
 void CEntitySystem::OnLevelLoadStart()
 {
-	assert(m_pEntityPoolManager);
-	m_pEntityPoolManager->OnLevelLoadStart();
+	m_bLoadingLevel = true;
+}
+
+void CEntitySystem::OnLevelLoadEnd()
+{
+	m_bLoadingLevel = false;
+}
+
+bool CEntitySystem::IsLoadingLevel() const
+{
+	return m_bLoadingLevel;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2363,12 +2057,6 @@ void CEntitySystem::LoadEntities(XmlNodeRef& objectsNode, bool bIsLoadingLevelFi
 
 	//Update loading screen and important tick functions
 	SYNCHRONOUS_LOADING_TICK();
-
-	assert(m_pEntityPoolManager);
-	if (!m_pEntityPoolManager->CreatePools())
-	{
-		EntityWarning("CEntitySystem::LoadEntities : Failed when prepairing the Entity Pools.");
-	}
 
 	//Update loading screen and important tick functions
 	SYNCHRONOUS_LOADING_TICK();
@@ -2391,66 +2079,70 @@ void CEntitySystem::LoadEntities(XmlNodeRef& objectsNode, bool bIsLoadingLevelFi
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntitySystem::HoldLayerEntities(const char* pLayerName)
-{
-	m_pEntityLoadManager->HoldLayerEntities(pLayerName);
-}
-
-void CEntitySystem::CloneHeldLayerEntities(const char* pLayerName, const Vec3& localOffset, const Matrix34& l2w, const char** pExcludeLayers, int numExcludeLayers)
-{
-	m_pEntityLoadManager->CloneHeldLayerEntities(pLayerName, localOffset, l2w, pExcludeLayers, numExcludeLayers);
-}
-
-void CEntitySystem::ReleaseHeldEntities()
-{
-	m_pEntityLoadManager->ReleaseHeldEntities();
-}
-
-//////////////////////////////////////////////////////////////////////////
 void CEntitySystem::AddEntityEventListener(EntityId nEntity, EEntityEvent event, IEntityEventListener* pListener)
 {
 	CEntity* pCEntity = (CEntity*)GetEntity(nEntity);
 	if (pCEntity)
 	{
-		pCEntity->m_bHaveEventListeners = true; // Just an optimization, most entities dont have it.
-		m_eventListeners[event].insert(EventListenersMap::value_type(nEntity, pListener));
+		pCEntity->AddEntityEventListener(event, pListener);
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
 void CEntitySystem::RemoveEntityEventListener(EntityId nEntity, EEntityEvent event, IEntityEventListener* pListener)
 {
-	EventListenersMap& entitiesMap = m_eventListeners[event];
-	EventListenersMap::iterator it = entitiesMap.lower_bound(nEntity);
-	while (it != entitiesMap.end() && it->first == nEntity)
+	CEntity* pCEntity = (CEntity*)GetEntity(nEntity);
+	if (pCEntity)
 	{
-		if (pListener == it->second)
-		{
-			entitiesMap.erase(it);
-			break;
-		}
-		++it;
+		pCEntity->RemoveEntityEventListener(event, pListener);
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntitySystem::RemoveEntityEventListeners(CEntity* pEntity)
+IEntityLayer* CEntitySystem::FindLayer(const char* szLayerName, const bool bCaseSensitive) const
 {
-	assert(pEntity);
-	EntityId nEntity = pEntity->GetId();
-
-	for (int i = 0; i < ENTITY_EVENT_LAST; i++)
+	CEntityLayer* pResult = nullptr;
+	if (szLayerName)
 	{
-		EventListenersMap& entitiesMap = m_eventListeners[i];
-		EventListenersMap::iterator it = entitiesMap.lower_bound(nEntity);
-		while (it != entitiesMap.end() && it->first == nEntity)
+		if (bCaseSensitive)
 		{
-			EventListenersMap::iterator itThis = it++;
-			entitiesMap.erase(itThis);
+			TLayers::const_iterator it = m_layers.find(CONST_TEMP_STRING(szLayerName));
+			if (it != m_layers.end())
+			{
+				pResult = it->second;
+			}
+		}
+		else
+		{
+			for (const TLayers::value_type& layerPair : m_layers)
+			{
+				if (0 == stricmp(layerPair.first.c_str(), szLayerName))
+				{
+					pResult = layerPair.second;
+					break;
+				}
+			}
 		}
 	}
+	return pResult;
+}
 
-	pEntity->m_bHaveEventListeners = false;
+//////////////////////////////////////////////////////////////////////////
+void CEntitySystem::AddEntityLayerListener(const char* szLayerName, IEntityLayerListener* pListener, const bool bCaseSensitive)
+{
+	if (CEntityLayer* pLayer = static_cast<CEntityLayer*>(FindLayer(szLayerName, bCaseSensitive)))
+	{
+		pLayer->AddListener(pListener);
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+void CEntitySystem::RemoveEntityLayerListener(const char* szLayerName, IEntityLayerListener* pListener, const bool bCaseSensitive)
+{
+	if (CEntityLayer* pLayer = static_cast<CEntityLayer*>(FindLayer(szLayerName, bCaseSensitive)))
+	{
+		pLayer->RemoveListener(pListener);
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2458,8 +2150,7 @@ void CEntitySystem::DebugDraw(CEntity* ce, float timeMs)
 {
 	char szProfInfo[256];
 
-	IRenderer* pRender = gEnv->pRenderer;
-	IRenderAuxGeom* pRenderAux = pRender->GetIRenderAuxGeom();
+	IRenderAuxGeom* pRenderAux = gEnv->pRenderer->GetIRenderAuxGeom();
 
 	Vec3 wp = ce->GetWorldTM().GetTranslation();
 
@@ -2475,28 +2166,28 @@ void CEntitySystem::DebugDraw(CEntity* ce, float timeMs)
 	{
 		// draw information about timing, physics, position, and textual representation of the entity (but no EntityId)
 
-		if (ce->GetUpdateStatus() && timeMs >= 0)
+		if (ce->ShouldActivate() && timeMs >= 0)
 		{
 			float colors[4] = { 1, 1, 1, 1 };
 			float colorsYellow[4] = { 1, 1, 0, 1 };
 			float colorsRed[4] = { 1, 0, 0, 1 };
 
-			CRenderProxy* pProxy = ce->GetRenderProxy();
+			CEntityRender* pProxy = ce->GetEntityRender();
 			if (pProxy)
-				cry_sprintf(szProfInfo, "%.3f ms : %s (%0.2f ago)", timeMs, ce->GetEntityTextDescription(), gEnv->pTimer->GetCurrTime() - pProxy->GetLastSeenTime());
+				cry_sprintf(szProfInfo, "%.3f ms : %s (%0.2f ago)", timeMs, ce->GetEntityTextDescription().c_str(), gEnv->pTimer->GetCurrTime() - pProxy->GetLastSeenTime());
 			else
-				cry_sprintf(szProfInfo, "%.3f ms : %s", timeMs, ce->GetEntityTextDescription());
+				cry_sprintf(szProfInfo, "%.3f ms : %s", timeMs, ce->GetEntityTextDescription().c_str());
 			if (timeMs > 0.5f)
 			{
-				pRender->DrawLabelEx(wp, 1.3f, colorsYellow, true, true, "%s", szProfInfo);
+				IRenderAuxText::DrawLabelEx(wp, 1.3f, colorsYellow, true, true, szProfInfo);
 			}
 			else if (timeMs > 1.0f)
 			{
-				pRender->DrawLabelEx(wp, 1.6f, colorsRed, true, true, "%s", szProfInfo);
+				IRenderAuxText::DrawLabelEx(wp, 1.6f, colorsRed, true, true, szProfInfo);
 			}
 			else
 			{
-				pRender->DrawLabelEx(wp, 1.1f, colors, true, true, "%s", szProfInfo);
+				IRenderAuxText::DrawLabelEx(wp, 1.1f, colors, true, true, szProfInfo);
 
 				if (ce->GetPhysicalProxy() && ce->GetPhysicalProxy()->GetPhysicalEntity())
 				{
@@ -2504,19 +2195,19 @@ void CEntitySystem::DebugDraw(CEntity* ce, float timeMs)
 					ce->GetPhysicalProxy()->GetPhysicalEntity()->GetStatus(&pe);
 					cry_sprintf(szProfInfo, "Physics: %8.5f %8.5f %8.5f", pe.pos.x, pe.pos.y, pe.pos.z);
 					wp.z -= 0.1f;
-					pRender->DrawLabelEx(wp, 1.1f, colors, true, true, "%s", szProfInfo);
+					IRenderAuxText::DrawLabelEx(wp, 1.1f, colors, true, true, szProfInfo);
 				}
 
 				Vec3 entPos = ce->GetPos();
 				cry_sprintf(szProfInfo, "Entity:  %8.5f %8.5f %8.5f", entPos.x, entPos.y, entPos.z);
 				wp.z -= 0.1f;
-				pRender->DrawLabelEx(wp, 1.1f, colors, true, true, "%s", szProfInfo);
+				IRenderAuxText::DrawLabelEx(wp, 1.1f, colors, true, true, szProfInfo);
 			}
 		}
 		else
 		{
 			float colors[4] = { 1, 1, 1, 1 };
-			pRender->DrawLabelEx(wp, 1.2f, colors, true, true, "%s", ce->GetEntityTextDescription());
+			IRenderAuxText::DrawLabelEx(wp, 1.2f, colors, true, true, ce->GetEntityTextDescription().c_str());
 		}
 
 		boundsColor.set(255, 255, 0, 255);
@@ -2544,7 +2235,7 @@ void CEntitySystem::DebugDraw(CEntity* ce, float timeMs)
 
 		// Draw text.
 		float colors[4] = { color.r, color.g, color.b, 1.0f };
-		gEnv->pRenderer->DrawLabelEx(ce->GetPos(), 1.2f, colors, true, true, "%s", textToRender);
+		IRenderAuxText::DrawLabelEx(ce->GetPos(), 1.2f, colors, true, true, textToRender);
 
 		// specify color for drawing bounds below
 		boundsColor.set((uint8)(color.r * 255.0f), (uint8)(color.g * 255.0f), (uint8)(color.b * 255.0f), 255);
@@ -2565,6 +2256,16 @@ void CEntitySystem::DebugDraw(CEntity* ce, float timeMs)
 //////////////////////////////////////////////////////////////////////////
 void CEntitySystem::RegisterEntityGuid(const EntityGUID& guid, EntityId id)
 {
+	if (CVar::es_DebugFindEntity != 0)
+	{
+		CryLog("RegisterEntityGuid: %s, [%d]",guid.ToDebugString(),id );
+	}
+
+	if (guid.lopart == 0)
+	{
+		m_bSupportLegacy64bitGuids = true;
+	}
+
 	m_guidMap.insert(EntityGuidMap::value_type(guid, id));
 	CEntity* pCEntity = (CEntity*)GetEntity(id);
 	if (pCEntity)
@@ -2574,6 +2275,11 @@ void CEntitySystem::RegisterEntityGuid(const EntityGUID& guid, EntityId id)
 //////////////////////////////////////////////////////////////////////////
 void CEntitySystem::UnregisterEntityGuid(const EntityGUID& guid)
 {
+	if (CVar::es_DebugFindEntity != 0)
+	{
+		CryLog("UnregisterEntityGuid: %s", guid.ToDebugString());
+	}
+
 	m_guidMap.erase(guid);
 }
 
@@ -2582,19 +2288,34 @@ EntityId CEntitySystem::FindEntityByGuid(const EntityGUID& guid) const
 {
 	if (CVar::es_DebugFindEntity != 0)
 	{
-#if defined(_MSC_VER)
-		CryLog("FindEntityByGuid: %I64X", guid);
-#else
-		CryLog("FindEntityByGuid: %llX", (long long)guid);
-#endif
+		CryLog("FindEntityByGuid: %s", guid.ToDebugString());
 	}
-	return stl::find_in_map(m_guidMap, guid, 0);
-}
+	EntityId result = stl::find_in_map(m_guidMap, guid, INVALID_ENTITYID);
 
-//////////////////////////////////////////////////////////////////////////
-EntityId CEntitySystem::FindEntityByEditorGuid(const char* pGuid) const
-{
-	return(m_pEntityLoadManager->FindEntityByEditorGuid(pGuid));
+	if (result == INVALID_ENTITYID)
+	{
+		if (guid.hipart != 0 && guid.lopart == 0)
+		{
+			// A special case of Legacy 64bit GUID
+			for (auto &item : m_guidMap)
+			{
+				if (item.first.hipart == guid.hipart)
+				{
+					// GUID found even when not a full match
+					result = item.second;
+					break;
+				}
+			}
+		}
+		else if (m_bSupportLegacy64bitGuids)
+		{
+			// A special case when loading old not-reexported maps where Entity GUIDs where 64bit
+			CryGUID shortGuid = guid;
+			shortGuid.lopart = 0;
+			result = stl::find_in_map(m_guidMap, shortGuid, INVALID_ENTITYID);
+		}
+	}
+	return result;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2667,6 +2388,11 @@ IEntityArchetype* CEntitySystem::LoadEntityArchetype(XmlNodeRef oArchetype)
 		{
 			piArchetype->LoadFromXML(propNode, objectVarsNode);
 		}
+
+		if (IEntityArchetypeManagerExtension* pExtension = m_pEntityArchetypeManager->GetEntityArchetypeManagerExtension())
+		{
+			pExtension->LoadFromXML(*piArchetype, oArchetype);
+		}
 	}
 
 	return piArchetype;
@@ -2688,6 +2414,17 @@ IEntityArchetype* CEntitySystem::CreateEntityArchetype(IEntityClass* pClass, con
 void CEntitySystem::RefreshEntityArchetypesInRegistry()
 {
 	m_pClassRegistry->LoadArchetypes("Libs/EntityArchetypes", true);
+}
+
+//////////////////////////////////////////////////////////////////////////
+void CEntitySystem::SetEntityArchetypeManagerExtension(IEntityArchetypeManagerExtension* pEntityArchetypeManagerExtension)
+{
+	m_pEntityArchetypeManager->SetEntityArchetypeManagerExtension(pEntityArchetypeManagerExtension);
+}
+
+IEntityArchetypeManagerExtension* CEntitySystem::GetEntityArchetypeManagerExtension() const
+{
+	return m_pEntityArchetypeManager->GetEntityArchetypeManagerExtension();
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2789,7 +2526,7 @@ void CEntitySystem::SetNextSpawnId(EntityId id)
 void CEntitySystem::ResetAreas()
 {
 	m_pAreaManager->ResetAreas();
-	CAreaProxy::ResetTempState();
+	CEntityComponentArea::ResetTempState();
 }
 
 void CEntitySystem::UnloadAreas()
@@ -2805,20 +2542,16 @@ void CEntitySystem::DumpEntities()
 	it->MoveFirst();
 
 	int count = 0;
-	int acount = 0;
 
 	CryLogAlways("--------------------------------------------------------------------------------");
 	while (IEntity* pEntity = it->Next())
 	{
 		DumpEntity(pEntity);
 
-		if (pEntity->IsActive())
-			++acount;
-
 		++count;
 	}
 	CryLogAlways("--------------------------------------------------------------------------------");
-	CryLogAlways(" %d entities (%d active)", count, acount);
+	CryLogAlways(" %d entities (%" PRISIZE_T " active)", count, m_mapActiveEntities.size());
 	CryLogAlways("--------------------------------------------------------------------------------");
 }
 
@@ -2946,9 +2679,9 @@ void CEntitySystem::LoadInternalState(IDataReadStream& reader)
 			CEntity* pEntity = m_EntityArray[i];
 			if (NULL != pEntity)
 			{
-				gEnv->pLog->LogAlways("ExistingEntity: '%s' '%s' (ID=%d, GUID=%llu, Flags=0x%X) %i",
+				gEnv->pLog->LogAlways("ExistingEntity: '%s' '%s' (ID=%d, GUID=%s, Flags=0x%X) %i",
 				                      pEntity->GetName(), pEntity->GetClass()->GetName(),
-				                      pEntity->GetId(), pEntity->GetGuid(),
+				                      pEntity->GetId(), pEntity->GetGuid().ToDebugString(),
 				                      pEntity->GetFlags(), pEntity->IsLoadedFromLevelFile());
 
 				currentEntities.insert(pEntity->GetGuid());
@@ -2963,7 +2696,7 @@ void CEntitySystem::LoadInternalState(IDataReadStream& reader)
 		for (uint32 i = 0; i < numEntities; ++i)
 		{
 			// load entity ID
-			const EntityGUID entityGUID = reader.ReadUint64();
+			const EntityGUID entityGUID = CryGUID::FromString(reader.ReadString().c_str());
 
 			// get existing entity with that ID
 			TEntitySet::iterator it = currentEntities.find(entityGUID);
@@ -2981,9 +2714,9 @@ void CEntitySystem::LoadInternalState(IDataReadStream& reader)
 				if (!pEntity->IsLoadedFromLevelFile())
 				{
 					// entity sill there :)
-					gEnv->pLog->LogAlways("Could not override entity '%s' '%s' (ID=%d, GUID=%llu, Flags=0x%X). Original entity is non from Level.",
+					gEnv->pLog->LogAlways("Could not override entity '%s' '%s' (ID=%d, GUID=%s, Flags=0x%X). Original entity is non from Level.",
 					                      pEntity->GetName(), pEntity->GetClass()->GetName(),
-					                      pEntity->GetId(), pEntity->GetGuid(), pEntity->GetFlags());
+					                      pEntity->GetId(), pEntity->GetGuid().ToDebugString(), pEntity->GetFlags());
 
 					reader.SkipString();
 					continue;
@@ -3033,8 +2766,8 @@ void CEntitySystem::LoadInternalState(IDataReadStream& reader)
 						continue;
 					}
 
-					gEnv->pLog->LogAlways("Deleting entity: '%s' '%s' (ID=%d, GUID=%llu, Flags=0x%X", pEntity->GetName(), pEntity->GetClass()->GetName(),
-					                      pEntity->GetId(), pEntity->GetGuid(), pEntity->GetFlags());
+					gEnv->pLog->LogAlways("Deleting entity: '%s' '%s' (ID=%d, GUID=%s, Flags=0x%X", pEntity->GetName(), pEntity->GetClass()->GetName(),
+					                      pEntity->GetId(), pEntity->GetGuid().ToDebugString(), pEntity->GetFlags());
 
 					// Remove the entity
 					pEntity->ClearFlags(ENTITY_FLAG_UNREMOVABLE);
@@ -3220,7 +2953,7 @@ void CEntitySystem::DumpEntity(IEntity* pEntity)
 	string name(pEntity->GetName());
 	name += string("[$9") + pEntity->GetClass()->GetName() + string("$o]");
 	Vec3 pos(pEntity->GetWorldPos());
-	const char* sStatus = pEntity->IsActive() ? "[$3Active$o]" : "[$9Inactive$o]";
+	const char* sStatus = pEntity->IsActivatedForUpdates() ? "[$3Active$o]" : "[$9Inactive$o]";
 	if (pEntity->IsHidden())
 		sStatus = "[$9Hidden$o]";
 
@@ -3276,6 +3009,9 @@ void CEntitySystem::ChangeEntityName(CEntity* pEntity, const char* sNewName)
 	{
 		pEntity->m_szName = sNewName;
 	}
+
+	SEntityEvent event(ENTITY_EVENT_SET_NAME);
+	pEntity->SendEvent(event);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -3366,18 +3102,6 @@ void CEntitySystem::LoadLayers(const char* dataFile)
 }
 
 //////////////////////////////////////////////////////////////////////////
-IEntityLayer* CEntitySystem::FindLayer(const char* szLayer) const
-{
-	if (szLayer)
-	{
-		TLayers::const_iterator found = m_layers.find(CONST_TEMP_STRING(szLayer));
-		if (found != m_layers.end())
-			return found->second;
-	}
-	return NULL;
-}
-
-//////////////////////////////////////////////////////////////////////////
 void CEntitySystem::AddEntityToLayer(const char* layer, EntityId id)
 {
 	IEntityLayer* pLayer = FindLayer(layer);
@@ -3417,7 +3141,7 @@ void CEntitySystem::EnableDefaultLayers(bool isSerialized)
 		EnableLayer(it->first, pLayer->IsDefaultLoaded(), isSerialized);
 	}
 }
-//////////////////////////////////////////////////////////////////////////
+
 void CEntitySystem::EnableLayer(const char* layer, bool isEnable, bool isSerialized)
 {
 	if (!gEnv->p3DEngine->IsAreaActivationInUse())
@@ -3425,45 +3149,78 @@ void CEntitySystem::EnableLayer(const char* layer, bool isEnable, bool isSeriali
 	IEntityLayer* pLayer = FindLayer(layer);
 	if (pLayer)
 	{
-		bool bEnableChange = pLayer->IsEnabledBrush() != isEnable;
+		EnableLayer(pLayer, isEnable, isSerialized, true);
+	}
+}
+
+void CEntitySystem::EnableLayer(IEntityLayer* pLayer, bool bIsEnable, bool bIsSerialized, bool bAffectsChildren)
+{
+	const bool bEnableChange = pLayer->IsEnabledBrush() != bIsEnable;
 
 #if ENABLE_STATOSCOPE
-		if (gEnv->pStatoscope && (pLayer->IsEnabled() != isEnable))
-		{
-			string userMarker = "LayerSwitching: ";
-			userMarker += isEnable ? "Enable " : "Disable ";
-			userMarker += layer;
-			gEnv->pStatoscope->AddUserMarker("LayerSwitching", userMarker.c_str());
-		}
+	if (gEnv->pStatoscope && (pLayer->IsEnabled() != bIsEnable))
+	{
+		stack_string userMarker = "LayerSwitching: ";
+		userMarker += bIsEnable ? "Enable " : "Disable ";
+		userMarker += pLayer->GetName();
+		gEnv->pStatoscope->AddUserMarker("LayerSwitching", userMarker.c_str());
+	}
 #endif
 
-		pLayer->Enable(isEnable, isSerialized);
+	pLayer->Enable(bIsEnable, bIsSerialized, bAffectsChildren);
 
-		IResourceManager* pResMan = gEnv->pSystem->GetIResourceManager();
-		if (bEnableChange && pResMan)
+	IResourceManager* pResMan = gEnv->pSystem->GetIResourceManager();
+	if (bEnableChange && pResMan)
+	{
+		if (bIsEnable)
 		{
-			if (isEnable)
-			{
-				if (strlen(pLayer->GetParentName()) > 0)
-					pResMan->LoadLayerPak(pLayer->GetParentName());
-				else
-					pResMan->LoadLayerPak(pLayer->GetName());
-			}
+			if (strlen(pLayer->GetParentName()) > 0)
+				pResMan->LoadLayerPak(pLayer->GetParentName());
 			else
-			{
-				if (strlen(pLayer->GetParentName()) > 0)
-					pResMan->UnloadLayerPak(pLayer->GetParentName());
-				else
-					pResMan->UnloadLayerPak(pLayer->GetName());
-			}
+				pResMan->LoadLayerPak(pLayer->GetName());
+		}
+		else
+		{
+			if (strlen(pLayer->GetParentName()) > 0)
+				pResMan->UnloadLayerPak(pLayer->GetParentName());
+			else
+				pResMan->UnloadLayerPak(pLayer->GetName());
+		}
+	}
+}
+
+void CEntitySystem::EnableLayerSet(const char* const * pLayers, size_t layerCount, bool bIsSerialized, IEntityLayerSetUpdateListener* pListener)
+{
+	if(!gEnv->p3DEngine->IsAreaActivationInUse())
+		return;
+
+	const char* const * pVisibleLayersBegin = pLayers;
+	const char* const * pVisibleLayersEnd   = pLayers + layerCount;
+	for (TLayers::iterator it = m_layers.begin(), itEnd = m_layers.end(); it != itEnd; ++it)
+	{
+		const string& searchedString = it->first;
+		const bool bEnabled = std::find_if(pVisibleLayersBegin, pVisibleLayersEnd, [&searchedString](const char* szLayerName)
+		{
+			return searchedString == szLayerName;
+		} ) != pVisibleLayersEnd;
+
+		CEntityLayer* pLayer = it->second;
+		if (bEnabled != pLayer->IsEnabled())
+		{
+			EnableLayer(pLayer, bEnabled, bIsSerialized, false);
+		}
+
+		if (pListener)
+		{
+			pListener->LayerEnablingEvent(searchedString.c_str(), bEnabled, bIsSerialized);
 		}
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-bool CEntitySystem::IsLayerEnabled(const char* layer, bool bMustBeLoaded) const
+bool CEntitySystem::IsLayerEnabled(const char* layer, bool bMustBeLoaded, bool bCaseSensitive) const
 {
-	const IEntityLayer* pLayer = FindLayer(layer);
+	const IEntityLayer* pLayer = FindLayer(layer, bCaseSensitive);
 	if (pLayer)
 	{
 		if (pLayer->IsEnabled())
@@ -3520,11 +3277,6 @@ void CEntitySystem::UpdateEngineCVars()
 	static ICVar* p_e_view_dist_ratio_detail = gEnv->pConsole->GetCVar("e_ViewDistRatioDetail");
 
 	assert(p_e_view_dist_min && p_e_view_dist_ratio && p_e_view_dist_ratio_detail);
-
-	CRenderProxy::SetViewDistMin(p_e_view_dist_min->GetFVal());
-	CRenderProxy::SetViewDistRatio(p_e_view_dist_ratio->GetFVal());
-	CRenderProxy::SetViewDistRatioCustom(p_e_view_dist_ratio_custom->GetFVal());
-	CRenderProxy::SetViewDistRatioDetail(p_e_view_dist_ratio_detail->GetFVal());
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -3574,20 +3326,6 @@ void CEntitySystem::PurgeDeferredCollisionEvents(bool bForce)
 	}
 }
 
-void CEntitySystem::ComponentRegister(EntityId id, IComponentPtr pComponent, const int flags)
-{
-	pComponent->SetDistributer(m_pEventDistributer, id);
-	if ((flags& IComponent::EComponentFlags_LazyRegistration) == 0)
-	{
-		m_pEventDistributer->RegisterComponent(id, pComponent, (flags& IComponent::EComponentFlags_Enable) != 0);
-	}
-}
-
-void CEntitySystem::ComponentEnableEvent(const EntityId id, const int eventID, const bool enable)
-{
-	m_pEventDistributer->EnableEventForEntity(id, eventID, enable);
-}
-
 void CEntitySystem::DebugDraw()
 {
 	if (CVar::es_DrawProximityTriggers > 0)
@@ -3619,7 +3357,7 @@ void CEntitySystem::DebugDrawProximityTriggers()
 
 			ColorB color(255, 0, 0);  // Red indicates an error
 
-			if (IEntityScriptProxy* pEntityScriptProxy = static_cast<IEntityScriptProxy*>(pEntity->GetProxy(ENTITY_PROXY_SCRIPT)))
+			if (IEntityScriptComponent* pEntityScriptProxy = static_cast<IEntityScriptComponent*>(pEntity->GetProxy(ENTITY_PROXY_SCRIPT)))
 			{
 				if (IScriptTable* pScriptTable = pEntityScriptProxy->GetScriptTable())
 				{
@@ -3659,38 +3397,20 @@ void CEntitySystem::DoPrePhysicsUpdate()
 	FUNCTION_PROFILER(m_pISystem, PROFILE_ENTITY);
 
 	float fFrameTime = gEnv->pTimer->GetFrameTime();
-	for (EntitiesSet::iterator it = m_mapPrePhysicsEntities.begin(); it != m_mapPrePhysicsEntities.end(); )
+
+	SEntityEvent event(ENTITY_EVENT_PREPHYSICSUPDATE);
+	event.fParam[0] = fFrameTime;
+
+	m_mapPrePhysicsEntities.for_each(
+	  [this, &event](EntityId eid)
 	{
-		EntityId eid = *it;
-		EntitiesSet::iterator next = it;
-		++next;
 		CEntity* pEntity = (CEntity*)GetEntity(eid);
 		if (pEntity)
 		{
-#ifdef _DEBUG
-			INDENT_LOG_DURING_SCOPE(true, "While doing pre-physics update of %s...", pEntity->GetEntityTextDescription());
-#endif
-			pEntity->PrePhysicsUpdate(fFrameTime);
+		  pEntity->PrePhysicsUpdate(event);
 		}
-		CRY_ASSERT_TRACE(pEntity, ("Non-valid entity exists in m_mapPrePhysicsEntities. Id = %u", eid));
-		it = next;
 	}
-}
-
-void CEntitySystem::DoPrePhysicsUpdateFast()
-{
-	FUNCTION_PROFILER(m_pISystem, PROFILE_ENTITY);
-
-	SEntityEvent evt(ENTITY_EVENT_PREPHYSICSUPDATE);
-	evt.fParam[0] = gEnv->pTimer->GetFrameTime();
-
-	// Dispatch the event.
-	m_pEventDistributer->SendEvent(evt);
-}
-
-void CEntitySystem::RegisterCharactersForRendering()
-{
-	CRenderProxy::RegisterCharactersForRendering();
+	  );
 }
 
 IBSPTree3D* CEntitySystem::CreateBSPTree3D(const IBSPTree3D::FaceList& faceList)

@@ -66,13 +66,14 @@ void CHUDSilhouettes::SetVisionParams(EntityId uiEntityId,float r,float g,float 
 	IEntity *pEntity = gEnv->pEntitySystem->GetEntity(uiEntityId);
 	if(!pEntity)
 		return;
-
-	// Some actor accessories may not have render proxy
-	IEntityRenderProxy *pEntityRenderProxy = static_cast<IEntityRenderProxy *>(pEntity->GetProxy(ENTITY_PROXY_RENDER));
-	if(!pEntityRenderProxy)
-		return;
-
-	pEntityRenderProxy->SetHUDSilhouettesParams(r,g,b,a);
+	
+	//BorisW: This will currently always and only render for the first RenderNode,
+	//it might sense to provide slot selection as a parameter in HUDSilhouette's interface
+	IRenderNode* pRenderNode = pEntity->GetRenderNode();
+	if (pRenderNode)
+	{
+		pRenderNode->m_nHUDSilhouettesParam = CHUDUtils::ConverToSilhouetteParamValue(r, g, b, a);
+	}
 }
 
 //-----------------------------------------------------------------------------------------------------
@@ -174,7 +175,7 @@ void CHUDSilhouettes::SetSilhouette(IEntity *pEntity,	float fDuration, bool bFlo
 
 void CHUDSilhouettes::SetSilhouette(IActor *pActor,float r,float g,float b,float a,float fDuration,bool bHighlightCurrentItem,bool bHighlightAccessories)
 {
-	if(!pActor)
+	if(!pActor || !pActor->GetEntity())
 		return;
 
 	SetSilhouette(pActor->GetEntity(),r,g,b,a,fDuration);
@@ -690,10 +691,10 @@ void CHUDSilhouettes::HeatVisionActivated()
 		IEntity* pEntity = gEnv->pEntitySystem->GetEntity(pSilhouette.uiEntityId);
 		if(!pEntity)
 			continue;
-		IEntityRenderProxy* pEntityRenderProxy = static_cast<IEntityRenderProxy*>(pEntity->GetProxy(ENTITY_PROXY_RENDER));
-		if(!pEntityRenderProxy)
+		IEntityRender* pIEntityRender = pEntity->GetRenderInterface();
+		if(!pIEntityRender)
 			continue;
-		pEntityRenderProxy->SetVisionParams(0.0f, 0.0f, 0.0f, 0.0f);
+		//pIEntityRender->SetVisionParams(0.0f, 0.0f, 0.0f, 0.0f);
 	}
 }
 //-------------------------------------------------------------

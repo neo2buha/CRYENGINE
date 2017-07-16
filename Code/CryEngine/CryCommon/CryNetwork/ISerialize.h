@@ -2,7 +2,6 @@
 
 #pragma once
 
-#include <CryEntitySystem/IEntity.h>       // <> required for Interfuscator
 #include <CryScriptSystem/IScriptSystem.h> // <> required for Interfuscator
 #include <CryCore/CountedValue.h>
 #include <CryCore/Containers/MiniQueue.h>
@@ -29,8 +28,8 @@ struct SNetObjectID
 	{
 		return id == InvalidId;
 	}
-	typedef uint16 (SNetObjectID::* unknown_bool_type);
-	ILINE operator unknown_bool_type() const
+	typedef uint16 SNetObjectID::* safe_bool_idiom_type;
+	ILINE operator safe_bool_idiom_type() const
 	{
 		return !!(*this) ? &SNetObjectID::id : NULL;
 	}
@@ -243,6 +242,9 @@ template<class TISerialize>
 class CSerializeWrapper
 {
 public:
+	// Required for SWIG to properly expose serialize functions!
+	CSerializeWrapper() : m_pSerialize(nullptr) {}
+
 	CSerializeWrapper(TISerialize* pSerialize) :
 		m_pSerialize(pSerialize)
 	{
@@ -510,10 +512,7 @@ public:
 	{
 		static SSerializeString defaultSerializeString;
 
-		{
-			ScopedSwitchToGlobalHeap useGlobalHeap;
-			defaultSerializeString.set_string(defaultValue);
-		}
+		defaultSerializeString.set_string(defaultValue);
 
 		SSerializeString& serializeString = SetSharedSerializeString(value);
 		m_pSerialize->ValueWithDefault(szName, serializeString, defaultSerializeString);
@@ -925,8 +924,6 @@ public:
 
 	SSerializeString& SetSharedSerializeString(const string& str)
 	{
-		ScopedSwitchToGlobalHeap useGlobalHeap;
-
 		static SSerializeString serializeString;
 		serializeString.set_string(str);
 		return serializeString;
@@ -935,8 +932,6 @@ public:
 #if !defined(RESOURCE_COMPILER)
 	SSerializeString& SetSharedSerializeString(const CryStringLocal& str)
 	{
-		ScopedSwitchToGlobalHeap useGlobalHeap;
-
 		static SSerializeString serializeString;
 		serializeString.set_string(str);
 		return serializeString;
@@ -946,8 +941,6 @@ public:
 	template<size_t S>
 	SSerializeString& SetSharedSerializeString(const CryFixedStringT<S>& str)
 	{
-		ScopedSwitchToGlobalHeap useGlobalHeap;
-
 		static SSerializeString serializeString;
 		serializeString.set_string(str);
 		return serializeString;

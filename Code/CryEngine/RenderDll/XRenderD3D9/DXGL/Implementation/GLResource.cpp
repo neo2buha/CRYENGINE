@@ -185,12 +185,12 @@ struct SDefaultTex1DBase : SDefaultTexBase, STex1DBase
 
 	static void ApplyUnpackState(CContext* pContext, STexSize kSize, uint32 uLogDataAlignment, uint32 uRowPitch, uint32, const SGIFormatInfo* pFormat)
 	{
-		pContext->SetUnpackAlignment(min((int)MAX_UNPACK_ALIGNMENT, 1 << uLogDataAlignment));
+		pContext->SetUnpackAlignment(std::min<int>(MAX_UNPACK_ALIGNMENT, 1 << uLogDataAlignment));
 	}
 
 	static void ApplyPackState(CContext* pContext, STexSize kSize, uint32 uLogDataAlignment, uint32 uRowPitch, uint32, const SGIFormatInfo* pFormat)
 	{
-		pContext->SetPackAlignment(min((int)MAX_PACK_ALIGNMENT, 1 << uLogDataAlignment));
+		pContext->SetPackAlignment(std::min<int>(MAX_PACK_ALIGNMENT, 1 << uLogDataAlignment));
 	}
 };
 
@@ -206,13 +206,13 @@ struct SDefaultTex2DBase : SDefaultTexBase, STex2DBase
 	static void ApplyUnpackState(CContext* pContext, STexSize kSize, uint32 uLogDataAlignment, uint32 uRowPitch, uint32, const SGIFormatInfo* pFormat)
 	{
 		pContext->SetUnpackRowLength(GetRowPitch(kSize.x, uRowPitch, pFormat));
-		pContext->SetUnpackAlignment(min((int)MAX_UNPACK_ALIGNMENT, 1 << min(uLogDataAlignment, (uint32)countTrailingZeroes(uRowPitch))));
+		pContext->SetUnpackAlignment(std::min<int>(MAX_UNPACK_ALIGNMENT, 1 << std::min<int>(uLogDataAlignment, countTrailingZeros32(uRowPitch))));
 	}
 
 	static void ApplyPackState(CContext* pContext, STexSize kSize, uint32 uLogDataAlignment, uint32 uRowPitch, uint32, const SGIFormatInfo* pFormat)
 	{
 		pContext->SetPackRowLength(GetRowPitch(kSize.x, uRowPitch, pFormat));
-		pContext->SetPackAlignment(min((int)MAX_PACK_ALIGNMENT, 1 << min(uLogDataAlignment, (uint32)countTrailingZeroes(uRowPitch))));
+		pContext->SetPackAlignment(std::min<int>(MAX_PACK_ALIGNMENT, 1 << std::min<int>(uLogDataAlignment, countTrailingZeros32(uRowPitch))));
 	}
 
 	template<typename T>
@@ -235,14 +235,14 @@ struct SDefaultTex3DBase : SDefaultTexBase, STex3DBase
 	{
 		pContext->SetUnpackRowLength(GetRowPitch(kSize.x, uRowPitch, pFormat));
 		pContext->SetUnpackImageHeight(GetImagePitch(kSize.y, uImagePitch, uRowPitch));
-		pContext->SetUnpackAlignment(min((int)MAX_UNPACK_ALIGNMENT, 1 << min(uLogDataAlignment, (uint32)min(countTrailingZeroes(uRowPitch), countTrailingZeroes(uImagePitch)))));
+		pContext->SetUnpackAlignment(std::min<int>(MAX_UNPACK_ALIGNMENT, 1 << std::min<int>(uLogDataAlignment, std::min<int>(countTrailingZeros32(uRowPitch), countTrailingZeros32(uImagePitch)))));
 	}
 
 	static void ApplyPackState(CContext* pContext, STexSize kSize, uint32 uLogDataAlignment, uint32 uRowPitch, uint32 uImagePitch, const SGIFormatInfo* pFormat)
 	{
 		pContext->SetPackRowLength(GetRowPitch(kSize.x, uRowPitch, pFormat));
 		pContext->SetPackImageHeight(GetImagePitch(kSize.y, uImagePitch, uRowPitch));
-		pContext->SetPackAlignment(min((int)MAX_PACK_ALIGNMENT, 1 << min(uLogDataAlignment, (uint32)min(countTrailingZeroes(uRowPitch), countTrailingZeroes(uImagePitch)))));
+		pContext->SetPackAlignment(std::min<int>(MAX_PACK_ALIGNMENT, 1 << std::min<int>(uLogDataAlignment, std::min<int>(countTrailingZeros32(uRowPitch), countTrailingZeros32(uImagePitch)))));
 	}
 
 	template<typename T>
@@ -625,14 +625,14 @@ struct SSingleTexImpl : Interface
 		Partition::GetSubTargetAndLayer(pTexture, kSubID.m_uElement, eSubTarget, iLayer);
 		assert(iLayer == 0);
 
-		Interface::ApplyUnpackState(pContext, kBox.m_kSize, (uint32)countTrailingZeroes((unsigned int)reinterpret_cast<uintptr_t>(pSrcData)), uSrcRowPitch, uSrcDepthPitch, pFormat);
+		Interface::ApplyUnpackState(pContext, kBox.m_kSize, countTrailingZeros32((unsigned int)reinterpret_cast<uintptr_t>(pSrcData)), uSrcRowPitch, uSrcDepthPitch, pFormat);
 		TestUploadBounds<Interface>(pTexture, eSubTarget, kSubID.m_iMipLevel, kBox, pFormat, pSrcData, uSrcRowPitch, uSrcDepthPitch);
 		Interface::TexSubImage(pTexture, eSubTarget, kSubID.m_iMipLevel, kBox, pFormat->m_pTexture, pSrcData);
 	}
 
 	static void DownloadImage(STexture* pTexture, STexSubresourceID kSubID, STexBox kBox, void* pDstData, uint32 uDstRowPitch, uint32 uDstDepthPitch, CContext* pContext, const SGIFormatInfo* pFormat)
 	{
-		Interface::ApplyPackState(pContext, kBox.m_kSize, (uint32)countTrailingZeroes((unsigned int)reinterpret_cast<uintptr_t>(pDstData)), uDstRowPitch, uDstDepthPitch, pFormat);
+		Interface::ApplyPackState(pContext, kBox.m_kSize, countTrailingZeros32((unsigned int)reinterpret_cast<uintptr_t>(pDstData)), uDstRowPitch, uDstDepthPitch, pFormat);
 
 #if DXGL_SUPPORT_GETTEXIMAGE
 		GLenum eSubTarget;
@@ -728,14 +728,14 @@ struct SArrayTexImpl : Interface
 		Interface::SetLayerComponent(kBox.m_kOffset, iLayer);
 		Interface::SetLayerComponent(kBox.m_kSize, 1);
 
-		Interface::ApplyUnpackState(pContext, kBox.m_kSize, (uint32)countTrailingZeroes((unsigned int)reinterpret_cast<uintptr_t>(pSrcData)), uSrcRowPitch, uSrcDepthPitch, pFormat);
+		Interface::ApplyUnpackState(pContext, kBox.m_kSize, countTrailingZeros32((unsigned int)reinterpret_cast<uintptr_t>(pSrcData)), uSrcRowPitch, uSrcDepthPitch, pFormat);
 		TestUploadBounds<Interface>(pTexture, eSubTarget, kSubID.m_iMipLevel, kBox, pFormat, pSrcData, uSrcRowPitch, uSrcDepthPitch);
 		Interface::TexSubImage(pTexture, eSubTarget, kSubID.m_iMipLevel, kBox, pFormat->m_pTexture, pSrcData);
 	}
 
 	static void DownloadImage(STexture* pTexture, STexSubresourceID kSubID, STexBox kBox, void* pDstData, uint32 uDstRowPitch, uint32 uDstDepthPitch, CContext* pContext, const SGIFormatInfo* pFormat)
 	{
-		Interface::ApplyPackState(pContext, kBox.m_kSize, (uint32)countTrailingZeroes((unsigned int)reinterpret_cast<uintptr_t>(pDstData)), uDstRowPitch, uDstDepthPitch, pFormat);
+		Interface::ApplyPackState(pContext, kBox.m_kSize, countTrailingZeros32((unsigned int)reinterpret_cast<uintptr_t>(pDstData)), uDstRowPitch, uDstDepthPitch, pFormat);
 
 #if DXGL_SUPPORT_GETTEXIMAGE
 		GLenum eSubTarget;
@@ -1131,11 +1131,6 @@ void InitializeTexture(STexture* pTexture, const D3D11_SUBRESOURCE_DATA* pInitia
 	}
 
 	pTexture->m_kCreationFence.IssueFence(pContext->GetDevice());
-}
-
-SFrameBufferConfiguration::SFrameBufferConfiguration()
-{
-	memset(m_akAttachments, 0, sizeof(m_akAttachments));
 }
 
 GLenum SFrameBufferConfiguration::AttachmentIndexToID(uint32 uIndex)
@@ -1690,8 +1685,8 @@ bool SDynamicBufferCopy::GetDirtyRegion(uint32& uOffset, uint32& uSize)
 	{
 		assert(m_apDirtyPages[uChange] >= m_pData);
 		uint32 uOffset((uint32)(reinterpret_cast<char*>(m_apDirtyPages[uChange]) - reinterpret_cast<char*>(m_pData)));
-		uMin = min(uMin, uOffset);
-		uMax = max(uMax, uOffset);
+		uMin = std::min(uMin, uOffset);
+		uMax = std::max(uMax, uOffset);
 	}
 
 	if (uMin > uMax)
@@ -1701,7 +1696,7 @@ bool SDynamicBufferCopy::GetDirtyRegion(uint32& uOffset, uint32& uSize)
 	}
 	else
 	{
-		uMax = min(uMax + ms_uPageSize, m_uSize) - 1;
+		uMax = std::min(uMax + ms_uPageSize, m_uSize) - 1;
 
 		uOffset = uMin;
 		uSize = uMax - uMin + 1;
@@ -1729,7 +1724,7 @@ SBuffer::SBuffer()
 	, m_bSystemMemoryCopyOwner(true)
 #endif //DXGL_SUPPORT_APITRACE
 #if DXGL_STREAMING_CONSTANT_BUFFERS
-	#if CRY_OPENGL_SINGLE_CONTEXT
+	#if OGL_SINGLE_CONTEXT
 	, m_bContextCacheValid(false)
 	#endif
 	, m_bStreaming(false)
@@ -1780,6 +1775,11 @@ SShaderViewPtr SBuffer::CreateUnorderedAccessView(EGIFormat eFormat, uint32 uFir
 	{
 		DXGL_ERROR("Unsupported format for unordered access view");
 		return NULL;
+	}
+
+	if (spTextureBufferView == nullptr) 
+	{
+		return nullptr;
 	}
 
 	SShaderImageViewPtr spImageView(new SShaderImageView(SShaderImageViewConfiguration(eImageFormat, 0, -1, GL_READ_WRITE)));
@@ -2015,7 +2015,7 @@ SDefaultFrameBufferTexture::SDefaultFrameBufferTexture(GLsizei iWidth, GLsizei i
 #if CRY_PLATFORM_IOS
 	// On iOS there is no system frame buffer, we need to extract the framebuffer
 	// from the currently bound framebuffer.
-	#if defined(DXGL_USE_SDL) && defined(DXGL_SINGLEWINDOW)
+	#if defined(USE_SDL2_VIDEO) && defined(DXGL_SINGLEWINDOW)
 	m_kDefaultFBO.m_uName = 1;
 	SDL_GetWindowSize(SMainWindow::ms_kInstance.m_pSDLWindow, &m_iDefaultFBOWidth, &m_iDefaultFBOHeight);
 	#else
@@ -2193,7 +2193,7 @@ void SDefaultFrameBufferTexture::OnRead(CContext* pContext)
 		pContext->BlitFrameBuffer(
 		  m_kDefaultFBO, m_kInputFBO,
 		  m_eOutputColorBuffer, m_eInputColorBuffer,
-#if CRY_OPENGL_FLIP_Y
+#if OGL_FLIP_Y
 		  0, m_iDefaultFBOHeight, m_iDefaultFBOWidth, 0,
 #else
 		  0, 0, m_iDefaultFBOWidth, m_iDefaultFBOHeight,
@@ -2211,7 +2211,7 @@ void SDefaultFrameBufferTexture::Flush(CContext* pContext)
 		pContext->BlitFrameBuffer(
 		  m_kInputFBO, m_kDefaultFBO,
 		  m_eInputColorBuffer, m_eOutputColorBuffer,
-#if CRY_OPENGL_FLIP_Y
+#if OGL_FLIP_Y
 		  0, m_iHeight, m_iWidth, 0,
 #else
 		  0, 0, m_iWidth, m_iHeight,
@@ -2360,7 +2360,7 @@ const SGIFormatInfo*   GetCompatibleTextureFormatInfo(EGIFormat* peGIFormat)
 	return NULL;
 }
 
-#if CRY_OPENGL_SINGLE_CONTEXT
+#if OGL_SINGLE_CONTEXT
 
 SInitialDataCopy::SInitialDataCopy(const D3D11_SUBRESOURCE_DATA* akSubresourceData, uint32 uNumSubresources)
 	: m_uNumSubresources(uNumSubresources)
@@ -2641,17 +2641,46 @@ STexturePtr CreateTexture2D(const D3D11_TEXTURE2D_DESC& kDesc, const D3D11_SUBRE
 #if !DXGL_SUPPORT_CUBEMAP_ARRAYS
 			if (bArray) { DXGL_NOT_IMPLEMENTED; return NULL; }
 			STexturePtr spTexture(
-			  new STexture(
-			    kDesc.Width, kDesc.Height, 1,
-			    GL_TEXTURE_CUBE_MAP,
-			    eGIFormat, GetNumMipLevels(kDesc), kDesc.ArraySize));
-#else
+				new STexture(
+					kDesc.Width, kDesc.Height, 1,
+					GL_TEXTURE_CUBE_MAP,
+					eGIFormat, GetNumMipLevels(kDesc), kDesc.ArraySize));
+#elif DXGLES //HACK add cubemap array support with EXT_texture_cube_map_array & windows
+
+	#ifdef CRY_PLATFORM_WINDOWS
+			STexturePtr spTexture = STexturePtr(
+				new STexture(
+					kDesc.Width, kDesc.Height, 1,
+					bArray ? GL_TEXTURE_CUBE_MAP_ARRAY : GL_TEXTURE_CUBE_MAP,
+					eGIFormat, GetNumMipLevels(kDesc), kDesc.ArraySize));
+	#else
+			STexturePtr spTexture;
+			if (DXGL_GL_EXTENSION_SUPPORTED(EXT_texture_cube_map_array))
+			{
+				spTexture = STexturePtr(
+					new STexture(
+						kDesc.Width, kDesc.Height, 1,
+						bArray ? GL_TEXTURE_CUBE_MAP_ARRAY_EXT : GL_TEXTURE_CUBE_MAP,
+						eGIFormat, GetNumMipLevels(kDesc), kDesc.ArraySize));
+			}
+			else {
+				if (bArray) { DXGL_NOT_IMPLEMENTED; return NULL; }
+				spTexture = (
+					new STexture(
+						kDesc.Width, kDesc.Height, 1,
+						GL_TEXTURE_CUBE_MAP,
+						eGIFormat, GetNumMipLevels(kDesc), kDesc.ArraySize));
+			}
+	#endif
+
+#else 
 			STexturePtr spTexture(
-			  new STexture(
-			    kDesc.Width, kDesc.Height, 1,
-			    bArray ? GL_TEXTURE_CUBE_MAP_ARRAY : GL_TEXTURE_CUBE_MAP,
-			    eGIFormat, GetNumMipLevels(kDesc), kDesc.ArraySize));
+				new STexture(
+					kDesc.Width, kDesc.Height, 1,
+					bArray ? GL_TEXTURE_CUBE_MAP_ARRAY : GL_TEXTURE_CUBE_MAP,
+					eGIFormat, GetNumMipLevels(kDesc), kDesc.ArraySize));
 #endif
+
 
 			InitializeTexture2D<SCubePartition>(spTexture, bArray, bStaging, pInitialData, kDesc.CPUAccessFlags, pContext, pFormatInfo);
 
@@ -2927,7 +2956,7 @@ struct SStreamingBufferImpl
 		DXGL_SCOPED_PROFILE("SStagingBufferImpl::MapBufferRange")
 		MapBufferSystemMemoryRange(pBuffer, uOffset, pMappedResource);
 		if (eMap == D3D11_MAP_WRITE || eMap == D3D11_MAP_READ_WRITE || eMap == D3D11_MAP_WRITE_DISCARD || eMap == D3D11_MAP_WRITE_NO_OVERWRITE)
-	#if CRY_OPENGL_SINGLE_CONTEXT
+	#if OGL_SINGLE_CONTEXT
 			pBuffer->m_bContextCacheValid = false;
 	#else
 			pBuffer->m_kContextCachesValid.SetZero();
@@ -2941,7 +2970,7 @@ struct SStreamingBufferImpl
 		SBuffer * pBuffer(static_cast<SBuffer*>(pResource));
 		MapBufferSystemMemoryRange(pBuffer, 0, pMappedResource);
 		if (eMap == D3D11_MAP_WRITE || eMap == D3D11_MAP_READ_WRITE || eMap == D3D11_MAP_WRITE_DISCARD || eMap == D3D11_MAP_WRITE_NO_OVERWRITE)
-	#if CRY_OPENGL_SINGLE_CONTEXT
+	#if OGL_SINGLE_CONTEXT
 			pBuffer->m_bContextCacheValid = false;
 	#else
 			pBuffer->m_kContextCachesValid.SetZero();
@@ -2958,7 +2987,7 @@ struct SStreamingBufferImpl
 		DXGL_SCOPED_PROFILE("SStagingBufferImpl::UpdateBufferSubresource")
 		SBuffer * pBuffer(static_cast<SBuffer*>(pResource));
 		UpdateBufferSystemMemory(pBuffer, pDstBox, pSrcData);
-	#if CRY_OPENGL_SINGLE_CONTEXT
+	#if OGL_SINGLE_CONTEXT
 		pBuffer->m_bContextCacheValid = false;
 	#else
 		pBuffer->m_kContextCachesValid.SetZero();
@@ -3169,7 +3198,7 @@ SQueryPtr CreateQuery(const D3D11_QUERY_DESC& kDesc, CContext*)
 		break;
 #endif //DXGL_SUPPORT_TIMER_QUERIES
 	default:
-		DXGL_NOT_IMPLEMENTED
+		//DXGL_NOT_IMPLEMENTED
 		break;
 	}
 

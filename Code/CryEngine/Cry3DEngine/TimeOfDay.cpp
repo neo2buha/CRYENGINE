@@ -469,7 +469,7 @@ Vec3 ConvertIlluminanceToLightColor(float illuminance, Vec3 colorRGB)
 
 //////////////////////////////////////////////////////////////////////////
 CTimeOfDay::CTimeOfDay()
-	: m_timeOfDayRtpcId(INVALID_AUDIO_CONTROL_ID)
+	: m_timeOfDayRtpcId(CryAudio::InvalidControlId)
 {
 	m_pTimer = 0;
 	SetTimer(gEnv->pTimer);
@@ -518,7 +518,7 @@ CTimeOfDay::CTimeOfDay()
 
 	m_pCurrentPreset = NULL;
 
-	gEnv->pAudioSystem->GetAudioRtpcId("time_of_day", m_timeOfDayRtpcId);
+	gEnv->pAudioSystem->GetParameterId("time_of_day", m_timeOfDayRtpcId);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -718,7 +718,12 @@ bool CTimeOfDay::GetVariableInfo(int nIndex, SVariableInfo& varInfo)
 //////////////////////////////////////////////////////////////////////////
 void CTimeOfDay::SetVariableValue(int nIndex, float fValue[3])
 {
-	// to be removed
+	if (nIndex < 0 || nIndex >= (int)ITimeOfDay::PARAM_TOTAL)
+		return;
+
+	m_vars[nIndex].fValue[0] = fValue[0];
+	m_vars[nIndex].fValue[1] = fValue[1];
+	m_vars[nIndex].fValue[2] = fValue[2];
 }
 //////////////////////////////////////////////////////////////////////////
 
@@ -876,14 +881,9 @@ void CTimeOfDay::SetTime(float fHour, bool bForceUpdate)
 	Update(true, bForceUpdate);
 
 	// Inform audio of this change.
-	if (m_timeOfDayRtpcId != INVALID_AUDIO_CONTROL_ID)
+	if (m_timeOfDayRtpcId != CryAudio::InvalidControlId)
 	{
-		SAudioRequest request;
-		SAudioObjectRequestData<eAudioObjectRequestType_SetRtpcValue> requestData;
-		requestData.audioRtpcId = m_timeOfDayRtpcId;
-		requestData.value = m_fTime;
-		request.pData = &requestData;
-		gEnv->pAudioSystem->PushRequest(request);
+		gEnv->pAudioSystem->SetParameter(m_timeOfDayRtpcId, m_fTime);
 	}
 
 	gEnv->pSystem->GetISystemEventDispatcher()->OnSystemEvent(ESYSTEM_EVENT_TIME_OF_DAY_SET, 0, 0);
@@ -1380,21 +1380,19 @@ void CTimeOfDay::Serialize(XmlNodeRef& node, bool bLoading)
 					}
 				}
 			}
+
 		}
 		else
 		{
 			// old format - convert to the new one
 			string presetName("default");
-			if (gEnv->pGame)
+			if (gEnv->pGameFramework)
 			{
-				if (IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework())
+				const char* pLevelName = gEnv->pGameFramework->GetLevelName();
+				if (pLevelName && *pLevelName)
 				{
-					const char* pLevelName = pGameFramework->GetLevelName();
-					if (pLevelName && *pLevelName)
-					{
-						//presetName = pLevelName;
-						presetName = string(sPresetsLibsPath) + pLevelName + ".xml";
-					}
+					//presetName = pLevelName;
+					presetName = string(sPresetsLibsPath) + pLevelName + ".xml";
 				}
 			}
 

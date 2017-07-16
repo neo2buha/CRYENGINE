@@ -10,7 +10,7 @@
 
 		#include "SharedStates.h"
 		#include "SharedResources.h"
-		#include "GTextureXRender.h"
+		#include "GTexture_Impl.h"
 		#include <GFxLoader.h>
 		#if CRY_PLATFORM_WINDOWS
 			#include <GFxVideoPC.h>
@@ -86,7 +86,7 @@ public:
 		static bool s_registered = false;
 		if (!s_registered)
 		{
-			gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(&ms_inst);
+			gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(&ms_inst, "CryGFxVideoPlayer_SystemEventListener");
 			s_registered = true;
 		}
 	}

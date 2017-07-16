@@ -37,14 +37,6 @@
 #define MC_GPU_TO_CPU 0x20
 #define MC_CPU_TO_CPU 0x40
 
-extern int g_CpuFlags;
-
-#define CPUF_SSE   0x01
-#define CPUF_SSE2  0x02
-#define CPUF_3DNOW 0x04
-#define CPUF_MMX   0x08
-#define CPUF_SSE3  0x10
-
 #if CRY_PLATFORM_SSE2
 	#if CRY_PLATFORM_X86 || CRY_PLATFORM_X64
 		#include <xmmintrin.h>
@@ -70,46 +62,9 @@ void cryMemcpy(void* Dst, const void* Src, int Count);
 #pragma warning(push)
 #pragma warning(disable:4731) // frame pointer register 'ebp' modified by inline assembly code
 
-#if CRY_PLATFORM_X86 && !(CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID) && !CRY_PLATFORM_APPLE
-// ***************************************************************************
-inline void cryPrecacheSSE(const void* src, int nbytes)
-{
-	_asm
-	{
-		mov esi, src
-		mov ecx, nbytes
-		// 64 bytes per pass
-		shr ecx, 6
-		jz endLabel
-
-loopMemToL1:
-		prefetchnta 64[ESI] // Prefetch next loop, non-temporal
-		prefetchnta 96[ESI]
-
-		movq mm1, 0[ESI]  // Read in source data
-		movq mm2, 8[ESI]
-		movq mm3, 16[ESI]
-		movq mm4, 24[ESI]
-		movq mm5, 32[ESI]
-		movq mm6, 40[ESI]
-		movq mm7, 48[ESI]
-		movq mm0, 56[ESI]
-
-		add esi, 64
-		dec ecx
-		jnz loopMemToL1
-
-		emms
-
-endLabel:
-	}
-}
-
-#endif
-
 ILINE void cryPrefetchT0SSE(const void* src)
 {
-#if CRY_PLATFORM_WINDOWS && CRY_PLATFORM_32BIT
+#if CRY_PLATFORM_WINDOWS && CRY_PLATFORM_32BIT && !CRY_COMPILER_CLANG
 	_asm
 	{
 		mov esi, src
@@ -158,7 +113,7 @@ ILINE void cryPrefetchT0SSE(const void* src)
 //! Inline assembly syntax for use with Visual C++.
 inline void cryMemcpy( void* Dst, const void* Src, int Count )
 {
-  if (g_CpuFlags & CPUF_SSE)
+#if CRY_PLATFORM_SSE2
   {
 	  __asm
 	  {
@@ -361,46 +316,13 @@ inline void cryMemcpy( void* Dst, const void* Src, int Count )
 	  //	mov		eax, [dest]	; ret value = destination pointer
 	  }
   }
-  else
+#else
   {
     memcpy(Dst, Src, Count);
   }
+#endif
 }
 
-inline void cryPrefetch(const void* Src, int nCount)
-{
-  nCount >>= 6;
-  if (nCount > 0)
-  {
-    _asm
-    {
-      mov esi, Src;
-      mov ecx, nCount;
-mPr0:
-      align 16
-      dec ecx;
-      mov eax, [esi];
-      mov eax,0;
-      lea esi, [esi+40h];
-      jne mPr0;
-    }
-  }
-  else
-  {
-    _asm
-    {
-      mov esi, Src;
-      mov ecx, nCount;
-mPr1:
-      align 16
-      inc ecx;
-      mov eax, [esi];
-      mov eax,0;
-      lea esi, [esi-40h];
-      jne mPr1;
-    }
-  }
-}
 // *INDENT-ON*
 
 inline void cryMemcpy(void* inDst, const void* inSrc, int nCount, int nFlags)

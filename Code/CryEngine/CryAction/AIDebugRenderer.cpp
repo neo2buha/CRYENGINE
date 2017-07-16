@@ -169,7 +169,7 @@ void CAIDebugRenderer::DrawCircles(const Vec3& vPos,
 		unitCircle.reserve(numPts);
 		for (int i = 0; i < numPts; ++i)
 		{
-			float angle = gf_PI2 * ((float) i) / numPts;
+			float angle = gf_PI2 * ((float)i) / numPts;
 			unitCircle.push_back(Vec3(sinf(angle), cosf(angle), 0.0f));
 		}
 	}
@@ -178,7 +178,7 @@ void CAIDebugRenderer::DrawCircles(const Vec3& vPos,
 	{
 		float ringFrac = 0.0f;
 		if (numRings > 1)
-			ringFrac += ((float) iRing) / (numRings - 1);
+			ringFrac += ((float)iRing) / (numRings - 1);
 
 		float fRadius = (1.0f - ringFrac) * fMinRadius + ringFrac * fMaxRadius;
 		ColorF col = (1.0f - ringFrac) * vInsideColor + ringFrac * vOutsideColor;
@@ -217,7 +217,7 @@ void CAIDebugRenderer::DrawEllipseOutline(const Vec3& vPos, float fRadiusX, floa
 	float cos_o = cosf(fOrientation);
 	for (unsigned int i = 0; i < 20; i++)
 	{
-		float angle = ((float) i / 20.0f) * gf_PI2;
+		float angle = ((float)i / 20.0f) * gf_PI2;
 		float sin_a = sinf(angle);
 		float cos_a = cosf(angle);
 		float x = (cos_o * cos_a * fRadiusX) - (sin_o * sin_a * fRadiusY);
@@ -243,29 +243,29 @@ void CAIDebugRenderer::Draw2dLabel(int nCol, int nRow, const char* szText, const
 		color.a / 255.0f
 	};
 
-	if (m_pRenderer)
-	{
-		m_pRenderer->Draw2dLabel(ColumnSize * static_cast<float>(nCol), baseY + RowSize * static_cast<float>(nRow), 1.2f, p_fColor, false, "%s", szText);
-	}
+	IRenderAuxText::Draw2dLabel(ColumnSize * static_cast<float>(nCol), baseY + RowSize * static_cast<float>(nRow), 1.2f, p_fColor, false, "%s", szText);
 }
 
 void CAIDebugRenderer::Draw2dLabel(float fX, float fY, float fFontSize, const ColorB& color, bool bCenter, const char* text, ...)
 {
 	va_list args;
 	va_start(args, text);
+	IRenderAuxText::DrawText(Vec3(fX, fY, 0.5f), fFontSize, color, eDrawText_IgnoreOverscan | eDrawText_2D | eDrawText_800x600 | eDrawText_FixedSize | eDrawText_Monospace | (bCenter ? eDrawText_Center : 0), text, args);
+	va_end(args);
+}
 
-	// Copy-pasted from IRenderer.h to use "va_list args"
-	SDrawTextInfo ti;
-	ti.xscale = ti.yscale = fFontSize;
-	ti.flags = eDrawText_IgnoreOverscan | eDrawText_2D | eDrawText_800x600 | eDrawText_FixedSize | eDrawText_Monospace | (bCenter ? eDrawText_Center : 0);
-	ti.color[0] = color.r / 255.0f;
-	ti.color[1] = color.g / 255.0f;
-	ti.color[2] = color.b / 255.0f;
-	ti.color[3] = color.a / 255.0f;
-	if (m_pRenderer)
-	{
-		m_pRenderer->DrawTextQueued(Vec3(fX, fY, 0.5f), ti, text, args);
-	}
+void CAIDebugRenderer::Draw2dLabelEx(float fX, float fY, float fFontSize, const ColorB& color, bool bFixedSize, bool bMonospace, bool bCenter, bool bFramed, const char* text, ...)
+{
+	va_list args;
+	va_start(args, text);
+
+	int flags = eDrawText_IgnoreOverscan | eDrawText_2D | eDrawText_800x600
+	           | (bFixedSize ? eDrawText_FixedSize : 0)
+	           | (bMonospace ? eDrawText_Monospace : 0)
+	           | (bFramed ? eDrawText_Framed : 0)
+	           | (bCenter ? eDrawText_Center : 0);
+
+	IRenderAuxText::DrawText(Vec3(fX, fY, 0.5f), fFontSize, color, flags, text, args);
 
 	va_end(args);
 }
@@ -274,16 +274,7 @@ void CAIDebugRenderer::Draw3dLabel(Vec3 vPos, float fFontSize, const char* text,
 {
 	va_list args;
 	va_start(args, text);
-
-	// Copy-pasted from IRenderer.h to use "va_list args"
-	SDrawTextInfo ti;
-	ti.xscale = ti.yscale = fFontSize;
-	ti.flags = eDrawText_FixedSize | eDrawText_800x600;
-	if (m_pRenderer)
-	{
-		m_pRenderer->DrawTextQueued(vPos, ti, text, args);
-	}
-
+	IRenderAuxText::DrawText(vPos, fFontSize, NULL, eDrawText_FixedSize | eDrawText_800x600, text, args);
 	va_end(args);
 }
 
@@ -292,20 +283,16 @@ void CAIDebugRenderer::Draw3dLabelEx(Vec3 vPos, float fFontSize, const ColorB& c
 	va_list args;
 	va_start(args, text);
 
-	// Copy-pasted from IRenderer.h to use "va_list args"
-	SDrawTextInfo ti;
-	ti.xscale = ti.yscale = fFontSize;
-	ti.flags = (bFramed ? eDrawText_Framed : 0) | (bDepthTest ? eDrawText_DepthTest : 0) | (bFixedSize ? eDrawText_FixedSize : 0) | (bCenter ? eDrawText_Center : 0) | eDrawText_800x600;
-	ti.color[0] = color.r / 255.0f;
-	ti.color[1] = color.g / 255.0f;
-	ti.color[2] = color.b / 255.0f;
-	ti.color[3] = color.a / 255.0f;
-	if (m_pRenderer)
-	{
-		m_pRenderer->DrawTextQueued(vPos, ti, text, args);
-	}
+	int flags = (bFramed ? eDrawText_Framed : 0) | (bDepthTest ? eDrawText_DepthTest : 0) | (bFixedSize ? eDrawText_FixedSize : 0) | (bCenter ? eDrawText_Center : 0) | eDrawText_800x600;
+
+	IRenderAuxText::DrawText(vPos, fFontSize, color, flags, text, args);
 
 	va_end(args);
+}
+
+void CAIDebugRenderer::DrawLabel(Vec3 pos, SDrawTextInfo& ti, const char* text)
+{
+	IRenderAuxText::DrawText(pos, ti, text);
 }
 
 void CAIDebugRenderer::Draw2dImage(float fX, float fY, float fWidth, float fHeight, int nTextureID, float fS0, float fT0, float fS1, float fT1, float fAngle, float fR, float fG, float fB, float fA, float fZ)
@@ -682,10 +669,7 @@ void CAIDebugRenderer::TextToScreen(float fX, float fY, const char* format, ...)
 	cry_vsprintf(buffer, format, args);
 	va_end(args);
 
-	if (m_pRenderer)
-	{
-		m_pRenderer->TextToScreen(fX, fY, "%s", buffer);
-	}
+	IRenderAuxText::TextToScreen(fX, fY, buffer);
 }
 
 void CAIDebugRenderer::TextToScreenColor(int nX, int nY, float fRed, float fGreen, float fBlue, float fAlpha, const char* format, ...)
@@ -697,10 +681,7 @@ void CAIDebugRenderer::TextToScreenColor(int nX, int nY, float fRed, float fGree
 	cry_vsprintf(buffer, format, args);
 	va_end(args);
 
-	if (m_pRenderer)
-	{
-		m_pRenderer->TextToScreenColor(nX, nY, fRed, fGreen, fBlue, fAlpha, "%s", buffer);
-	}
+	IRenderAuxText::TextToScreenColor(nX, nY, fRed, fGreen, fBlue, fAlpha, buffer);
 }
 
 void CAIDebugRenderer::Init2DMode()

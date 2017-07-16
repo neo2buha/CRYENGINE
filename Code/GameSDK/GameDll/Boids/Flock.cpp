@@ -17,6 +17,7 @@
 
 #include <CryEntitySystem/IEntitySystem.h>
 #include "BoidsProxy.h"
+#include "GameCache.h"
 
 #include <float.h>
 #include <limits.h>
@@ -25,7 +26,7 @@
 #include <CryAnimation/ICryAnimation.h>
 #include <CryMath/Cry_Camera.h>
 #include <CryString/CryPath.h>
-#include "GameCache.h"
+#include <IPerceptionManager.h>
 
 #define  PHYS_FOREIGN_ID_BOID PHYS_FOREIGN_ID_USER-1
 
@@ -99,6 +100,8 @@ CFlock::CFlock( IEntity *pEntity,EFlockType flockType )
 
 	m_bEntityCreated = false;
 	m_bAnyKilled = false;
+
+	m_bAIEventListenerRegistered = false;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -177,9 +180,7 @@ void CFlock::DeleteEntities( bool bForceDeleteAll )
 {
 	if (m_pEntity)
 	{
-		IEntityRenderProxy *pRenderProxy = (IEntityRenderProxy*)m_pEntity->GetProxy(ENTITY_PROXY_RENDER);
-		if (pRenderProxy)
-			pRenderProxy->ClearSlots();
+		m_pEntity->ClearSlots();
 	}
 
 	I3DEngine *engine = gEnv->p3DEngine;
@@ -272,11 +273,7 @@ void CFlock::SetPercentEnabled( int percent )
 //////////////////////////////////////////////////////////////////////////
 void CFlock::UpdateBoidsViewDistRatio()
 {
-	IEntityRenderProxy *pRenderProxy = (IEntityRenderProxy*)m_pEntity->GetProxy(ENTITY_PROXY_RENDER);
-	if (pRenderProxy)
-	{
-		m_nViewDistRatio = pRenderProxy->GetRenderNode()->GetViewDistRatio();
-	}
+	m_nViewDistRatio = m_pEntity->GetRenderNodeParams().viewDistRatio;
 
 	for (Boids::iterator it = m_boids.begin(); it != m_boids.end(); ++it)
 	{
@@ -284,11 +281,7 @@ void CFlock::UpdateBoidsViewDistRatio()
 		IEntity *pBoidEntity = gEnv->pEntitySystem->GetEntity(boid->m_entity);
 		if (pBoidEntity)
 		{
-			pRenderProxy = (IEntityRenderProxy*)pBoidEntity->GetProxy(ENTITY_PROXY_RENDER);
-			if (pRenderProxy)
-			{
-				pRenderProxy->GetRenderNode()->SetViewDistRatio(m_nViewDistRatio);
-			}
+			m_pEntity->SetViewDistRatio(m_nViewDistRatio);
 		}
 	}
 }
@@ -368,10 +361,8 @@ void CFlock::Update( CCamera *pCamera )
 	//////////////////////////////////////////////////////////////////////////
 
 	//////////////////////////////////////////////////////////////////////////
-	IEntityRenderProxy *pRenderProxy = (IEntityRenderProxy*)m_pEntity->GetProxy(ENTITY_PROXY_RENDER);
-	if (pRenderProxy)
 	{
-		if (pRenderProxy->GetRenderNode()->GetViewDistRatio() != m_nViewDistRatio)
+		if (m_pEntity->GetRenderNodeParams().viewDistRatio != m_nViewDistRatio)
 			UpdateBoidsViewDistRatio();
 	}
 	//////////////////////////////////////////////////////////////////////////
@@ -507,19 +498,29 @@ void CFlock::SetPos( const Vec3& pos )
 //////////////////////////////////////////////////////////////////////////
 void CFlock::RegisterAIEventListener( bool bEnable )
 {
-	if (!gEnv->pAISystem || gEnv->bMultiplayer)
+	if (gEnv->bMultiplayer)
+		return;
+
+	IPerceptionManager* pPerceptionManager = IPerceptionManager::GetInstance();
+	
+	if (!pPerceptionManager)
 		return;
 
 	if (bEnable)
 	{
-		m_bAIEventListenerRegistered = true;
-		gEnv->pAISystem->RegisterAIEventListener(this,m_bc.flockPos,m_bc.maxVisibleDistance,(1<<AISTIM_EXPLOSION)|(1<<AISTIM_SOUND)|(1<<AISTIM_BULLET_HIT));
+		//Re-register with possibly changed parameters
+		SAIStimulusEventListenerParams params;
+		params.pos = m_bc.flockPos;
+		params.radius = m_bc.maxVisibleDistance;
+		params.flags = (1 << AISTIM_EXPLOSION) | (1 << AISTIM_SOUND) | (1 << AISTIM_BULLET_HIT);
+		pPerceptionManager->RegisterAIStimulusEventListener(functor(*this, &CFlock::OnStimulusReceived), params);
 	}
 	else if (m_bAIEventListenerRegistered)
 	{
-		m_bAIEventListenerRegistered = false;
-		gEnv->pAISystem->UnregisterAIEventListener(this);
+		pPerceptionManager->UnregisterAIStimulusEventListener(functor(*this, &CFlock::OnStimulusReceived));
 	}
+
+	m_bAIEventListenerRegistered = bEnable;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -659,8 +660,7 @@ bool CFlock::CreateEntities()
 		boid->m_noentity = false;
 		boid->m_entity = pBoidEntity->GetId();
 
-		CBoidObjectProxyPtr pBoidObjectProxy = ComponentCreateAndRegister_DeleteWithRelease<CBoidObjectProxy>( IComponent::SComponentInitializer(pBoidEntity), true );
-		pBoidEntity->SetProxy(ENTITY_PROXY_BOID_OBJECT,pBoidObjectProxy);
+		auto pBoidObjectProxy = pBoidEntity->GetOrCreateComponent<CBoidObjectProxy>();
 		pBoidObjectProxy->SetBoid(boid);
 
 		// check if character.
@@ -713,14 +713,14 @@ bool CFlock::CreateEntities()
 
 		boid->Physicalize(m_bc);
 
-		IEntityRenderProxy *pRenderProxy = (IEntityRenderProxy*)pBoidEntity->GetProxy(ENTITY_PROXY_RENDER);
-		if (pRenderProxy != NULL && m_bc.fBoidRadius > 0)
+		IEntityRender *pIEntityRender = pBoidEntity->GetRenderInterface();
+		if (pIEntityRender != NULL && m_bc.fBoidRadius > 0)
 		{
 			float r = m_bc.fBoidRadius;
 			AABB box;
 			box.min = Vec3(-r,-r,-r);
 			box.max = Vec3(r,r,r);
-			pRenderProxy->SetLocalBounds( box,true );
+			pIEntityRender->SetLocalBounds( box,true );
 		}
 		IScriptTable *pScriptTable = pBoidEntity->GetScriptTable();
 		if (pScriptTable)
@@ -744,14 +744,14 @@ void CFlock::Reset()
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CFlock::OnAIEvent(EAIStimulusType type, const Vec3& pos, float radius, float threat, EntityId sender)
+void CFlock::OnStimulusReceived(const SAIStimulusParams& params)
 {
-	if (m_bc.scareThreatLevel*1.2f < threat)
+	if (m_bc.scareThreatLevel*1.2f < params.threat)
 	{
-		m_bc.scareThreatLevel = threat;
-		m_bc.scarePoint = pos;
+		m_bc.scareThreatLevel = params.threat;
+		m_bc.scarePoint = params.position;
 		m_bc.scareRatio = 1.0f;
-		m_bc.scareRadius = radius;
+		m_bc.scareRadius = params.radius;
 	}
 }
 

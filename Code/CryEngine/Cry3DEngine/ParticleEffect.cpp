@@ -25,7 +25,7 @@
 
 DEFINE_INTRUSIVE_LINKED_LIST(CParticleEffect)
 
-static const int nSERIALIZE_VERSION = 27;
+static const int nSERIALIZE_VERSION = 28;
 static const int nMIN_SERIALIZE_VERSION = 19;
 
 // Write a struct to an XML node.
@@ -53,7 +53,7 @@ void ToXML(IXmlNode& xml, T& val, const T& def_val, FToString flags)
 			continue;
 
 		string str = pVar->ToString(&val, flags, &def_val);
-		if (flags.SkipDefault && str.length() == 0)
+		if (flags.SkipDefault() && str.length() == 0)
 			continue;
 
 		xml.setAttr(name, str);
@@ -310,7 +310,7 @@ Vec3 GetExtremeEmitVec(Vec3 const& vRefDir, SEmitParams const& emit)
 
 		float fCos = clamp_tpl(fEmitCos, emit.fCosMin, emit.fCosMax);
 		Vec3 vEmitMax = emit.vAxis * fCos + vEmitPerpX * sqrt_fast_tpl((1.f - fCos * fCos) / (fPerpLenSq + FLT_MIN));
-		vEmitMax *= if_pos_else(vEmitMax * vRefDir, emit.fSpeedMin, emit.fSpeedMax);
+		vEmitMax *= if_else(vEmitMax * vRefDir >= 0.0f, emit.fSpeedMin, emit.fSpeedMax);
 		return vEmitMax;
 	}
 }
@@ -569,8 +569,10 @@ void ResourceParticleParams::ComputeShaderData()
 	//	y = back lighting
 	const float y = fDiffuseBacklighting;
 	const float energyNorm = (y < 0.5) ? (1 - y) : (1.0f / (4.0f * y));
+	const float kiloScale = 1000.0f;
+	const float toLightUnitScale = kiloScale / RENDERER_LIGHT_UNIT_SCALE;
 	ShaderData.m_diffuseLighting = fDiffuseLighting * energyNorm;
-	ShaderData.m_emissiveLighting = fEmissiveLighting;
+	ShaderData.m_emissiveLighting = fEmissiveLighting * toLightUnitScale;
 	ShaderData.m_backLighting = fDiffuseBacklighting;
 
 	ShaderData.m_softnessMultiplier = bSoftParticle.fSoftness;
@@ -678,7 +680,7 @@ void ResourceParticleParams::ComputeEnvironmentFlags()
 	                      + (TextureTiling.nAnimFramesCount <= 1) * OS_ANIM_BLEND
 	                      + (bDrawNear || bDrawOnTop) * FOB_SOFT_PARTICLE
 	                      + bDrawNear * FOB_ALLOW_TESSELLATION
-	                      + !fDiffuseLighting * (OS_ENVIRONMENT_CUBEMAP | FOB_GLOBAL_ILLUMINATION | FOB_INSHADOW)
+	                      + !fDiffuseLighting * (OS_ENVIRONMENT_CUBEMAP | FOB_INSHADOW)
 	                      + HasVariableVertexCount() * (FOB_MOTION_BLUR | FOB_OCTAGONAL | FOB_POINT_SPRITE)
 	                      );
 
@@ -735,7 +737,7 @@ int ResourceParticleParams::LoadResources(const char* pEffectName)
 		return 0;
 	}
 
-	if (ResourcesLoaded() || gEnv->IsDedicated())
+	if (ResourcesLoaded() || !gEnv->pRenderer)
 	{
 		ComputeShaderData();
 		ComputeEnvironmentFlags();
@@ -761,7 +763,7 @@ int ResourceParticleParams::LoadResources(const char* pEffectName)
 		else if (!sTexture.empty() && sGeometry.empty())
 		{
 			const uint32 textureLoadFlags = FT_DONT_STREAM;
-			const int nTexId = GetRenderer()->EF_LoadTexture(sTexture.c_str(), textureLoadFlags)->GetTextureID();
+			const int nTexId = GetRenderer()->EF_LoadTexture(sTexture.c_str(), textureLoadFlags)->GetTextureID();			
 			if (nTexId <= 0)
 				CryWarning(VALIDATOR_MODULE_3DENGINE, VALIDATOR_WARNING, "Particle effect texture %s not found", sTexture.c_str());
 			else
@@ -780,6 +782,8 @@ int ResourceParticleParams::LoadResources(const char* pEffectName)
 			pMaterial->SetGetMaterialParamVec3("diffuse", white, false);
 			pMaterial->SetGetMaterialParamFloat("opacity", defaultOpacity, false);
 			pMaterial->RequestTexturesLoading(0.0f);
+			if (nTexId > 0)
+				GetRenderer()->RemoveTexture(nTexId);
 		}
 		else if (sGeometry.empty())
 		{
@@ -1061,9 +1065,9 @@ void CompatibilityParticleParams::Correct(CParticleEffect* pEffect)
 		if (bSecondGeneration)
 		{
 			eSpawnIndirection =
-			  bSpawnOnParentCollision ? ESpawn::ParentCollide
-			  : bSpawnOnParentDeath ? ESpawn::ParentDeath
-			  : ESpawn::ParentStart;
+				bSpawnOnParentCollision ? ESpawn::ParentCollide
+				: bSpawnOnParentDeath ? ESpawn::ParentDeath
+				: ESpawn::ParentStart;
 		}
 
 		if (fPosRandomOffset != 0.f)
@@ -1093,16 +1097,16 @@ void CompatibilityParticleParams::Correct(CParticleEffect* pEffect)
 				if (fSpeed)
 				{
 					Warning("Particle Effect '%s' (version %d, %s): Speed corrected by parent scale %g from %g to %g",
-					        pEffect->GetFullName().c_str(), nVersion, sSandboxVersion.c_str(), fParentSize,
-					        +fSpeed, +fSpeed * fParentSize);
+						pEffect->GetFullName().c_str(), nVersion, sSandboxVersion.c_str(), fParentSize,
+						+fSpeed, +fSpeed * fParentSize);
 					fSpeed.Set(fSpeed.GetMaxValue() * fParentSize);
 				}
 				if (!vPositionOffset.IsZero())
 				{
 					Warning("Particle Effect '%s' (version %d, %s): PositionOffset corrected by parent scale %g from (%g,%g,%g) to (%g,%g,%g)",
-					        pEffect->GetFullName().c_str(), nVersion, sSandboxVersion.c_str(), fParentSize,
-					        +vPositionOffset.x, +vPositionOffset.y, +vPositionOffset.z,
-					        +vPositionOffset.x * fParentSize, +vPositionOffset.y * fParentSize, +vPositionOffset.z * fParentSize);
+						pEffect->GetFullName().c_str(), nVersion, sSandboxVersion.c_str(), fParentSize,
+						+vPositionOffset.x, +vPositionOffset.y, +vPositionOffset.z,
+						+vPositionOffset.x * fParentSize, +vPositionOffset.y * fParentSize, +vPositionOffset.z * fParentSize);
 					vPositionOffset.x = vPositionOffset.x * fParentSize;
 					vPositionOffset.y = vPositionOffset.y * fParentSize;
 					vPositionOffset.z = vPositionOffset.z * fParentSize;
@@ -1110,9 +1114,9 @@ void CompatibilityParticleParams::Correct(CParticleEffect* pEffect)
 				if (!vRandomOffset.IsZero())
 				{
 					Warning("Particle Effect '%s' (version %d, %s): RandomOffset corrected by parent scale %g from (%g,%g,%g) to (%g,%g,%g)",
-					        pEffect->GetFullName().c_str(), nVersion, sSandboxVersion.c_str(), fParentSize,
-					        +vRandomOffset.x, +vRandomOffset.y, +vRandomOffset.z,
-					        +vRandomOffset.x * fParentSize, +vRandomOffset.y * fParentSize, +vRandomOffset.z * fParentSize);
+						pEffect->GetFullName().c_str(), nVersion, sSandboxVersion.c_str(), fParentSize,
+						+vRandomOffset.x, +vRandomOffset.y, +vRandomOffset.z,
+						+vRandomOffset.x * fParentSize, +vRandomOffset.y * fParentSize, +vRandomOffset.z * fParentSize);
 					vRandomOffset.x = vRandomOffset.x * fParentSize;
 					vRandomOffset.y = vRandomOffset.y * fParentSize;
 					vRandomOffset.z = vRandomOffset.z * fParentSize;
@@ -1169,6 +1173,9 @@ void CompatibilityParticleParams::Correct(CParticleEffect* pEffect)
 			const float energyDenorm = (y < 0.5f) ? 1.0f / (1 - y) : 4.0f * y;
 			fDiffuseLighting = fDiffuseLighting * energyDenorm;
 		}
+
+	case 27:
+		fEmissiveLighting = fEmissiveLighting * 10.0f;
 	}
 	;
 
@@ -1243,6 +1250,8 @@ bool CParticleEffect::IsTemporary() const
 CParticleEffect::~CParticleEffect()
 {
 	UnloadResources();
+	for (auto& child : m_children)
+		child.m_parent = nullptr;
 	delete m_pParticleParams;
 }
 
@@ -1789,7 +1798,9 @@ IParticleAttributes& CParticleEffect::GetAttributes()
 {
 	static class CNullParticleAttributes : public IParticleAttributes
 	{
-		virtual void         UpdateScriptTable(const SmartScriptTable& scriptTable)  {}
+		virtual void         Reset(const IParticleAttributes* pCopySource = nullptr) {}
+		virtual void         Serialize(Serialization::IArchive& ar)                  {}
+		virtual void         TransferInto(IParticleAttributes* pReceiver) const      {}
 		virtual TAttributeId FindAttributeIdByName(cstr name) const                  { return -1; }
 		virtual uint         GetNumAttributes() const                                { return 0; }
 		virtual cstr         GetAttributeName(uint idx) const                        { return nullptr; }
@@ -1848,7 +1859,7 @@ float CParticleEffect::Get(FMaxEffectLife const& opts) const
 	if (IsActive())
 	{
 		const ResourceParticleParams& params = GetParams();
-		if (opts.fEmitterMaxLife > 0.f)
+		if (opts.fEmitterMaxLife() > 0.f)
 		{
 			fLife = params.fPulsePeriod ? fHUGE : params.GetMaxEmitterLife();
 			if (const CParticleEffect* pParent = GetIndirectParent())
@@ -1856,22 +1867,22 @@ float CParticleEffect::Get(FMaxEffectLife const& opts) const
 				float fParentLife = pParent->GetParams().GetMaxParticleLife();
 				fLife = min(fLife, fParentLife);
 			}
-			fLife = min(fLife, +opts.fEmitterMaxLife);
+			fLife = min(fLife, opts.fEmitterMaxLife());
 
-			if (opts.bParticleLife)
+			if (opts.bParticleLife())
 				fLife += params.fParticleLifeTime.GetMaxValue();
 		}
-		else if (opts.bParticleLife)
+		else if (opts.bParticleLife())
 			fLife += params.GetMaxParticleLife();
 	}
 
-	if (opts.bAllChildren || opts.bIndirectChildren)
+	if (opts.bAllChildren() || opts.bIndirectChildren())
 	{
 		for (auto& child : m_children)
 		{
 			if (child.GetIndirectParent())
 				fLife = max(fLife, child.Get(opts().fEmitterMaxLife(fLife).bAllChildren(1)));
-			else if (opts.bAllChildren)
+			else if (opts.bAllChildren())
 				fLife = max(fLife, child.Get(opts));
 		}
 	}

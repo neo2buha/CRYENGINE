@@ -7,7 +7,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 11:8:2004   11:40 : Created by Márcio Martins
+   - 11:8:2004   11:40 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -23,6 +23,7 @@
 #include "ActionGame.h"
 #include <CryNetwork/INetworkService.h>
 #include <CryNetwork/INetwork.h>
+#include "CryActionCVars.h"
 
 #define LOCAL_ACTOR_VARIABLE     "g_localActor"
 #define LOCAL_CHANNELID_VARIABLE "g_localChannelId"
@@ -207,9 +208,10 @@ void CGameClientChannel::OnDisconnect(EDisconnectionCause cause, const char* des
 	//CryLogAlways("CGameClientChannel::OnDisconnect(%d, %s)", cause, description?description:"");
 	CCryAction::GetCryAction()->OnActionEvent(SActionEvent(eAE_disconnected, int(cause), description));
 
-	IGameRules* pGameRules = CCryAction::GetCryAction()->GetIGameRulesSystem()->GetCurrentGameRules();
-	if (pGameRules)
-		pGameRules->OnDisconnect(cause, description);
+	for (INetworkedClientListener* pListener : CCryAction::GetCryAction()->GetNetworkClientListeners())
+	{
+		pListener->OnLocalClientDisconnected(cause, description);
+	}
 
 	if (IInput* pInput = gEnv->pInput)
 	{
@@ -226,6 +228,7 @@ void CGameClientChannel::DefineProtocol(IProtocolBuilder* pBuilder)
 		cca->GetIGameObjectSystem()->DefineProtocol(false, pBuilder);
 	if (cca->GetGameContext())
 		cca->GetGameContext()->DefineContextProtocols(pBuilder, false);
+	cca->DefineProtocolRMI(pBuilder);
 }
 
 // message implementation
@@ -253,7 +256,10 @@ NET_IMPLEMENT_SIMPLE_ATSYNC_MESSAGE(CGameClientChannel, SetGameType, eNRT_Reliab
 	string rulesClass;
 	string levelName = param.levelName;
 	if (!GetGameContext()->ClassNameFromId(rulesClass, param.rulesClass))
-		return false;
+	{
+		CryWarning(VALIDATOR_MODULE_GAME, VALIDATOR_WARNING, "No GameRules");
+	}
+
 	bool ok = true;
 	if (!GetGameContext()->SetImmersive(param.immersive))
 		return false;
@@ -270,7 +276,7 @@ NET_IMPLEMENT_SIMPLE_ATSYNC_MESSAGE(CGameClientChannel, SetGameType, eNRT_Reliab
 		GetGameContext()->SetLevelName(levelName.c_str());
 		GetGameContext()->SetGameRules(rulesClass.c_str());
 		//
-		IActor* pDemoPlayPlayer = gEnv->pGame->GetIGameFramework()->GetIActorSystem()->GetOriginalDemoSpectator();
+		IActor* pDemoPlayPlayer = gEnv->pGameFramework->GetIActorSystem()->GetOriginalDemoSpectator();
 		// clear all entities slot - because render data will be released in LoadLevel and these releases are not clears entities slots data (FogVolume for example)
 		CScopedRemoveObjectUnlock unlockRemovals(CCryAction::GetCryAction()->GetGameContext());
 		IEntityItPtr i = gEnv->pEntitySystem->GetEntityIterator();
@@ -299,7 +305,6 @@ NET_IMPLEMENT_SIMPLE_ATSYNC_MESSAGE(CGameClientChannel, SetGameType, eNRT_Reliab
 		}
 		if (pDemoPlayPlayer)
 		{
-			gEnv->pGame->PlayerIdSet(pDemoPlayPlayer->GetEntityId());
 			CCryAction::GetCryAction()->OnActionEvent(eAE_inGame);
 		}
 	}
@@ -350,38 +355,40 @@ NET_IMPLEMENT_IMMEDIATE_MESSAGE(CGameClientChannel, DefaultSpawn, eNRT_Unreliabl
 	esp.sName = param.name.c_str();
 	esp.vPosition = param.pos;
 	esp.vScale = param.scale;
+
 	if (IEntity* pEntity = pEntitySystem->SpawnEntity(esp, false))
 	{
 		const EntityId entityId = pEntity->GetId();
 
 		CCryAction::GetCryAction()->GetIGameObjectSystem()->SetSpawnSerializerForEntity(entityId, &ser);
-		if (param.bClientActor)
+
+		if (!param.baseComponent.IsNull())
 		{
-			gEnv->pGame->PlayerIdSet(entityId);
+			if (pEntity->QueryComponentByInterfaceID(param.baseComponent) == nullptr)
+			{
+				pEntity->CreateComponentByInterfaceID(param.baseComponent, nullptr);
+			}
 		}
+
 		if (!pEntitySystem->InitEntity(pEntity, esp))
 		{
 			CCryAction::GetCryAction()->GetIGameObjectSystem()->ClearSpawnSerializerForEntity(entityId);
 			return false;
 		}
 
-		CGameObject* pGameObject = (CGameObject*)CCryAction::GetCryAction()->GetIGameObjectSystem()->CreateGameObjectForEntity(pEntity->GetId());
-		CRY_ASSERT(pGameObject);
 		if (param.bClientActor)
 		{
-			IActor* pActor = CCryAction::GetCryAction()->GetIActorSystem()->GetActor(entityId);
-			if (!pActor)
-			{
-				pEntitySystem->RemoveEntity(entityId);
-				CCryAction::GetCryAction()->GetIGameObjectSystem()->ClearSpawnSerializerForEntity(entityId);
-				pNetChannel->Disconnect(eDC_ContextCorruption, "Client actor spawned entity was not an actor");
-				return false;
-			}
 			SetPlayerId(entityId);
 		}
 		GetGameContext()->GetNetContext()->SpawnedObject(entityId);
 		CCryAction::GetCryAction()->GetIGameObjectSystem()->ClearSpawnSerializerForEntity(entityId);
-		pGameObject->PostRemoteSpawn();
+
+		CGameObject* pGameObject = (CGameObject*)pEntity->GetProxy(ENTITY_PROXY_USER);
+		if (pGameObject)
+		{
+			pGameObject->PostRemoteSpawn();
+		}
+
 		return true;
 	}
 
@@ -423,8 +430,6 @@ void CGameClientChannel::SetPlayerId(EntityId id)
 {
 	CGameChannel::SetPlayerId(id);
 
-	CCryAction::GetCryAction()->GetGameContext()->PlayerIdSet(id);
-
 	IScriptSystem* pSS = gEnv->pScriptSystem;
 
 	if (id)
@@ -453,9 +458,6 @@ void CGameClientChannel::SetPlayerId(EntityId id)
 		gEnv->pScriptSystem->SetGlobalToNull(LOCAL_ACTOR_VARIABLE);
 		gEnv->pScriptSystem->SetGlobalToNull(LOCAL_CHANNELID_VARIABLE);
 	}
-
-	if (gEnv->pGame)
-		gEnv->pGame->PlayerIdSet(id);
 }
 
 void CGameClientChannel::CallOnSetPlayerId()
@@ -465,21 +467,31 @@ void CGameClientChannel::CallOnSetPlayerId()
 		return;
 
 	IScriptTable* pScriptTable = pPlayer->GetScriptTable();
-	if (!pScriptTable)
-		return;
-
-	SmartScriptTable client;
-	if (pScriptTable->GetValue("Client", client))
+	if (pScriptTable)
 	{
-		if (pScriptTable->GetScriptSystem()->BeginCall(client, "OnSetPlayerId"))
+		SmartScriptTable client;
+		if (pScriptTable->GetValue("Client", client))
 		{
-			pScriptTable->GetScriptSystem()->PushFuncParam(pScriptTable);
-			pScriptTable->GetScriptSystem()->EndCall();
+			if (pScriptTable->GetScriptSystem()->BeginCall(client, "OnSetPlayerId"))
+			{
+				pScriptTable->GetScriptSystem()->PushFuncParam(pScriptTable);
+				pScriptTable->GetScriptSystem()->EndCall();
+			}
 		}
 	}
 
 	if (IActor* pActor = CCryAction::GetCryAction()->GetIActorSystem()->GetActor(GetPlayerId()))
 		pActor->InitLocalPlayer();
+
+	SEntityEvent becomeLocalPlayer(ENTITY_EVENT_NET_BECOME_LOCAL_PLAYER);
+	pPlayer->SendEvent(becomeLocalPlayer);
+
+#ifndef OLD_VOICE_SYSTEM_DEPRECATED
+	if (m_pVoiceController)
+		m_pVoiceController->PlayerIdSet(id);
+#endif
+
+	pPlayer->AddFlags(ENTITY_FLAG_LOCAL_PLAYER | ENTITY_FLAG_TRIGGER_AREAS);
 }
 
 bool CGameClientChannel::HookCreateActor(IEntity* pEntity, IGameObject* pGameObject, void* pUserData)

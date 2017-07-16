@@ -22,10 +22,6 @@
 	#define SUPPORT_MATERIAL_EDITING
 #endif
 
-#ifndef _RELEASE
-	#define SUPPORT_MATERIAL_SKETCH
-#endif
-
 class CMaterialLayer : public IMaterialLayer
 {
 public:
@@ -113,7 +109,6 @@ public:
 	void         ShutDown();
 
 	virtual void AddRef();
-	;
 	virtual void Release();
 
 	virtual int  GetNumRefs() { return m_nRefCount; };
@@ -155,6 +150,7 @@ public:
 	virtual const SShaderItem& GetShaderItem(int nSubMtlSlot) const;
 
 	virtual bool               IsStreamedIn(const int nMinPrecacheRoundIds[MAX_STREAM_PREDICTION_ZONES], IRenderMesh* pRenderMesh) const;
+	virtual bool               IsStreamedIn(const int nMinPrecacheRoundIds[MAX_STREAM_PREDICTION_ZONES]) const;
 	bool                       AreChunkTexturesStreamedIn(CRenderChunk* pChunk, const int nMinPrecacheRoundIds[MAX_STREAM_PREDICTION_ZONES]) const;
 	bool                       AreTexturesStreamedIn(const int nMinPrecacheRoundIds[MAX_STREAM_PREDICTION_ZONES]) const;
 
@@ -215,8 +211,6 @@ public:
 	uint32 GetModificationId() const { return m_nModificationId; }
 
 	//////////////////////////////////////////////////////////////////////////
-	void SetSketchMode(int mode);
-	void SetTexelDensityDebug(int mode);
 
 	// Check for specific rendering conditions (forward rendering/nearest cubemap requirement)
 	bool IsForwardRenderingRequired();
@@ -228,9 +222,12 @@ public:
 	virtual const char* GetLoadingCallstack();  // trace leaking materials by callstack
 
 	virtual void        RequestTexturesLoading(const float fMipFactor);
+	virtual void        ForceTexturesLoading(const float fMipFactor);
+	virtual void        ForceTexturesLoading(const int iScreenTexels);
 
 	virtual void        PrecacheMaterial(const float fEntDistance, struct IRenderMesh* pRenderMesh, bool bFullUpdate, bool bDrawNear = false);
 	void                PrecacheTextures(const float fMipFactor, const int nFlags, bool bFullUpdate);
+	void                PrecacheTextures(const int iScreenTexels, const int nFlags, bool bFullUpdate);
 	void                PrecacheChunkTextures(const float fInstanceDistance, const int nFlags, CRenderChunk* pRenderChunk, bool bFullUpdate);
 
 	virtual int         GetTextureMemoryUsage(ICrySizer* pSizer, int nSubMtlSlot = -1);
@@ -273,17 +270,21 @@ private:
 	//! @see EMatInfoFlags
 	int         m_Flags;
 
-	bool        m_bDeleted;
+	bool m_bDeleted;
+	bool m_bDeletePending;
 
 	SShaderItem m_shaderItem;
 
 	// Used to detect the cases when dependent permanent render objects have to be updated
 	uint32 m_nModificationId;
+<<<<<<< HEAD
 
 #ifdef SUPPORT_MATERIAL_SKETCH
 	_smart_ptr<IShader> m_pPreSketchShader;
 	int                 m_nPreSketchTechnique;
 #endif
+=======
+>>>>>>> upstream/stabilisation
 
 	//! Array of Sub materials.
 	typedef DynArray<_smart_ptr<CMatInfo>> SubMtls;

@@ -1,14 +1,5 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
-// -------------------------------------------------------------------------
-//  File name:   CryFactoryRegistryImpl.cpp
-//  Version:     v1.00
-//  Created:     02/25/2009 by CarstenW
-//  Description: Part of CryEngine's extension framework.
-// -------------------------------------------------------------------------
-//
-////////////////////////////////////////////////////////////////////////////
-
 #include "StdAfx.h"
 #include "CryFactoryRegistryImpl.h"
 #include "../System.h"
@@ -155,7 +146,7 @@ bool CCryFactoryRegistryImpl::GetInsertionPos(ICryFactory* pFactory, FactoriesBy
 	FactoryByCID searchByCID(pFactory);
 	FactoriesByCIDIt itForCID = std::lower_bound(m_byCID.begin(), m_byCID.end(), searchByCID);
 	if (itForCID != m_byCID.end() && !(searchByCID < *itForCID))
-		FatalError::Report((*itForCName).m_ptr, pFactory);
+		FatalError::Report((*itForCID).m_ptr, pFactory);
 
 	itPosForCName = itForCName;
 	itPosForCID = itForCID;

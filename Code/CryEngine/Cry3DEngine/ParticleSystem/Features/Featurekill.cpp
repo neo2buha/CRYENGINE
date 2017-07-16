@@ -6,8 +6,6 @@
 
 CRY_PFX2_DBG
 
-volatile bool gFeatureKill = false;
-
 namespace pfx2
 {
 
@@ -21,6 +19,12 @@ public:
 		pComponent->AddToUpdateList(EUL_Update, this);
 	}
 
+	virtual void Serialize(Serialization::IArchive& ar) override
+	{
+		CParticleFeature::Serialize(ar);
+		AddNoPropertiesLabel(ar);
+	}
+
 	virtual void Update(const SUpdateContext& context) override
 	{
 		CRY_PFX2_PROFILE_DETAIL;
@@ -30,6 +34,6 @@ public:
 private:
 };
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureKillOnParentDeath, "Kill", "OnParentDeath", defaultIcon, defaultColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureKillOnParentDeath, "Kill", "OnParentDeath", colorKill);
 
 }

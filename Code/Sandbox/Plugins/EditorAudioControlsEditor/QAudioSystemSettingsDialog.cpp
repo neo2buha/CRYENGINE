@@ -85,8 +85,14 @@ QAudioSystemSettingsDialog::QAudioSystemSettingsDialog(QWidget* pParent)
 					  IImplementationSettings* pSettings = pAudioSystem->GetSettings();
 					  if (pSettings)
 					  {
+
 					    pSettings->SetProjectPath(QtUtil::ToString(pLineEdit->text()));
+
+					    // clear all connections to the middleware since we are reloading everything
+					    CAudioControlsEditorPlugin::GetAssetsManager()->ClearAllConnections();
 					    pAudioSystem->Reload();
+					    CAudioControlsEditorPlugin::GetAssetsManager()->ReloadAllConnections();
+
 					  }
 					}
 					accept();

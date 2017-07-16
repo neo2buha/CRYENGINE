@@ -16,12 +16,19 @@
 #include <CryRenderer/IRenderer.h>
 #include <CryPhysics/IPhysics.h>
 #include <Cry3DEngine/I3DEngine.h>
-#include <CryEntitySystem/IEntityRenderState.h>
 #include <CryRenderer/IRenderAuxGeom.h>
 #include <CryEntitySystem/IEntitySystem.h>
 #include <CryExtension/ICryUnknown.h>
 
 #include "CryCharAnimationParams.h"
+
+typedef int32 TJointId;
+
+//! default return for invalid joint when searching through the skeleton
+enum : TJointId { INVALID_JOINT_ID = -1 };
+
+//! maximum number of LODs per one geometric model (CryGeometry)
+enum {g_nMaxGeomLodLevels = 6};
 
 //! Flags used by ICharacterInstance::SetFlags and GetFlags.
 enum ECharRenderFlags
@@ -43,6 +50,8 @@ enum ECharRenderFlags
 	CS_FLAG_BIAS_SKIN_SORT_DIST  = 1 << 11,
 
 	CS_FLAG_STREAM_HIGH_PRIORITY = 1 << 12,
+
+	CS_FLAG_RENDER_NODE_VISIBLE  = 1 << 13, //!< Set by 3DEngine when render node owning character is potentially visible and needs rendering
 };
 
 enum CHRLOADINGFLAGS
@@ -54,6 +63,7 @@ enum CHRLOADINGFLAGS
 	CA_SkipSkelRecreation       = BIT(4),
 	CA_DisableLogWarnings       = BIT(5),
 	CA_SkipBoneRemapping        = BIT(6),
+	CA_ImmediateMode            = BIT(7)
 };
 
 enum EReloadCAFResult
@@ -132,6 +142,11 @@ struct IAnimationSerializable :
 };
 
 DECLARE_SHARED_POINTERS(IAnimationSerializable);
+
+struct IAnimationEngineModule : public Cry::IDefaultModule
+{
+	CRYINTERFACE_DECLARE(IAnimationEngineModule, 0xEA8FAA6F4EC948FB, 0x935DB54C09823B86);
+};
 
 //! This class is the main access point for any character animation required for a program which uses CRYENGINE.
 struct ICharacterManager
@@ -289,6 +304,9 @@ struct ICharacterManager
 	virtual void                     PostInit() = 0;
 
 	virtual const IAttachmentMerger& GetIAttachmentMerger() const = 0;
+	
+	//! Extends the default skeleton of a character instance with skin attachments
+	virtual void ExtendDefaultSkeletonWithSkinAttachments(ICharacterInstance* pCharInstance, const char* szFilepathSKEL, const char** szSkinAttachments, const uint32 skinCount, const uint32 nLoadingFlags) = 0;
 	// </interfuscator:shuffle>
 
 #if BLENDSPACE_VISUALIZATION
@@ -342,6 +360,12 @@ struct SJointProperty
 	};
 };
 
+struct SBoneShadowCapsule
+{
+	int32 arrJoints[2];
+	float radius;
+};
+
 //////////////////////////////////////////////////////////////////////////
 typedef unsigned int LimbIKDefinitionHandle;
 
@@ -375,7 +399,7 @@ struct IDefaultSkeleton
 
 	// All render-meshes will be removed from the CDefaultSkeleton-class.
 	// The following functions will become deprecated.
-	virtual const phys_geometry* GetJointPhysGeom(uint32 jointIndex) const = 0;  //!< just for statistics of physics proxies.
+	virtual const phys_geometry* GetJointPhysGeom(uint32 jointIndex) const = 0;                 //!< just for statistics of physics proxies.
 	virtual int32                GetLimbDefinitionIdx(LimbIKDefinitionHandle handle) const = 0;
 	virtual void                 PrecacheMesh(bool bFullUpdate, int nRoundId, int nLod) = 0;
 	virtual IRenderMesh*         GetIRenderMesh() const = 0;
@@ -383,6 +407,10 @@ struct IDefaultSkeleton
 	virtual uint32               GetTextureMemoryUsage2(ICrySizer* pSizer = 0) const = 0;
 	virtual uint32               GetMeshMemoryUsage(ICrySizer* pSizer = 0) const = 0;
 	// END: Will become deprecated.
+
+	//! Retrieves list of shadow capsules for soft indirect shadows
+	virtual const DynArray<SBoneShadowCapsule>&  GetShadowCapsules() const = 0;
+
 	// </interfuscator:shuffle>
 };
 
@@ -494,7 +522,7 @@ struct ICharacterInstance : IMeshObj
 	}
 
 	//! Set rendering flags defined in ECharRenderFlags for this character instance
-	//! \param nFlags Tendering flags
+	//! \param nFlags Rendering flags
 	virtual void SetFlags(int nFlags) = 0;
 
 	//! Get the enabled rendering flags. The valid flags are the ones declared in ECharRenderFlags.
@@ -509,7 +537,7 @@ struct ICharacterInstance : IMeshObj
 	//! \return Pointer to a null terminated char string which contain the filename of the character.
 	virtual const char* GetFilePath() const = 0;
 
-	virtual void        ComputeGeometricMean(SMeshLodInfo& lodInfo) const = 0;
+	virtual SMeshLodInfo ComputeGeometricMean() const = 0;
 
 	virtual bool        HasVertexAnimation() const = 0;
 
@@ -570,8 +598,8 @@ struct ICharacterInstance : IMeshObj
 	// </interfuscator:shuffle>
 
 #ifdef EDITOR_PCDEBUGCODE
-	virtual uint32 GetResetMode() const = 0;    // Will be obsolete when CharEdit is removed.
-	virtual void   SetResetMode(uint32 rm) = 0; // Will be obsolete when CharEdit is removed.
+	virtual uint32 GetResetMode() const = 0;                                             // Will be obsolete when CharEdit is removed.
+	virtual void   SetResetMode(uint32 rm) = 0;                                          // Will be obsolete when CharEdit is removed.
 	virtual f32    GetAverageFrameTime() const = 0;
 	virtual void   SetCharEditMode(uint32 m) = 0;
 	virtual uint32 GetCharEditMode() const = 0;
@@ -585,14 +613,18 @@ struct ICharacterInstance : IMeshObj
 	void SpawnSkeletonEffect(int animID, const char* animName, const char* effectName, const char* boneName, const Vec3& offset, const Vec3& dir, const QuatTS& entityLoc);
 };
 
-#include <CryAnimation/IAnimationPoseModifier.h> // <> required for Interfuscator
+#include <CryAnimation/IAnimationPoseModifier.h>                                                    // <> required for Interfuscator
+
+#ifndef SKELETON_ANIMATION_LAYER_COUNT
+#define SKELETON_ANIMATION_LAYER_COUNT 32
+#endif
 
 struct ISkeletonAnim
 {
 	// <interfuscator:shuffle>
 	enum
 	{
-		LayerCount = 16
+		LayerCount = SKELETON_ANIMATION_LAYER_COUNT
 	};
 
 	virtual ~ISkeletonAnim() {}
@@ -675,8 +707,8 @@ struct ISkeletonAnim
 
 	virtual bool                           PushPoseModifier(uint32 layer, IAnimationPoseModifierPtr poseModifier, const char* name = NULL) = 0;
 
-	virtual IAnimationSerializablePtr      GetPoseModifierSetup() = 0;
-	virtual IAnimationSerializableConstPtr GetPoseModifierSetup() const = 0;
+	virtual IAnimationPoseModifierSetupPtr      GetPoseModifierSetup() = 0;
+	virtual IAnimationPoseModifierSetupConstPtr GetPoseModifierSetup() const = 0;
 
 	//! This function will move outside of this interface. Use at your own risk.
 	virtual QuatT CalculateRelativeMovement(const float deltaTime, const bool CurrNext = 0) const = 0;
@@ -879,8 +911,8 @@ struct IAnimationSet
 #ifdef EDITOR_PCDEBUGCODE
 	virtual void        GetSubAnimations(DynArray<int>& animIdsOut, int animId) const = 0;
 	virtual int         GetNumFacialAnimations() const = 0;
-	virtual const char* GetFacialAnimationPathByName(const char* szName) const = 0; //!< \return 0 if name not found.
-	virtual const char* GetFacialAnimationName(int index) const = 0;                //!< \return 0 on invalid index.
+	virtual const char* GetFacialAnimationPathByName(const char* szName) const = 0;                                                              //!< \return 0 if name not found.
+	virtual const char* GetFacialAnimationName(int index) const = 0;                                                                             //!< \return 0 on invalid index.
 	virtual int32       GetGlobalIDByName(const char* szAnimationName) const = 0;
 	virtual int32       GetGlobalIDByAnimID(int nAnimationId) const = 0;
 	virtual const char* GetAnimationStatus(int nAnimationId) const = 0;

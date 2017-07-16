@@ -156,6 +156,7 @@ public:
 	bool GetSvoStaticTextures(I3DEngine::SSvoStaticTexInfo& svoInfo, PodArray<I3DEngine::SLightTI>* pLightsTI_S, PodArray<I3DEngine::SLightTI>* pLightsTI_D);
 	void GetSvoBricksForUpdate(PodArray<I3DEngine::SSvoNodeInfo>& arrNodeInfo, float fNodeSize, PodArray<SVF_P3F_C4B_T2F>* pVertsOut);
 	bool Render();
+	void ProcessSvoRootTeleport();
 	void CheckUpdateMeshPools();
 	int  GetWorstPointInSubSet(const int nStart, const int eEnd);
 	void StartupStreamingTimeTest(bool bDone);
@@ -167,10 +168,11 @@ public:
 	void DetectMovement_StatLights();
 	void CollectLights();
 	void CollectAnalyticalOccluders();
-	void InitOccluderBoneNames();
+	void AddAnalyticalOccluder(IRenderNode* pRN, Vec3 camPos);
 
 	PodArray<I3DEngine::SLightTI>            m_lightsTI_S, m_lightsTI_D;
-	PodArray<I3DEngine::SAnalyticalOccluder> m_AnalyticalOccluders;
+	PodArray<I3DEngine::SAnalyticalOccluder> m_AnalyticalOccluders[2];
+	Vec4 m_vSvoOriginAndSize;
 	AABB m_aabbLightsTI_D;
 	ITexture*                                m_pGlobalSpecCM;
 	float m_fGlobalSpecCM_Mult;
@@ -221,9 +223,6 @@ public:
 	PodArrayRT<Vec4>   m_arrRTPoolTris;
 	PodArrayRT<ColorB> m_arrRTPoolInds;
 	#endif
-
-	static const int MAX_BONES = 13;
-	char             m_arrOccluderBoneNames[MAX_BONES][64];
 };
 
 	#pragma pack(pop)

@@ -5,12 +5,14 @@
 #include <CryString/StringUtils.h>
 #include <CryCore/Platform/platform.h>
 #include <CrySystem/ISystem.h>
-#include <CrySystem/ITestSystem.h>
+#include <CrySystem/CryUnitTest.h>
 #include <CryExtension/RegFactoryNode.h>
 #include <CryExtension/ICryFactoryRegistryImpl.h>
 #include <CryString/UnicodeFunctions.h>
 #include <CrySystem/CryUtils.h>
 #include <CryCore/Platform/CryWindows.h>
+
+#include <CryFlowGraph/IFlowBaseNode.h>
 
 //////////////////////////////////////////////////////////////////////////
 // Global environment variable.
@@ -22,12 +24,41 @@ SSystemGlobalEnvironment gEnv;
 extern SSystemGlobalEnvironment gEnv;
 	#endif
 #else
-struct SSystemGlobalEnvironment* gEnv = NULL;
+struct SSystemGlobalEnvironment* gEnv = nullptr;
 #endif
 
-#if defined(_LAUNCHER) && (defined(_RELEASE) || CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE || CRY_PLATFORM_ORBIS) || !defined(_LIB)
+#if (defined(_LAUNCHER) && defined(CRY_IS_MONOLITHIC_BUILD)) || !defined(_LIB)
 //The reg factory is used for registering the different modules along the whole project
-struct SRegFactoryNode* g_pHeadToRegFactories = 0;
+struct SRegFactoryNode* g_pHeadToRegFactories = nullptr;
+std::vector<const char*> g_moduleCommands;
+std::vector<const char*> g_moduleCVars;
+
+extern "C" DLL_EXPORT void CleanupModuleCVars()
+{
+	if (auto pConsole = gEnv->pConsole)
+	{
+		// Unregister all commands that were registered from within the plugin/module
+		for (auto& it : g_moduleCommands)
+		{
+			pConsole->RemoveCommand(it);
+		}
+		g_moduleCommands.clear();
+
+		// Unregister all CVars that were registered from within the plugin/module
+		for (auto& it : g_moduleCVars)
+		{
+			pConsole->UnregisterVariable(it);
+		}
+		g_moduleCVars.clear();
+	}
+}
+#endif
+
+#if !defined(CRY_IS_MONOLITHIC_BUILD)  || defined(_LAUNCHER)
+extern "C" DLL_EXPORT SRegFactoryNode* GetHeadToRegFactories()
+{
+	return g_pHeadToRegFactories;
+}
 #endif
 
 #if !defined(_LIB) || defined(_LAUNCHER)
@@ -45,11 +76,6 @@ struct SRegFactoryNode* g_pHeadToRegFactories = 0;
 		#include "WinBase.inl"
 	#endif
 	#undef CRY_PLATFORM_IMPL_H_FILE
-
-// Define UnitTest static variables
-CryUnitTest::Test* CryUnitTest::Test::m_pFirst = 0;
-CryUnitTest::Test* CryUnitTest::Test::m_pLast = 0;
-
 	#if CRY_PLATFORM_WINDOWS
 void CryPureCallHandler()
 {
@@ -112,28 +138,14 @@ extern "C" DLL_EXPORT void ModuleInitISystem(ISystem* pSystem, const char* modul
 	// Register All unit tests of this module.
 	if (pSystem)
 	{
-		CryUnitTest::Test* pTest = CryUnitTest::Test::m_pFirst;
-		for (; pTest != 0; pTest = pTest->m_pNext)
-		{
-			CryUnitTest::IUnitTestManager* pTestManager = pSystem->GetITestSystem()->GetIUnitTestManager();
-			if (pTestManager)
-			{
-				pTest->m_unitTestInfo.module = moduleName;
-				pTestManager->CreateTest(pTest->m_unitTestInfo);
-			}
-		}
+		if (CryUnitTest::IUnitTestManager* pTestManager = pSystem->GetITestSystem()->GetIUnitTestManager())
+			pTestManager->CreateTests(moduleName);
 	}
 	#endif //CRY_UNIT_TESTING
 }
 
 int g_iTraceAllocations = 0;
 
-//////////////////////////////////////////////////////////////////////////
-// global random number generator used by cry_random functions
-namespace CryRandom_Internal
-{
-CRndGen g_random_generator;
-}
 //////////////////////////////////////////////////////////////////////////
 
 // If we use cry memory manager this should be also included in every module.
@@ -207,23 +219,23 @@ void CryDebugBreak()
 	#if CRY_PLATFORM_WINAPI
 
 //////////////////////////////////////////////////////////////////////////
-int CryMessageBox(const char* lpText, const char* lpCaption, unsigned int uType)
+EQuestionResult CryMessageBox(const char* lpText, const char* lpCaption, EMessageBox uType)
 {
-		#if CRY_PLATFORM_WINDOWS
-			#if !defined(RESOURCE_COMPILER)
+#if CRY_PLATFORM_WINDOWS
+	#if !defined(RESOURCE_COMPILER)
 	ICVar* const pCVar = gEnv->pConsole ? gEnv->pConsole->GetCVar("sys_no_crash_dialog") : NULL;
 	if ((pCVar && pCVar->GetIVal() != 0) || gEnv->bNoAssertDialog)
 	{
-		return 0;
+		return eQR_None;
 	}
-			#endif
-	wstring wideText, wideCaption;
-	Unicode::Convert(wideText, lpText);
-	Unicode::Convert(wideCaption, lpCaption);
-	return MessageBoxW(NULL, wideText.c_str(), wideCaption.c_str(), uType);
-		#else
-	return 0;
-		#endif
+	#endif
+
+	if (gEnv && gEnv->pSystem)
+	{
+		return gEnv->pSystem->ShowMessage(lpText, lpCaption, uType);
+	}
+#endif
+	return eQR_None;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -288,7 +300,7 @@ void CrySetCurrentWorkingDirectory(const char* szWorkingDirectory)
 void CryGetExecutableFolder(unsigned int pathSize, char* szPath)
 {
 	WCHAR filePath[512];
-	size_t nLen = GetModuleFileNameW(GetModuleHandle(NULL), filePath, CRY_ARRAY_COUNT(filePath));
+	size_t nLen = GetModuleFileNameW(CryGetCurrentModule(), filePath, CRY_ARRAY_COUNT(filePath));
 
 	if (nLen >= CRY_ARRAY_COUNT(filePath))
 	{
@@ -403,7 +415,18 @@ bool CrySetFileAttributes(const char* lpFileName, uint32 dwFileAttributes)
 
 	#endif // CRY_PLATFORM_WINAPI
 
-	#if CRY_PLATFORM_WINAPI || CRY_PLATFORM_LINUX
+//////////////////////////////////////////////////////////////////////////
+void CryFindRootFolderAndSetAsCurrentWorkingDirectory()
+{
+	char szEngineRootDir[_MAX_PATH] = "";
+	CryFindEngineRootFolder(CRY_ARRAY_COUNT(szEngineRootDir), szEngineRootDir);
+
+#if CRY_PLATFORM_WINAPI || CRY_PLATFORM_LINUX
+	CrySetCurrentWorkingDirectory(szEngineRootDir);
+#endif
+}
+
+#if CRY_PLATFORM_WINAPI || CRY_PLATFORM_LINUX
 //////////////////////////////////////////////////////////////////////////
 void CryFindEngineRootFolder(unsigned int engineRootPathSize, char* szEngineRootPath)
 {
@@ -412,7 +435,7 @@ void CryFindEngineRootFolder(unsigned int engineRootPathSize, char* szEngineRoot
 		#elif CRY_PLATFORM_POSIX
 	char osSeperator = '/';
 		#endif
-	char szExecFilePath[_MAX_PATH];
+	char szExecFilePath[_MAX_PATH] = "";
 	CryGetExecutableFolder(CRY_ARRAY_COUNT(szExecFilePath), szExecFilePath);
 
 	string strTempPath(szExecFilePath);
@@ -443,9 +466,9 @@ void CryFindEngineRootFolder(unsigned int engineRootPathSize, char* szEngineRoot
 		nCurDirSlashPos = strTempPath.rfind(osSeperator, nCurDirSlashPos - 1);
 
 	}
-	while (nCurDirSlashPos > 0);
+	while (nCurDirSlashPos != 0 && nCurDirSlashPos != string::npos);
 
-	if (nCurDirSlashPos == 0)
+	if (nCurDirSlashPos == 0 || nCurDirSlashPos == string::npos)
 	{
 		CryFatalError("Unable to locate CryEngine root folder. Ensure that the 'engine' folder exists in your CryEngine root directory");
 		return;
@@ -458,17 +481,29 @@ void CryFindEngineRootFolder(unsigned int engineRootPathSize, char* szEngineRoot
 	}
 }
 
-//////////////////////////////////////////////////////////////////////////
-void CryFindRootFolderAndSetAsCurrentWorkingDirectory()
+#elif CRY_PLATFORM_ORBIS
+void CryFindEngineRootFolder(unsigned int engineRootPathSize, char* szEngineRootPath)
 {
-	char szEngineRootDir[_MAX_PATH];
-	CryFindEngineRootFolder(CRY_ARRAY_COUNT(szEngineRootDir), szEngineRootDir);
-	CrySetCurrentWorkingDirectory(szEngineRootDir);
+	cry_strcpy(szEngineRootPath, engineRootPathSize, ".");
 }
 
-	#endif // CRY_PLATFORM_WINAPI || CRY_PLATFORM_POSIX && !CRY_PLATFORM_ORBIS
+void CryGetExecutableFolder(unsigned int nBufferLength, char* lpBuffer)
+{
+	CryFindEngineRootFolder(nBufferLength, lpBuffer);
+}
 
-	#if CRY_PLATFORM_DURANGO
+#elif CRY_PLATFORM_ANDROID
+
+void CryFindEngineRootFolder(unsigned int engineRootPathSize, char* szEngineRootPath)
+{
+	// Hack! Android currently does not support a directory layout, there is an explicit search in main for GameSDK/GameData.pak
+	// and the executable folder is not related to the engine or game folder. - 18/03/2016
+	cry_strcpy(szEngineRootPath, engineRootPathSize, CryGetProjectStoragePath());
+}
+
+#endif 
+
+#if CRY_PLATFORM_DURANGO
 HMODULE DurangoLoadLibrary(const char* libName)
 {
 	HMODULE h = ::LoadLibraryExA(libName, 0, 0);
@@ -493,6 +528,17 @@ int64 CryGetTicks()
 #else
 	#define THR_INLINE
 #endif
+
+//////////////////////////////////////////////////////////////////////////
+// Support for automatic FlowNode types registration
+//////////////////////////////////////////////////////////////////////////
+#if !defined(_LIB) || defined(_LAUNCHER)
+CAutoRegFlowNodeBase* CAutoRegFlowNodeBase::s_pFirst = nullptr;
+CAutoRegFlowNodeBase* CAutoRegFlowNodeBase::s_pLast = nullptr;
+bool                  CAutoRegFlowNodeBase::s_bNodesRegistered = false;
+#endif
+
+//////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////
 //inline void CryDebugStr( const char *format,... )

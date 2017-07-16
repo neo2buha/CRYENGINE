@@ -65,9 +65,6 @@ void CGameplayRecorder::Update(float frameTime)
 //------------------------------------------------------------------------
 void CGameplayRecorder::Release()
 {
-
-	SAFE_RELEASE(m_pGameStateRecorder);
-
 	delete this;
 }
 
@@ -130,7 +127,7 @@ void CGameplayRecorder::CExampleMetadataListener::RecordGameData()
 	while (!it->IsEnd())
 	{
 		IEntity* pEntity = it->Next();
-		if (!pEntity->IsActive())
+		if (!pEntity->IsActivatedForUpdates())
 			continue;
 
 		if (IActor* pActor = pActorSystem->GetActor(pEntity->GetId()))
@@ -260,7 +257,10 @@ IGameStateRecorder* CGameplayRecorder::EnableGameStateRecorder(bool bEnable, IGa
 {
 
 	if (!m_pGameStateRecorder)
-		m_pGameStateRecorder = gEnv->pGame->CreateGameStateRecorder(pL);//pTestManager);
+	{
+		if (auto* pGame = gEnv->pGameFramework->GetIGame())
+			m_pGameStateRecorder = pGame->CreateGameStateRecorder(pL);//pTestManager);
+	}
 
 	if (m_pGameStateRecorder)
 	{

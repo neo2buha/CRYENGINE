@@ -109,7 +109,7 @@ public:
 			const char* name = pNode->GetName();
 			const char* ename = pNode->GetEntityClassName();
 			Matrix34A matrix;
-			pNode->GetEntityStatObj(0, 0, &matrix);
+			pNode->GetEntityStatObj(0, &matrix);
 			hash = CalculateHash(name, 0);
 			hash = CalculateHash(ename, hash);
 			hash = CalculateHash(alias_cast<int*>(&matrix), sizeof(Matrix34A) / sizeof(int), hash);
@@ -164,7 +164,7 @@ private:
 
 	void FillDrawDistance(IEntity* pEnt)
 	{
-		if (IEntityRenderProxy* pRP = (IEntityRenderProxy*)pEnt->GetProxy(ENTITY_PROXY_RENDER))
+		if (IEntityRender* pRP = pEnt->GetRenderInterface())
 			if (IRenderNode* pRN = pRP->GetRenderNode())
 				m_drawDistance = pRN->GetMaxViewDist();
 	}

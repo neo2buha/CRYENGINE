@@ -11,17 +11,13 @@ struct SRenderNodeTempData
 		int                             lastSeenFrame[MAX_RECURSION_LEVELS]; // must be first, see IRenderNode::SetDrawFrame()
 		int                             lastSeenShadowFrame;                 // When was last rendered to shadow
 		CRenderObject*                  arrPermanentRenderObjects[MAX_STATOBJ_LODS_NUM];
-		SLodDistDissolveTransitionState lodDistDissolveTransitionState;
+		float														arrLodLastTimeUsed[MAX_STATOBJ_LODS_NUM];
 		Matrix34                        objMat;
 		OcclusionTestClient             m_OcclState;
 		struct IFoliage*                m_pFoliage;
 		struct IClipVolume*             m_pClipVolume;
-		SVegetationBending              m_Bending;
+
 		Vec4                            vEnvironmentProbeMults;
-		Vec3                            vCurrentWind;
-		uint32                          nBendingLastFrame           : 29;
-		uint32                          windUpdateCounter           : 3;
-		uint32                          bBendingSet                 : 1;
 		uint32                          nCubeMapId                  : 16;
 		uint32                          nCubeMapIdCacheClearCounter : 16;
 		uint32                          nWantedLod                  : 8;
@@ -40,12 +36,20 @@ public:
 	~SRenderNodeTempData() { Free(); };
 
 	void Free();
+	void FreeRenderObjects();
+	void InvalidateRenderObjectsInstanceData();
 
 	void OffsetPosition(const Vec3& delta)
 	{
 		userData.objMat.SetTranslation(userData.objMat.GetTranslation() + delta);
 	}
 	bool IsValid() const { return !userData.bToDelete; }
+
+	void MarkForDelete()
+	{
+		userData.bToDelete = true;
+		userData.pOwnerNode = 0;
+	}
 };
 
 // Class responsible for managing potentially visible render nodes.
@@ -71,19 +75,22 @@ public:
 	// Return if last frame changed and rendering should be done this frame for this pass.
 	bool SetLastSeenFrame(SRenderNodeTempData* pTempData, const SRenderingPassInfo& passInfo);
 
-	void MarkForDelete(SRenderNodeTempData* pTempData);
-
 	// Iteratively update array of visible nodes checking if they are expired
 	void       UpdateVisibleNodes(int currentFrame, int maxNodesToCheck = MAX_NODES_CHECK_PER_FRAME);
 	void       InvalidateAll();
-
+	void       OnEntityDeleted(IEntity *pEntity);
 	Statistics GetStatistics() const;
 
 	void       ClearAll();
 
 private:
+	void OnRenderNodeVisibilityChange( IRenderNode *pRenderNode,bool bVisible );
+
+private:
 	std::vector<SRenderNodeTempData*> m_visibleNodes;
 	int                               m_lastStartUpdateNode;
+
+	int                               m_firstAddedNode;
 
 	int                               m_currentNodesToDelete;
 	std::vector<SRenderNodeTempData*> m_toDeleteNodes[MAX_DELETE_BUFFERS];

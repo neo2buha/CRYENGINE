@@ -8,7 +8,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 8:9:2004   10:20 : Created by Márcio Martins
+   - 8:9:2004   10:20 : Created by MÃ¡rcio Martins
    - 15:9:2010  12:30 : Revised by Dean Claassen
 
 *************************************************************************/
@@ -361,6 +361,9 @@ struct IActionMapManager
 	virtual bool                          AddExtraActionListener(IActionListener* pExtraActionListener, const char* actionMap = NULL) = 0;
 	virtual bool                          RemoveExtraActionListener(IActionListener* pExtraActionListener, const char* actionMap = NULL) = 0;
 	virtual const TActionListeners&       GetExtraActionListeners() const = 0;
+
+	virtual bool                          AddFlowgraphNodeActionListener(IActionListener* pFlowgraphActionListener, const char* actionMap = NULL) = 0;
+	virtual bool                          RemoveFlowgraphNodeActionListener(IActionListener* pFlowgraphActionListener, const char* actionMap = NULL) = 0;
 
 	virtual void                          AddAlwaysActionListener(TBlockingActionListener pActionListener) = 0;
 	virtual void                          RemoveAlwaysActionListener(TBlockingActionListener pActionListener) = 0;

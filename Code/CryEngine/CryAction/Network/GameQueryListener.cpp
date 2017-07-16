@@ -8,18 +8,17 @@
    is keeping a list of all available servers.
    -------------------------------------------------------------------------
    History:
-   - 19/06/2006   : Implemented by Jan Müller
+   - 19/06/2006   : Implemented by Jan MÃ¼ller
 *************************************************************************/
 
 #include "StdAfx.h"
 #include "GameQueryListener.h"
 #include "CryAction.h"
 
-CGameQueryListener::CGameQueryListener() :
-	m_pNetListener(NULL)
-	//m_bSortingNeeded(false)
+CGameQueryListener::CGameQueryListener()
+	: m_pNetListener(nullptr)
+	, m_iServers(50)
 {
-	m_iServers = 50;
 	for (int iServer = 0; iServer < m_iServers; iServer++)
 	{
 		m_astrServers[iServer] = new char[256];
@@ -37,12 +36,6 @@ CGameQueryListener::~CGameQueryListener()
 void CGameQueryListener::Update()
 {
 	CleanUpServers();
-
-	/*if(m_bSortingNeeded)
-	   {
-	   std::sort(m_servers.begin(), m_servers.end());
-	   m_bSortingNeeded = false;
-	   }*/
 }
 
 void CGameQueryListener::AddServer(const char* description, const char* target, const char* additionalText, uint32 ping)
@@ -55,8 +48,6 @@ void CGameQueryListener::AddServer(const char* description, const char* target, 
 		if ((*sIT).Compare(server))
 		{
 			(*sIT).Inc(server);
-			/*if(m_servers.size() > 1)
-			   m_bSortingNeeded = true;*/
 			return;
 		}
 	}
@@ -67,7 +58,6 @@ void CGameQueryListener::AddServer(const char* description, const char* target, 
 	//ping the servers when they are added ...
 	ILanQueryListener* pLQL = static_cast<ILanQueryListener*>(m_pNetListener);
 	pLQL->SendPingTo(server.m_target.c_str());
-	//m_bSortingNeeded = true;
 }
 
 void CGameQueryListener::RemoveServer(string address)
@@ -273,7 +263,7 @@ void CGameQueryListener::ConnectToServer(const char* server)
 	params.pContextParams = NULL;
 	params.port = pConsole->GetCVar("cl_serverport")->GetIVal();
 
-	CCryAction* action = (CCryAction*) (gEnv->pGame->GetIGameFramework());
+	CCryAction* action = (CCryAction*) (gEnv->pGameFramework);
 	if (action)
 	{
 		gEnv->pConsole->ExecuteString("net_lanbrowser 0");

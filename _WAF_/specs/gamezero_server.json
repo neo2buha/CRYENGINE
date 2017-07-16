@@ -8,9 +8,8 @@
 	"force_individual_build_directory"      : "True",
 
 	"game_projects"                         : "GameZero",
-	
-	"module_extensions"                     : ["scaleform"],
-	"win_module_extensions"                 : ["brofiler"],
+
+	"win_module_extensions"                 : ["brofiler", "mono"],
 	
 	"modules" :
 	[
@@ -22,7 +21,6 @@
 		"CryEntitySystem",
 		"CryFont",
 		"CryInput",
-		"CryLobby",
 		"CryMovie",
 		"CryNetwork",
 		"CryParticleSystem",
@@ -32,7 +30,13 @@
 		"CryAudioCommon",
 		"CrySystem",
 		"CryAction",
+		"CryFlowGraph",
+		"CrySchematycCore",
+		"CrySchematycSTDEnv",
+		"CrySensorSystem",
 		"HWScripts",
+		
+		"CryDefaultEntities",
 
 		"zlib",
 		"expat",
@@ -43,15 +47,15 @@
 		"lua",
 		"freetype",
 		"bigdigits",
-		"yasli",
 		"tomcrypt",
+		"curl",
 
 		"CryGameZero"
 	],
 
 	"defines"                               : ["DEDICATED_SERVER"],
 
-	"win_modules"                           : [ "DedicatedLauncher", "CryRenderNULL" ],
+	"win_modules"                           : [ "DedicatedLauncher", "CryRenderNULL", "CryMonoBridge", "CryUserAnalytics" ],
 	"win_debug_modules"                     : ["CryLiveCreate", "GameStream"],
 	"win_profile_modules"                   : ["CryLiveCreate", "GameStream"],
 	"win_performance_defines"               : "PURE_CLIENT(deprecated, those defines will be moved to another place and dont have any effect right now)",

@@ -17,10 +17,12 @@
 #include "Flock.h"
 #include <CryNetwork/ISerialize.h>
 
+CRYREGISTER_CLASS(CBoidsProxy)
+CRYREGISTER_CLASS(CBoidObjectProxy)
+
 //////////////////////////////////////////////////////////////////////////
 CBoidsProxy::CBoidsProxy()
-	: m_pEntity(NULL)
-	, m_pFlock(NULL)
+	: m_pFlock(NULL)
 	, m_playersInCount(0)
 {
 }
@@ -33,24 +35,18 @@ CBoidsProxy::~CBoidsProxy()
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CBoidsProxy::Initialize( const SComponentInitializer& init )
+void CBoidsProxy::Initialize()
 {
-	m_pEntity = init.m_pEntity;
-
-	// Make sure render and trigger proxy also exist.
-	m_pEntity->CreateProxy( ENTITY_PROXY_RENDER );
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CBoidsProxy::Reload( IEntity *pEntity,SEntitySpawnParams &params )
+void CBoidsProxy::Reload(IEntity *pEntity, SEntitySpawnParams &params)
 {
 	m_pEntity = pEntity;
 
 	if (m_pFlock)
 		m_pFlock->SetPos(pEntity->GetWorldPos());
-	
-	// Make sure render and trigger proxy also exist.
-	pEntity->CreateProxy( ENTITY_PROXY_RENDER );
+
 	m_playersInCount = 0;
 }
 
@@ -61,70 +57,70 @@ void CBoidsProxy::Release()
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CBoidsProxy::Update( SEntityUpdateContext &ctx )
-{
-	if (m_pFlock)
-		m_pFlock->Update( ctx.pCamera );
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CBoidsProxy::ProcessEvent( SEntityEvent &event )
+void CBoidsProxy::ProcessEvent(SEntityEvent &event)
 {
 	switch (event.event) {
 	case ENTITY_EVENT_XFORM:
 		if (m_pFlock)
-			m_pFlock->SetPos( m_pEntity->GetWorldPos() );
+			m_pFlock->SetPos(m_pEntity->GetWorldPos());
 		break;
 	case ENTITY_EVENT_PRE_SERIALIZE:
 		if (m_pFlock)
 			m_pFlock->DeleteEntities(true);
 		break;
 	case ENTITY_EVENT_ENTERAREA:
-		OnTrigger(true,event);
+		OnTrigger(true, event);
 		break;
 	case ENTITY_EVENT_LEAVEAREA:
-		OnTrigger(false,event);
+		OnTrigger(false, event);
 		break;
 	case ENTITY_EVENT_RESET:
 		if (m_pFlock)
 			m_pFlock->Reset();
 		break;
+	case ENTITY_EVENT_UPDATE:
+		if (m_pFlock)
+			m_pFlock->Update(&gEnv->pSystem->GetViewCamera());
+		break;
 	}
 }
 
-//////////////////////////////////////////////////////////////////////////
-bool CBoidsProxy::GetSignature( TSerialize signature )
+uint64 CBoidsProxy::GetEventMask() const
 {
-	signature.BeginGroup("BoidsProxy");
-	if (m_pFlock)
+	uint64 eventMask = BIT64(ENTITY_EVENT_XFORM) |
+		BIT64(ENTITY_EVENT_PRE_SERIALIZE) |
+		BIT64(ENTITY_EVENT_ENTERAREA) |
+		BIT64(ENTITY_EVENT_LEAVEAREA) |
+		BIT64(ENTITY_EVENT_RESET);
+
+	if (m_playersInCount > 0)
 	{
-		uint32 type = (uint32)m_pFlock->GetType();
-		signature.Value("type", type);
+		eventMask |= BIT64(ENTITY_EVENT_UPDATE);
 	}
-	signature.EndGroup();
-	return true;
+
+	return eventMask;
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CBoidsProxy::Serialize( TSerialize ser )
+void CBoidsProxy::GameSerialize(TSerialize ser)
 {
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CBoidsProxy::SetFlock( CFlock *pFlock )
+void CBoidsProxy::SetFlock(CFlock *pFlock)
 {
 	m_pFlock = pFlock;
 
 	if (!pFlock)
 		return;
-	
+
 	// Update trigger based on new visibility distance settings.
 	float fMaxDist = pFlock->GetMaxVisibilityDistance();
 
 	/*
 	CTriggerProxy *pTrigger = (CTriggerProxy*)m_pEntity->CreateProxy( ENTITY_PROXY_TRIGGER );
 	if (!pTrigger)
-		return;
+	return;
 
 	AABB bbox;
 	bbox.min = -Vec3(fMaxDist,fMaxDist,fMaxDist);
@@ -132,21 +128,21 @@ void CBoidsProxy::SetFlock( CFlock *pFlock )
 	pTrigger->SetTriggerBounds( bbox );
 	*/
 
-	IEntityAreaProxyPtr pArea = crycomponent_cast<IEntityAreaProxyPtr>(m_pEntity->CreateProxy( ENTITY_PROXY_AREA ));
+	IEntityAreaComponent* pArea = crycomponent_cast<IEntityAreaComponent*>(m_pEntity->CreateProxy(ENTITY_PROXY_AREA));
 	if (!pArea)
 		return;
 
-	pArea->SetFlags( pArea->GetFlags() & IEntityAreaProxy::FLAG_NOT_SERIALIZE );
-	pArea->SetSphere( Vec3(0,0,0),fMaxDist );
-	if(gEnv->pEntitySystem->EntitiesUseGUIDs())
-		pArea->AddEntity( m_pEntity->GetGuid() );
+	pArea->SetFlags(pArea->GetFlags() & IEntityAreaComponent::FLAG_NOT_SERIALIZE);
+	pArea->SetSphere(Vec3(0, 0, 0), fMaxDist);
+	if (gEnv->pEntitySystem->EntitiesUseGUIDs())
+		pArea->AddEntity(m_pEntity->GetGuid());
 	else
-		pArea->AddEntity( m_pEntity->GetId() ); // add itself.
+		pArea->AddEntity(m_pEntity->GetId()); // add itself.
 
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CBoidsProxy::OnTrigger( bool bEnter,SEntityEvent &event )
+void CBoidsProxy::OnTrigger(bool bEnter, SEntityEvent &event)
 {
 	EntityId whoId = (EntityId)event.nParam[0];
 	IEntity *pEntity = gEnv->pEntitySystem->GetEntity(whoId);
@@ -160,10 +156,12 @@ void CBoidsProxy::OnTrigger( bool bEnter,SEntityEvent &event )
 			else
 				m_playersInCount--;
 
+			// Make sure GetEventMask is called to check whether we want updates
+			m_pEntity->UpdateComponentEventMask(this);
+
 			if (m_playersInCount == 1)
 			{
 				// Activates entity when player is nearby.
-				m_pEntity->Activate(true);
 				if (m_pFlock)
 					m_pFlock->SetEnabled(true);
 			}
@@ -171,7 +169,6 @@ void CBoidsProxy::OnTrigger( bool bEnter,SEntityEvent &event )
 			{
 				// Activates entity when player is nearby.
 				m_playersInCount = 0;
-				m_pEntity->Activate(false);
 				if (m_pFlock)
 					m_pFlock->SetEnabled(false);
 			}
@@ -187,38 +184,26 @@ CBoidObjectProxy::CBoidObjectProxy()
 }
 
 //////////////////////////////////////////////////////////////////////////
-CBoidObjectProxy::~CBoidObjectProxy()
+void CBoidObjectProxy::Initialize()
 {
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CBoidObjectProxy::Initialize( const SComponentInitializer& init )
-{
-	m_pEntity = init.m_pEntity;
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CBoidObjectProxy::ProcessEvent( SEntityEvent &event )
+void CBoidObjectProxy::ProcessEvent(SEntityEvent &event)
 {
 	if (m_pBoid)
-		m_pBoid->OnEntityEvent( event );
+		m_pBoid->OnEntityEvent(event);
 }
 
-///////////////////////////////////////////////////////////78//////////////
-bool CBoidObjectProxy::GetSignature( TSerialize signature )
+uint64 CBoidObjectProxy::GetEventMask() const
 {
-	signature.BeginGroup("BoidObjectProxy");
-	if (m_pBoid && m_pBoid->m_flock)
-	{
-		uint32 type = (uint32)m_pBoid->m_flock->GetType();
-		signature.Value("type", type);
-	}
-	signature.EndGroup();
-	return true;
+	return
+		BIT64(ENTITY_EVENT_DONE) |
+		BIT64(ENTITY_EVENT_COLLISION);
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CBoidObjectProxy::Serialize( TSerialize ser )
+void CBoidObjectProxy::GameSerialize(TSerialize ser)
 {
 
 }

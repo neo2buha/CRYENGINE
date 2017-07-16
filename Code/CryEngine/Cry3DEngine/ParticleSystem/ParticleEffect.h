@@ -13,8 +13,6 @@
 #pragma once
 
 #include "ParticleCommon.h"
-#include <CryParticleSystem/ParticleParams.h>
-#include "ParticleEnviron.h"
 #include "ParticleComponent.h"
 #include "ParticleAttributes.h"
 
@@ -59,7 +57,7 @@ public:
 	virtual bool                  IsTemporary() const override                                       { return false; }
 	virtual void                  SetParticleParams(const ParticleParams& params) override           {}
 	virtual const ParticleParams& GetParticleParams() const override                                 { return GetDefaultParams(); }
-	virtual const ParticleParams& GetDefaultParams() const override                                  { static ParticleParams paramsStandard; return paramsStandard; }
+	virtual const ParticleParams& GetDefaultParams() const override;
 	virtual int                   GetChildCount() const override                                     { return 0; }
 	virtual IParticleEffect*      GetChild(int index) const override                                 { return 0; }
 	virtual void                  ClearChilds() override                                             {}
@@ -78,16 +76,21 @@ public:
 	CParticleComponent*       GetCComponent(TComponentId componentIdx)       { return m_components[componentIdx]; }
 	const CParticleComponent* GetCComponent(TComponentId componentIdx) const { return m_components[componentIdx]; }
 	TComponentId              FindComponentIdByName(const char* name) const;
-	const CAttributeTable& GetAttributeTable() const                      { return m_attributes; }
-	string                 MakeUniqueName(TComponentId forComponentId, const char* name);
+	TAttributeTablePtr        GetAttributeTable() const                      { return m_pAttributes; }
+	string                    MakeUniqueName(TComponentId forComponentId, const char* name);
+	uint                      AddRenderObjectId();
+	uint                      GetNumRenderObjectIds() const;
+	float                     GetEquilibriumTime() const;
+	int                       GetEditVersion() const;
 
-	int                    GetEditVersion() const { return m_editVersion; }
+	int m_id;
 
 private:
-	CAttributeTable    m_attributes;
+	TAttributeTablePtr m_pAttributes;
 	CAttributeInstance m_attributeInstance;
 	TComponents        m_components;
 	string             m_name;
+	uint               m_numRenderObjects;
 	int                m_editVersion;
 	bool               m_dirty;
 };

@@ -25,10 +25,18 @@ public:
 		if (!index)
 			return 0;
 		int bucket = (index - 1) >> BUCKET_SIZE_SHIFT;
+<<<<<<< HEAD
 		// FIXME Oct 20, 2009: <pvl> we need to be able to return 0 here (meaning
 		// the node was likely unloaded) => get rid of the GetDummyNode() hack
 		if (!m_buckets[bucket])
 			return GetDummyNode();
+=======
+		if (!m_buckets[bucket])
+		{
+			CRY_ASSERT_MESSAGE(0, "CGraphNodeManager::GetNode: figure out why the caller is requesting a node that doesn't exist (maybe he deleted it and now tries to access it?)");
+			return 0;
+		}
+>>>>>>> upstream/stabilisation
 		return reinterpret_cast<GraphNode*>(m_buckets[bucket]->nodes +
 		                                    (((index - 1) & (BUCKET_SIZE - 1)) * m_buckets[bucket]->GetNodeSize()));
 	}
@@ -38,10 +46,18 @@ public:
 		if (!index)
 			return 0;
 		int bucket = (index - 1) >> BUCKET_SIZE_SHIFT;
+<<<<<<< HEAD
 		// FIXME Oct 20, 2009: <pvl> we need to be able to return 0 here (meaning
 		// the node was likely unloaded) => get rid of the GetDummyNode() hack
 		if (!m_buckets[bucket])
 			return GetDummyNode();
+=======
+		if (!m_buckets[bucket])
+		{
+			CRY_ASSERT_MESSAGE(0, "CGraphNodeManager::GetNode: figure out why the caller is requesting a node that doesn't exist (maybe he deleted it and now tries to access it?)");
+			return 0;
+		}
+>>>>>>> upstream/stabilisation
 		return reinterpret_cast<GraphNode*>(m_buckets[bucket]->nodes +
 		                                    (((index - 1) & (BUCKET_SIZE - 1)) * m_buckets[bucket]->GetNodeSize()));
 	}
@@ -67,6 +83,7 @@ private:
 		ILINE void   SetNodeSize(size_t sz) { nodeSizeS2 = static_cast<uint8>(sz >> 2); }
 	};
 
+<<<<<<< HEAD
 	// This function exists only to hide some fundamental problems in the path-finding system. Basically
 	// things aren't cleaned up properly as of writing (pre-alpha Crysis 5/5/2007). Therefore we return
 	// an object that looks like a graph node to stop client code from barfing.
@@ -77,6 +94,8 @@ private:
 		return pDummy;
 	}
 
+=======
+>>>>>>> upstream/stabilisation
 	int TypeSizeFromTypeIndex(unsigned typeIndex) const;
 
 	std::vector<BucketHeader*> m_buckets;

@@ -12,7 +12,7 @@ bool IVariableUsingBase::s_bDoDisplayCurrentValueInDebugOutput = false;
 
 void CVariable::Serialize(Serialization::IArchive& ar)
 {
-	ar(m_name, "name", "^!>150>");
+	ar(m_name, "name", "^>150>");
 	m_value.Serialize(ar);
 }
 
@@ -20,16 +20,14 @@ void CVariable::Serialize(Serialization::IArchive& ar)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-IVariableUsingBase::IVariableUsingBase() {}
-
 //--------------------------------------------------------------------------------------------------
 CVariableCollection* IVariableUsingBase::GetCurrentCollection(CResponseInstance* pResponseInstance)
 {
 	if (m_collectionName == CVariableCollection::s_localCollectionName)  //local variable collection
 	{
-		CResponseActor* pCurrentActor = pResponseInstance->GetCurrentActor();
+		CResponseActor* const pCurrentActor = pResponseInstance->GetCurrentActor();
 #if defined(DRS_COLLECT_DEBUG_DATA)
-		s_lastTestedObjectName = pCurrentActor->GetName().GetText();
+		s_lastTestedObjectName = pCurrentActor->GetName();
 #endif
 		return pCurrentActor->GetLocalVariables();
 	}
@@ -124,4 +122,31 @@ void IVariableUsingBase::_Serialize(Serialization::IArchive& ar, const char* szV
 		}
 	}
 #endif
+}
+
+CryDRS::CVariable* CryDRS::IVariableUsingBase::GetOrCreateCurrentVariable(CResponseInstance* pResponseInstance)
+{
+	CVariableCollection* pCollection = GetCurrentCollection(pResponseInstance);
+	if (!pCollection && !m_collectionName.IsValid())
+	{
+		pCollection = CResponseSystem::GetInstance()->GetVariableCollectionManager()->CreateVariableCollection(m_collectionName);
+	}
+	if (pCollection)
+	{
+		CVariable* pVariable = pCollection->CreateOrGetVariable(m_variableName);
+#if defined(DRS_COLLECT_DEBUG_DATA)
+		if (pVariable)
+		{
+			s_lastTestedValueAsString = pVariable->m_value.GetValueAsString();
+		}
+#endif
+		return pVariable;
+	}
+	return nullptr;
+}
+
+//--------------------------------------------------------------------------------------------------
+void CryDRS::CVariable::SetValueFromString(const string& valueAsString)
+{
+	CConditionParserHelper::GetResponseVariableValueFromString(valueAsString.c_str(), &m_value);
 }

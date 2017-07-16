@@ -102,7 +102,7 @@ namespace CHUDUtils
 	{
 		static Vec3 dummyVal(0,0,0);
 
-		IView *pView = gEnv->pGame->GetIGameFramework()->GetIViewSystem()->GetActiveView();
+		IView *pView = gEnv->pGameFramework->GetIViewSystem()->GetActiveView();
 		if(!pView)
 			return dummyVal;
 
@@ -113,7 +113,7 @@ namespace CHUDUtils
 
 	static Vec3 GetClientDir()
 	{
-		IView *pView = gEnv->pGame->GetIGameFramework()->GetIViewSystem()->GetActiveView();
+		IView *pView = gEnv->pGameFramework->GetIViewSystem()->GetActiveView();
 		if(!pView)
 			return FORWARD_DIRECTION;
 
@@ -274,6 +274,9 @@ namespace CHUDUtils
 	void* GetNearestTo(const Vec2& center, const float maxValidDistance);
 	void* GetNearestTo(const TCenterSortArray& array, const Vec2& center, const float maxValidDistance);
 
+	// Converts the silhouette parameters and activity state based on r,g,b,a values and enabled boolean respectively
+	uint32 ConverToSilhouetteParamValue(ColorF color, bool bEnable = true);
+	uint32 ConverToSilhouetteParamValue(float r, float g, float b, float a, bool bEnable = true);
 };
 
 

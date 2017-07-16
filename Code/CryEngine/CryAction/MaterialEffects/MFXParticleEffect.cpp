@@ -36,6 +36,9 @@ void CMFXParticleEffect::Execute(const SMFXRunTimeEffectParams& params)
 	case SMFXParticleParams::eDT_Ricochet:
 		dir = reverso.GetRotated(params.normal, gf_PI).normalize();
 		break;
+	case SMFXParticleParams::eDT_ProjectileDir:
+		dir = -inDir;
+		break;
 	default:
 		dir = params.normal;
 		break;
@@ -43,7 +46,7 @@ void CMFXParticleEffect::Execute(const SMFXRunTimeEffectParams& params)
 
 	bool tryToAttachEffect = (CMaterialEffectsCVars::Get().mfx_EnableAttachedEffects != 0);
 	float distToPlayer = 0.f;
-	IActor* pClientActor = gEnv->pGame->GetIGameFramework()->GetClientActor();
+	IActor* pClientActor = gEnv->pGameFramework->GetClientActor();
 	if (pClientActor)
 	{
 		distToPlayer = (pClientActor->GetEntity()->GetWorldPos() - params.pos).GetLength();
@@ -255,6 +258,10 @@ void CMFXParticleEffect::LoadParamsFromXml(const XmlNodeRef& paramsNode)
 		else if (!strcmp(val, "Ricochet"))
 		{
 			directionType = SMFXParticleParams::eDT_Ricochet;
+		}
+		else if (!strcmp(val, "ProjectileDir"))
+		{
+			directionType = SMFXParticleParams::eDT_ProjectileDir;
 		}
 	}
 	m_particleParams.directionType = directionType;

@@ -35,18 +35,14 @@ CVehicleSystem::TVehicleClassCount CVehicleSystem::s_classInstanceCounts;
 
 //------------------------------------------------------------------------
 CVehicleSystem::CVehicleSystem(ISystem* pSystem, IEntitySystem* pEntitySystem)
-	: m_pDamagesTemplateRegistry(NULL),
+	: m_nextObjectId (InvalidVehicleObjectId),
+	m_pDamagesTemplateRegistry(NULL),
 	m_pVehicleClient(NULL),
 	m_pInitializingSeat(NULL),
 	m_pCurrentClientVehicle(NULL)
 {
 	m_pDamagesTemplateRegistry = new CVehicleDamagesTemplateRegistry;
 	m_pCVars = new CVehicleCVars;
-
-	if (IEntityPoolManager* pPM = gEnv->pEntitySystem->GetIEntityPoolManager())
-	{
-		pPM->AddListener(this, "CVehicleSystem", BookmarkEntitySerialize);
-	}
 }
 
 // Iterators now have their destructors called before they enter the pool - so we only need to free the memory here {2008/12/09}
@@ -59,12 +55,6 @@ CVehicleSystem::~CVehicleSystem()
 
 	SAFE_RELEASE(m_pDamagesTemplateRegistry);
 	SAFE_DELETE(m_pCVars);
-
-	if (IEntityPoolManager* pPM = gEnv->pEntitySystem->GetIEntityPoolManager())
-	{
-		pPM->RemoveListener(this);
-	}
-
 }
 
 //------------------------------------------------------------------------
@@ -609,41 +599,11 @@ void CVehicleSystem::BroadcastVehicleUsageEvent(const EVehicleEvent eventId, con
 }
 
 //------------------------------------------------------------------------
-void CVehicleSystem::OnBookmarkEntitySerialize(TSerialize serialize, void* pVEntity)
-{
-	//If a bookmark is being serialized from, check if the entity is attached to vehicle AND FORCE call enter.
-	if (serialize.IsReading())
-	{
-		IEntity* pEntity = reinterpret_cast<IEntity*>(pVEntity);
-
-		if (!pEntity)
-			return;
-
-		IAIObject* aiObject = pEntity->GetAI();
-		IAIActorProxy* aiActorProxy = aiObject ? aiObject->GetProxy() : 0;
-
-		if (aiActorProxy)
-		{
-			EntityId vehicleId = aiActorProxy->GetLinkedVehicleEntityId();
-			IVehicle* pVehicle = gEnv->pGame->GetIGameFramework()->GetIVehicleSystem()->GetVehicle(vehicleId);
-			if (pVehicle)
-			{
-				EntityId passengerId = pEntity->GetId();
-				IVehicleSeat* pSeat = pVehicle->GetSeatForPassenger(passengerId);
-				if (pSeat)
-					pSeat->Enter(passengerId, false);
-			}
-		}
-	}
-}
-
-//------------------------------------------------------------------------
 void CVehicleSystem::Update(float deltaTime)
 {
 #if ENABLE_VEHICLE_DEBUG
 	if (VehicleCVars().v_debug_mem > 0)
 	{
-		IRenderer* pRenderer = gEnv->pRenderer;
 		float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 		ICrySizer* pSizer = gEnv->pSystem->CreateSizer();
 
@@ -654,7 +614,7 @@ void CVehicleSystem::Update(float deltaTime)
 				it->second->GetMemoryUsage(pSizer);
 		}
 
-		pRenderer->Draw2dLabel(15.0f, 10.0f, 2.0f, color, false, "Vehicle system takes %" PRISIZE_T " bytes for its c++ side.", pSizer->GetTotalSize());
+		IRenderAuxText::Draw2dLabel(15.0f, 10.0f, 2.0f, color, false, "Vehicle system takes %" PRISIZE_T " bytes for its c++ side.", pSizer->GetTotalSize());
 
 		pSizer->Release();
 	}

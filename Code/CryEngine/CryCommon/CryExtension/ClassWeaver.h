@@ -181,7 +181,7 @@ template<typename T>
 void* CheckCompositeMatch(const char* name, const std::shared_ptr<T>& composite, const char* compositeName)
 {
 	typedef TC::SuperSubClass<ICryUnknown, T> Rel;
-	COMPILE_TIME_ASSERT(Rel::exists);
+	static_assert(Rel::exists, "Unexpected enum value!");
 	return NameMatch(name, compositeName) ? const_cast<void*>(static_cast<const void*>(&composite)) : 0;
 }
 
@@ -224,9 +224,9 @@ void* CheckCompositeMatch(const char* name, const std::shared_ptr<T>& composite,
       (void)(name);                                  \
       void* res = 0; (void)(res);                    \
 
-#define CRYCOMPOSITE_ADD(member, membername)                          \
-  COMPILE_TIME_ASSERT((CRY_ARRAY_COUNT(membername)) > 1);             \
-  if ((res = CW::CheckCompositeMatch(name, member, membername)) != 0) \
+#define CRYCOMPOSITE_ADD(member, membername)                                   \
+  static_assert(CRY_ARRAY_COUNT(membername) > 1, "'membername' is too short"); \
+  if ((res = CW::CheckCompositeMatch(name, member, membername)) != 0)          \
     return res;
 
 #define _CRYCOMPOSITE_END(implclassname)                                  \
@@ -271,7 +271,8 @@ public:
 
 	virtual const CryClassID& GetClassID() const
 	{
-		return T::GetCID();
+		static constexpr CryClassID cid = T::GetCID();
+		return cid;
 	}
 
 	virtual bool ClassSupports(const CryInterfaceID& iid) const
@@ -289,15 +290,24 @@ public:
 		pIIDs = m_pIIDs;
 		numIIDs = m_numIIDs;
 	}
+
 public:
-	template<class Tp>
-	struct public_creator_for_T : public Tp {};
+	struct CustomDeleter
+	{
+		void operator()(T* p)
+		{
+			// Explicit call to the destructor
+			p->~T();
+			// Memory aligned free
+			CryModuleMemalignFree(p);
+		}
+	};
 
 	virtual ICryUnknownPtr CreateClassInstance() const
 	{
-		stl::aligned_alloc<public_creator_for_T<T>, std::alignment_of<public_creator_for_T<T>>::value> allocator;
-		std::shared_ptr<T> p = std::allocate_shared<public_creator_for_T<T>>(allocator);
-		return cryinterface_cast<ICryUnknown>(p);
+		void* pAlignedMemory = CryModuleMemalign(sizeof(T), std::alignment_of<T>::value);
+		
+		return cryinterface_cast<ICryUnknown>(std::shared_ptr<T>(new(pAlignedMemory) T(), CustomDeleter()));
 	}
 
 	CFactory()
@@ -377,35 +387,58 @@ public:
     {                                                                                                               \
       return cname;                                                                                                 \
     }                                                                                                               \
-    static const CryClassID& GetCID()                                                                               \
+                                                                                                                    \
+    static constexpr CryClassID GetCID()                                                                            \
     {                                                                                                               \
-      static const CryClassID cid = { (uint64) cidHigh ## LL, (uint64) cidLow ## LL };                              \
-      return cid;                                                                                                   \
+         return CryClassID::Construct( (uint64) cidHigh ## LL, (uint64) cidLow ## LL );                             \
     }                                                                                                               \
     static std::shared_ptr<implclassname> CreateClassInstance()                                                     \
     {                                                                                                               \
       ICryUnknownPtr p = s_factory.CreateClassInstance();                                                           \
       return std::shared_ptr<implclassname>(*static_cast<std::shared_ptr<implclassname>*>(static_cast<void*>(&p))); \
-    }                                                                                                               \
-                                                                                                                    \
-  protected:                                                                                                        \
-    implclassname();                                                                                                \
-    virtual ~implclassname();
+    }
 
-#define _BEFRIEND_OPS(implclassname) \
-  _BEFRIEND_CRYINTERFACE_CAST()      \
-  _BEFRIEND_CRYCOMPOSITE_QUERY()     \
-  _BEFRIEND_DELETER(implclassname)
+#define _ENFORCE_CRYFACTORY_USAGE_GUID(implclassname, cname, guid)                                                  \
+  public:                                                                                                           \
+    static const char* GetCName() { return cname; }                                                                 \
+    static constexpr CryClassID GetCID() { return guid; }                                                           \
+    static std::shared_ptr<implclassname> CreateClassInstance()                                                     \
+    {                                                                                                               \
+      ICryUnknownPtr p = s_factory.CreateClassInstance();                                                           \
+      return std::shared_ptr<implclassname>(*static_cast<std::shared_ptr<implclassname>*>(static_cast<void*>(&p))); \
+    }
+
+#define _BEFRIEND_OPS()           \
+  _BEFRIEND_CRYINTERFACE_CAST()   \
+  _BEFRIEND_CRYCOMPOSITE_QUERY()
 
 #define CRYGENERATE_CLASS(implclassname, cname, cidHigh, cidLow) \
+  friend struct CFactory<implclassname>::CustomDeleter;          \
   _CRYFACTORY_DECLARE(implclassname)                             \
-  _BEFRIEND_OPS(implclassname)                                   \
+  _BEFRIEND_OPS()                                                \
   _IMPLEMENT_ICRYUNKNOWN()                                       \
   _ENFORCE_CRYFACTORY_USAGE(implclassname, cname, cidHigh, cidLow)
 
+#define CRYGENERATE_CLASS_GUID(implclassname, cname, classGuid)       \
+  friend struct CFactory<implclassname>::CustomDeleter;          \
+  _CRYFACTORY_DECLARE(implclassname)                             \
+  _BEFRIEND_OPS()                                                \
+  _IMPLEMENT_ICRYUNKNOWN()                                       \
+  _ENFORCE_CRYFACTORY_USAGE_GUID(implclassname, cname, classGuid)
+
+
+#define CRYGENERATE_CLASS_FROM_INTERFACE(implclassname, interfaceName, cname, cidHigh, cidLow) \
+  CRYINTERFACE_SIMPLE(interfaceName)                                                           \
+  CRYGENERATE_CLASS(implclassname, cname, cidHigh, cidLow)
+
+#define CRYGENERATE_CLASS_FROM_INTERFACE_GUID(implclassname, interfaceName, cname, classGuid) \
+  CRYINTERFACE_SIMPLE(interfaceName)                                                           \
+  CRYGENERATE_CLASS_GUID(implclassname, cname, classGuid)
+
 #define CRYGENERATE_SINGLETONCLASS(implclassname, cname, cidHigh, cidLow) \
+  friend struct CFactory<implclassname>::CustomDeleter;                   \
   _CRYFACTORY_DECLARE_SINGLETON(implclassname)                            \
-  _BEFRIEND_OPS(implclassname)                                            \
+  _BEFRIEND_OPS()                                                         \
   _IMPLEMENT_ICRYUNKNOWN()                                                \
   _ENFORCE_CRYFACTORY_USAGE(implclassname, cname, cidHigh, cidLow)
 

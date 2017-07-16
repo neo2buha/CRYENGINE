@@ -7,23 +7,19 @@
 #include <CryCore/Platform/CryWindows.h>
 #include <ShellAPI.h> // requires <windows.h>
 
-// We need shell api for Current Root Extrection.
+// We need shell api for Current Root Extraction.
 #include "shlwapi.h"
 #pragma comment(lib, "shlwapi.lib")
 
 #include <CryCore/Platform/CryLibrary.h>
-#include <CryGame/IGameStartup.h>
+#include <CryGame/IGameFramework.h>
+
 #include <CrySystem/IConsole.h>
 #include <CrySystem/File/ICryPak.h>
 
 #include <CryCore/Platform/platform_impl.inl>
 #include <CrySystem/Profilers/FrameProfiler/FrameProfiler_impl.h>
 #include <CryString/StringUtils.h>
-
-#include <CrySystem/ParseEngineConfig.h>
-
-#define DLL_INITFUNC_SYSTEM "CreateSystemInterface"
-
 
 // Advise notebook graphics drivers to prefer discrete GPU when no explicit application profile exists
 extern "C"
@@ -34,25 +30,24 @@ extern "C"
 	__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 
-
 #ifdef _LIB
-extern "C" IGameStartup* CreateGameStartup();
+extern "C" IGameFramework* CreateGameFramework();
 #endif //_LIB
 
 #ifdef _LIB
 // Include common type defines for static linking
 // Manually instantiate templates as needed here.
-#include <CryCore/Common_TypeInfo.h>
-STRUCT_INFO_T_INSTANTIATE(Vec2_tpl, <float>)
-STRUCT_INFO_T_INSTANTIATE(Vec2_tpl, <int>)
-STRUCT_INFO_T_INSTANTIATE(Vec4_tpl, <short>)
-STRUCT_INFO_T_INSTANTIATE(Vec3_tpl, <int>)
-STRUCT_INFO_T_INSTANTIATE(Ang3_tpl, <float>)
-STRUCT_INFO_T_INSTANTIATE(Quat_tpl, <float>)
-STRUCT_INFO_T_INSTANTIATE(Plane_tpl, <float>)
-STRUCT_INFO_T_INSTANTIATE(Matrix33_tpl, <float>)
-STRUCT_INFO_T_INSTANTIATE(Color_tpl, <float>)
-STRUCT_INFO_T_INSTANTIATE(Color_tpl, <uint8>)
+	#include <CryCore/Common_TypeInfo.h>
+STRUCT_INFO_T_INSTANTIATE(Vec2_tpl, <float> )
+STRUCT_INFO_T_INSTANTIATE(Vec2_tpl, <int> )
+STRUCT_INFO_T_INSTANTIATE(Vec4_tpl, <short> )
+STRUCT_INFO_T_INSTANTIATE(Vec3_tpl, <int> )
+STRUCT_INFO_T_INSTANTIATE(Ang3_tpl, <float> )
+STRUCT_INFO_T_INSTANTIATE(Quat_tpl, <float> )
+STRUCT_INFO_T_INSTANTIATE(Plane_tpl, <float> )
+STRUCT_INFO_T_INSTANTIATE(Matrix33_tpl, <float> )
+STRUCT_INFO_T_INSTANTIATE(Color_tpl, <float> )
+STRUCT_INFO_T_INSTANTIATE(Color_tpl, <uint8> )
 #endif
 
 #define CRY_LIVE_CREATE_MUTEX_ENABLE 0
@@ -60,7 +55,7 @@ STRUCT_INFO_T_INSTANTIATE(Color_tpl, <uint8>)
 #if CRY_LIVE_CREATE_MUTEX_ENABLE
 class CCryLiveCreateMutex
 {
-private:	
+private:
 	HANDLE m_hMutex;
 
 public:
@@ -92,62 +87,13 @@ public:
 };
 #endif
 
-static const LPWSTR GetProjectRootArgument(int argc, const LPWSTR argv[])
-{
-	for (int i = 1; i < argc - 1; i++)
-	{
-		if (wcscmp(argv[i], L"-projectroot") == 0)
-			return argv[i + 1];
-	}
-
-	return nullptr;
-}
-
-static const LPWSTR GetProjectDllDirArgument(int argc, const LPWSTR argv[])
-{
-	for (int i = 1; i < argc - 1; i++)
-	{
-		if (wcscmp(argv[i], L"-projectdlldir") == 0)
-			return argv[i + 1];
-	}
-
-	return nullptr;
-}
-
-int RunGame(const char *commandLine)
+int RunGame(const char* commandLine)
 {
 	SSystemInitParams startupParams;
-	string gameDLLName;
+	const char* frameworkDLLName = "CryAction.dll";
 
-	// set game project related system changes
-	{
-		int argc = 0;
-		LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-		const LPWSTR sProjectRoot = GetProjectRootArgument(argc, argv);
-		if (sProjectRoot)
-		{
-			SetCurrentDirectoryW(sProjectRoot);
+	CryFindRootFolderAndSetAsCurrentWorkingDirectory();
 
-			const LPWSTR sProjectDllDir = GetProjectDllDirArgument(argc, argv);
-			if (sProjectDllDir && sProjectDllDir[0])
-			{
-				SetDllDirectoryW(sProjectDllDir);
-				WideCharToMultiByte(CP_ACP, 0, sProjectDllDir, -1, startupParams.szProjectDllDir, CRY_ARRAY_COUNT(startupParams.szProjectDllDir), NULL, NULL);
-			}
-
-			CProjectConfig projectCfg;
-			gameDLLName = projectCfg.m_gameDLL;
-		}
-		else
-		{
-			// default to old game folder behavior
-			CryFindRootFolderAndSetAsCurrentWorkingDirectory();
-			CEngineConfig engineCfg;
-			gameDLLName = engineCfg.m_gameDLL;
-		}
-		LocalFree(argv);
-	}
-	
 	//restart parameters
 	static const size_t MAX_RESTART_LEVEL_NAME = 256;
 	char fileName[MAX_RESTART_LEVEL_NAME];
@@ -159,246 +105,131 @@ int RunGame(const char *commandLine)
 	CCryLiveCreateMutex liveCreateMutex(bCreateMutex);
 #endif
 
-	HMODULE gameDll = 0;
+	HMODULE frameworkDll = 0;
 
 #if !defined(_LIB)
-	// load the game dll
-	gameDll = CryLoadLibrary( gameDLLName );
+	// load the framework dll
+	frameworkDll = CryLoadLibrary(frameworkDLLName);
 
-	if (!gameDll)
+	if (!frameworkDll)
 	{
 		string errorStr;
-		errorStr.Format("Failed to load the Game DLL! %s", gameDLLName.c_str());
+		errorStr.Format("Failed to load the Game DLL! %s", frameworkDLLName);
 
 		MessageBox(0, errorStr.c_str(), "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY);
 		// failed to load the dll
 
-		return 0;
+		return EXIT_FAILURE;
 	}
 
 	// get address of startup function
-	IGameStartup::TEntryFunction CreateGameStartup = (IGameStartup::TEntryFunction)CryGetProcAddress(gameDll, "CreateGameStartup");
+	IGameFramework::TEntryFunction CreateGameFramework = (IGameFramework::TEntryFunction)CryGetProcAddress(frameworkDll, "CreateGameFramework");
 
-	if (!CreateGameStartup)
+	if (!CreateGameFramework)
 	{
 		// dll is not a compatible game dll
-		CryFreeLibrary(gameDll);
+		CryFreeLibrary(frameworkDll);
 
 		MessageBox(0, "Specified Game DLL is not valid! Please make sure you are running the correct executable", "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY);
-		
-		return 0;
+
+		return EXIT_FAILURE;
 	}
 #endif //!defined(_LIB)
 
 	//SSystemInitParams startupParams;
 
-	startupParams.hInstance = GetModuleHandle(0);
 	startupParams.sLogFileName = logFileName;
 	cry_strcpy(startupParams.szSystemCmdLine, commandLine);
 	//startupParams.pProtectedFunctions[0] = &TestProtectedFunction;
 
 	// create the startup interface
-	IGameStartup *pGameStartup = CreateGameStartup();
-
-	if (!pGameStartup)
+	IGameFramework* pFramework = CreateGameFramework();
+	if (!pFramework)
 	{
 		// failed to create the startup interface
-		CryFreeLibrary(gameDll);
+		CryFreeLibrary(frameworkDll);
 
 		const char* noPromptArg = strstr(commandLine, "-noprompt");
 		if (noPromptArg == NULL)
 			MessageBox(0, "Failed to create the GameStartup Interface!", "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY);
 
-		return 0;
+		return EXIT_FAILURE;
 	}
 
 	bool oaRun = false;
 
-	if(strstr(commandLine, "-norandom"))
-		startupParams.bNoRandom = 1;
+	if (strstr(commandLine, "-norandom"))
+		startupParams.bNoRandom = true;
 
-	// run the game
-	startupParams.pGameStartup = pGameStartup;
-	if (pGameStartup->Init(startupParams))
-	{
-#if !defined(SYS_ENV_AS_STRUCT)
-		gEnv = startupParams.pSystem->GetGlobalEnvironment();
-#endif
-		//startupParams.pProtectedFunctions[0](0,0);
+	// main game loop
+	if (!pFramework->StartEngine(startupParams))
+		return EXIT_FAILURE;
 
-		// Check for signature file.
-		if (!gEnv->pCryPak->IsFileExist("config/config.dat"))
-			return -1;
+	// The main engine loop has exited at this point, shut down
+	pFramework->ShutdownEngine();
 
-		char * pRestartLevelName = NULL;
-		if (fileName[0])
-			pRestartLevelName = fileName;
+	// Unload the framework dll
+	CryFreeLibrary(frameworkDll);
 
-		CryStackStringT<char, 256> newCommandLine;
- 		const char* substr = oaRun ? 0 : strstr(commandLine, "restart");
- 		if(substr != NULL)
- 		{
- 			int len = (int)(substr - commandLine);
-			newCommandLine.assign(commandLine, len);
-			newCommandLine.append(commandLine + len + 7);
- 			pGameStartup->Run(newCommandLine.c_str());	//restartLevel to be loaded
- 		}
- 		else
- 		{
- 			const char* loadstr = oaRun ? 0 : strstr(commandLine, "load");
- 			if(loadstr != NULL)
- 			{
- 				int len = (int)(loadstr - commandLine);
-				newCommandLine.assign(commandLine, len);
-				newCommandLine.append(commandLine + len + 4);
- 				pGameStartup->Run(newCommandLine.c_str()); //restartLevel to be loaded
- 			}
- 			else
- 				pGameStartup->Run(NULL);
-		}
-
-		bool isLevelRequested = pGameStartup->GetRestartLevel(&pRestartLevelName);
-		if (pRestartLevelName)
-		{
-			if (strlen(pRestartLevelName) < MAX_RESTART_LEVEL_NAME)
-				cry_strcpy(fileName, pRestartLevelName);
-		}
-
-		char pRestartMod[255];
-		bool isModRequested = pGameStartup->GetRestartMod(pRestartMod, sizeof(pRestartMod));
-
-		if (isLevelRequested || isModRequested)
-		{
-			STARTUPINFO si;
-			ZeroMemory( &si, sizeof(si) );
-			si.cb = sizeof(si);
-			PROCESS_INFORMATION pi;
-
-			if (isLevelRequested)
-			{
-				newCommandLine.assign("restart ");
-				newCommandLine.append(fileName);
-			}
-
-			if (isModRequested)
-			{
-				newCommandLine.append("-modrestart");
-				if (pRestartMod[0] != '\0')
-				{
-					newCommandLine.append(" -mod ");
-					newCommandLine.append(pRestartMod);
-				}
-			}
-
-			wchar_t szExecutablePath[512];
-			GetModuleFileNameW(GetModuleHandle(NULL), szExecutablePath, CRY_ARRAY_COUNT(szExecutablePath));
-
-			if (!CreateProcess(Unicode::Convert<string>(szExecutablePath).c_str(), (char*)newCommandLine.c_str(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
-			{
-				char pMessage[256];
-				cry_sprintf(pMessage, "Failed to restart the game: %S", szExecutablePath);
-				MessageBox(0, pMessage, "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY | MB_ICONERROR);
-			}
-		}
-		else
-		{
-			// check if there is a patch to install. If there is, do it now.
-			const char* pfilename = pGameStartup->GetPatch();
-			if(pfilename)
-			{
-				STARTUPINFO si;
-				ZeroMemory( &si, sizeof(si) );
-				si.cb = sizeof(si);
-				PROCESS_INFORMATION pi;
-				CreateProcess(pfilename, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
-			}
-		}
-
-		pGameStartup->Shutdown();
-		pGameStartup = 0;
-
-		CryFreeLibrary(gameDll);
-	}
-	else
-	{
-#ifndef _RELEASE
-		const char* noPromptArg = strstr(commandLine, "-noprompt");
-		if (noPromptArg == NULL)
-			MessageBox(0, "Failed to initialize the GameStartup Interface!", "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY);
-#endif
-		// if initialization failed, we still need to call shutdown
-		pGameStartup->Shutdown();
-		pGameStartup = 0;
-
-		CryFreeLibrary(gameDll);
-
-		return 0;
-	}
-
-	return 0;
+	return EXIT_SUCCESS;
 }
 
 //////////////////////////////////////////////////////////////////////////
 // Support relaunching for windows media center edition.
 //////////////////////////////////////////////////////////////////////////
-#if CRY_PLATFORM_WINDOWS
 bool ReLaunchMediaCenter()
 {
 	// Skip if not running on a Media Center
-	if( GetSystemMetrics( SM_MEDIACENTER ) == 0 ) 
+	if (GetSystemMetrics(SM_MEDIACENTER) == 0)
 		return false;
 
 	// Get the path to Media Center
 	char szExpandedPath[MAX_PATH];
-	if( !ExpandEnvironmentStrings( "%SystemRoot%\\ehome\\ehshell.exe", szExpandedPath, MAX_PATH) )
+	if (!ExpandEnvironmentStrings("%SystemRoot%\\ehome\\ehshell.exe", szExpandedPath, MAX_PATH))
 		return false;
 
 	// Skip if ehshell.exe doesn't exist
-	if( GetFileAttributes( szExpandedPath ) == 0xFFFFFFFF )
+	if (GetFileAttributes(szExpandedPath) == 0xFFFFFFFF)
 		return false;
 
-	// Launch ehshell.exe 
-	INT_PTR result = (INT_PTR)ShellExecute( NULL, TEXT("open"), szExpandedPath, NULL, NULL, SW_SHOWNORMAL);
+	// Launch ehshell.exe
+	INT_PTR result = (INT_PTR)ShellExecute(NULL, TEXT("open"), szExpandedPath, NULL, NULL, SW_SHOWNORMAL);
 	return (result > 32);
 }
-#endif // CRY_PLATFORM_WINDOWS
-///////////////////////////////////////////////
+
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-	// we need pass the full command line, including the filename
-	// lpCmdLine does not contain the filename.
+	// Note: lpCmdLine does not contain the filename.
+	string cmdLine = CryStringUtils::ANSIToUTF8(lpCmdLine);
+
 #if CAPTURE_REPLAY_LOG
-#ifndef _LIB
-	CryLoadLibrary("CrySystem.dll");
-#endif
-	CryGetIMemReplay()->StartOnCommandLine(lpCmdLine);
+	#ifndef _LIB
+		CryLoadLibrary("CrySystem.dll");
+	#endif
+	CryGetIMemReplay()->StartOnCommandLine(cmdLine.c_str());
 #endif
 
-	//check for a restart
-	const char* pos = strstr(lpCmdLine, "restart");
-	if(pos != NULL)
+	// Check for a restart
+	if (cmdLine.find("restart") != string::npos)
 	{
-		Sleep(5000); //wait for old instance to be deleted
-		return RunGame(lpCmdLine);	//pass the restart level if restarting
+		Sleep(5000);                     //wait for old instance to be deleted
+		return RunGame(cmdLine.c_str()); //pass the restart level if restarting
+	}
+	else if (cmdLine.find(" -load") != string::npos)
+	{
+		return RunGame(cmdLine.c_str());
 	}
 	else
-		pos = strstr(lpCmdLine, " -load ");// commandLine.find("load");
-
-	if(pos != NULL)
-		RunGame(lpCmdLine);
-
-	int nRes = RunGame(GetCommandLineA());
-
-	//////////////////////////////////////////////////////////////////////////
-	// Support relaunching for windows media center edition.
-	//////////////////////////////////////////////////////////////////////////
-#if CRY_PLATFORM_WINDOWS
-	if (strstr(lpCmdLine,"ReLaunchMediaCenter") != 0)
 	{
-		ReLaunchMediaCenter();
-	}
-#endif
-	//////////////////////////////////////////////////////////////////////////
+		// We need to pass the full command line, including the filename
+		int nRes = RunGame(CryStringUtils::ANSIToUTF8(GetCommandLineA()).c_str());
 
-	return nRes;
+		// Support relaunching for windows media center edition.
+		if (cmdLine.find("ReLaunchMediaCenter") != string::npos)
+		{
+			ReLaunchMediaCenter();
+		}
+
+		return nRes;
+	}
 }

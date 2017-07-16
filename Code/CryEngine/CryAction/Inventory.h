@@ -8,7 +8,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 29:8:2005   14:27 : Created by Márcio Martins
+   - 29:8:2005   14:27 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #ifndef __INVENTORY_H__
@@ -163,7 +163,6 @@ public:
 	virtual void                 PostInitClient(int channelId)      {};
 	virtual bool                 ReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params);
 	virtual void                 PostReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params);
-	virtual bool                 GetEntityPoolSignature(TSerialize signature);
 	virtual void                 Release()                                                                     { delete this; };
 	virtual void                 FullSerialize(TSerialize ser);
 	virtual bool                 NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int flags) { return true; }
@@ -176,7 +175,6 @@ public:
 	virtual void                 HandleEvent(const SGameObjectEvent&)                                          {};
 	virtual void                 ProcessEvent(SEntityEvent&);
 	virtual void                 SetChannelId(uint16 id)                                                       {};
-	virtual void                 SetAuthority(bool auth)                                                       {};
 	//~IGameObjectExtension
 
 	//IInventory

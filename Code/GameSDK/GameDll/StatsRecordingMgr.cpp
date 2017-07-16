@@ -210,8 +210,6 @@ CStatsRecordingMgr::CStatsRecordingMgr() :
  	m_lifeCount = 0;
 
 	g_pGame->GetIGameFramework()->RegisterListener(this, "CStatsRecordingMgr", FRAMEWORKLISTENERPRIORITY_GAME);
-	gEnv->pEntitySystem->GetIEntityPoolManager()->AddListener(this, "CStatsRecordingMgr", 
-		(IEntityPoolListener::EntityPreparedFromPool | IEntityPoolListener::EntityReturnedToPool));
 
 	CDownloadMgr		*pDL=g_pGame->GetDownloadMgr();
 	CRY_ASSERT_MESSAGE(pDL || !gEnv->bMultiplayer,"CStatsRecordingMgr must be instantiated after the CDownloadMgr");		// need to get our settings from the web
@@ -262,7 +260,6 @@ CStatsRecordingMgr::~CStatsRecordingMgr()
 	delete m_serializer;
 
 	g_pGame->GetIGameFramework()->UnregisterListener(this);
-	gEnv->pEntitySystem->GetIEntityPoolManager()->RemoveListener(this);
 }
 
 void CStatsRecordingMgr::ProcessOnlinePermission(
@@ -412,7 +409,7 @@ void CStatsRecordingMgr::DataFailedToDownload(
 
 bool CStatsRecordingMgr::IsTrackingEnabled()
 {
-	ITelemetryCollector		*tc=static_cast<CGame*>(gEnv->pGame)->GetITelemetryCollector();
+	ITelemetryCollector		*tc=static_cast<CGame*>(g_pGame)->GetITelemetryCollector();
 	bool					enabled=tc != NULL && tc->ShouldSubmitTelemetry();
 	return ((enabled && gEnv->bMultiplayer && gEnv->bServer && g_pGameCVars->g_telemetry_gameplay_enabled) ||
 			(!gEnv->bMultiplayer && g_pGameCVars->g_telemetryEnabledSP != 0));
@@ -527,7 +524,7 @@ void CStatsRecordingMgr::StateEndOfSessionStats()
 			m_sessionTracker->StateValue(eGSS_PatchPakVersion, patchPakVersion);
 		}
 
-		if( IPlayerProfileManager *pProfileMan = gEnv->pGame->GetIGameFramework()->GetIPlayerProfileManager() )
+		if( IPlayerProfileManager *pProfileMan = gEnv->pGameFramework->GetIPlayerProfileManager() )
 		{
 			const char *user = pProfileMan->GetCurrentUser();
 			IPlayerProfile* pProfile = pProfileMan->GetCurrentProfile( user );
@@ -754,15 +751,10 @@ void CStatsRecordingMgr::BeginRound()
 			IActorIteratorPtr it = pActorSystem->CreateActorIterator();
 			while (IActor *pActor = it->Next())
 			{
-				// only track actors that aren't pooled here (and are active). Others will begin tracking
-				//	in OnEntityPreparedFromPool
-
-				if((!pActor->GetEntity()->IsFromPool() || m_checkpointCount != 0) && pActor->GetEntity()->IsActive())
+				if(m_checkpointCount != 0 && pActor->GetEntity()->IsActivatedForUpdates())
 				{
-					if(strcmp(pActor->GetEntity()->GetName(), "PoolEntity") )
-					{
-						StartTrackingStats(pActor);
-					}
+					CRY_ASSERT_MESSAGE(strcmp(pActor->GetEntity()->GetName(), "PoolEntity"), "Support for pooled entities has been deprecated.");
+					StartTrackingStats(pActor);
 				}
 			}
 		}
@@ -1062,6 +1054,12 @@ void CStatsRecordingMgr::StartTrackingStats(
 
 		CryLog ("[STATS TRACKER] Start tracking stats for %s '%s'%s", pActor->GetEntity()->GetClass()->GetName(), pActor->GetEntity()->GetName(), pActor->m_telemetry.GetStatsTracker() ? " (WARNING: there are already stats for this actor)" : "");
 
+		// CE-9958: Unreproducible. The stats tracker seems not being properly removed for the killed player.
+		if (pActor->m_telemetry.GetStatsTracker())
+		{
+			return;
+		}
+
 		if (inActor->IsPlayer())
 		{
 			CRY_ASSERT_TRACE(!pActor->m_telemetry.GetStatsTracker(),("already tracking stats for player %s\n",inActor->GetEntity()->GetName()));
@@ -1106,7 +1104,7 @@ void CStatsRecordingMgr::SaveSessionData(
 	ITelemetryProducer				*pInProducer)
 {
 	bool											submitted=false;
-	CTelemetryCollector				*pTC=static_cast<CTelemetryCollector*>(static_cast<CGame*>(gEnv->pGame)->GetITelemetryCollector());
+	CTelemetryCollector				*pTC=static_cast<CTelemetryCollector*>(static_cast<CGame*>(g_pGame)->GetITelemetryCollector());
 	if (pTC != NULL && (GetSubmitPermissions()&k_submitStatsLogs))
 	{
 		string									filePath, remotePath;
@@ -1238,7 +1236,7 @@ void CStatsRecordingMgr::SaveSessionData(XmlNodeRef node)
 
 	if (success)
 	{
-		CTelemetryCollector		*pTC=static_cast<CTelemetryCollector*>(static_cast<CGame*>(gEnv->pGame)->GetITelemetryCollector());
+		CTelemetryCollector		*pTC=static_cast<CTelemetryCollector*>(static_cast<CGame*>(g_pGame)->GetITelemetryCollector());
 		if (pTC)
 		{
 			ITelemetryProducer		*pProd=new CTelemetryFileReader(filePath.c_str(),0);
@@ -1501,7 +1499,7 @@ void CStatsRecordingMgr::OnNodeRemoved(const SNodeLocator& locator, IStatsTracke
 // the stats recording mgr changes the telemetry collectors session id when sessions begin and end
 void CStatsRecordingMgr::SetNewSessionId( bool includeMatchDetails )
 {
-	ITelemetryCollector		*tc=static_cast<CGame*>(gEnv->pGame)->GetITelemetryCollector();
+	ITelemetryCollector		*tc=static_cast<CGame*>(g_pGame)->GetITelemetryCollector();
 	if (tc)
 	{
 		tc->SetNewSessionId(includeMatchDetails);
@@ -1723,28 +1721,6 @@ void CStatsRecordingMgr::OnActionEvent(const SActionEvent& event)
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CStatsRecordingMgr::OnEntityPreparedFromPool(EntityId entityId, IEntity *pEntity)
-{
-	// 'new' entity is coming into existence - start tracking stats
-	IActor* pActor = g_pGame->GetIGameFramework()->GetIActorSystem()->GetActor(entityId);
-	if(pActor)
-	{
-		StartTrackingStats(pActor);
-	}
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CStatsRecordingMgr::OnEntityReturnedToPool(EntityId entityId, IEntity *pEntity)
-{
-	// entity is being removed from the game - stop tracking stats
-	IActor* pActor = g_pGame->GetIGameFramework()->GetIActorSystem()->GetActor(entityId);
-	if(pActor && GetStatsTracker(pActor))
-	{
-		StopTrackingStats(pActor);
-	}
-}
-
-//////////////////////////////////////////////////////////////////////////
 void CStatsRecordingMgr::Serialize(TSerialize ser)
 {
 	assert(ser.GetSerializationTarget() == eST_SaveGame);
@@ -1783,7 +1759,6 @@ void CTelemetryCopierThread::ThreadEntry()
 	m_runTime=gEnv->pTimer->GetAsyncCurTime();
 #endif
 
-	ScopedSwitchToGlobalHeap globalHeapSwitch;
 	GetISystem()->GetXmlUtils()->SetStatsOwnerThread(CryGetCurrentThreadId());
 	m_pOutProducer = new CTelemetryCopier(m_pInProducer);
 #ifndef _RELEASE

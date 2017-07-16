@@ -258,8 +258,7 @@ public:
 			}
 		}
 
-		if (event != ESYSTEM_EVENT_RANDOM_SEED)
-			lastEvent = event;
+		lastEvent = event;
 	}
 };
 
@@ -267,7 +266,7 @@ static CSystemEventListner_LoadingProfiler g_system_event_listener_loadingProfil
 
 void CLoadingProfilerSystem::Init()
 {
-	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_loadingProfiler);
+	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_loadingProfiler, "CSystemEventListner_LoadingProfiler");
 }
 
 //////////////////////////////////////////////////////////////////////////

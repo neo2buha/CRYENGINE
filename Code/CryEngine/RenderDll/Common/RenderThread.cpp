@@ -81,7 +81,6 @@ HWND SRenderThread::GetRenderWindowHandle()
 }
 #endif
 
-CryCriticalSection SRenderThread::s_rcLock;
 
 #define LOADINGLOCK_COMMANDQUEUE (void)0;
 
@@ -138,6 +137,7 @@ SRenderThread::SRenderThread()
 {
 	m_eVideoThreadMode = eVTM_Disabled;
 	m_nRenderThreadLoading = 0;
+	m_nLevelLoadingThread = 0;
 	m_pThreadLoading = 0;
 	m_pLoadtimeCallback = 0;
 	m_bEndFrameCalled = false;
@@ -203,14 +203,6 @@ SRenderThread::~SRenderThread()
 {
 	QuitRenderLoadingThread();
 	QuitRenderThread();
-}
-
-void SRenderThread::ValidateThreadAccess(ERenderCommand eRC)
-{
-	if (!IsMainThread() && !gRenDev->m_bStartLevelLoading)
-	{
-		CryFatalError("Trying to add a render command from a non-main thread, eRC = %d", (int)eRC);
-	}
 }
 
 //==============================================================================================
@@ -312,7 +304,7 @@ void SRenderThread::RC_ResumeDevice()
 
 void SRenderThread::RC_PreloadTextures()
 {
-	if (IsRenderThread())
+	if (IsRenderThread() || IsLevelLoadingThread())
 	{
 		return CTexture::RT_Precache();
 	}
@@ -383,16 +375,35 @@ void SRenderThread::RC_ParseShader(CShader* pSH, uint64 nMaskGen, uint32 flags, 
 	{
 		return gRenDev->m_cEF.RT_ParseShader(pSH, nMaskGen, flags, pRes);
 	}
-	LOADINGLOCK_COMMANDQUEUE
-	pSH->AddRef();
-	if (pRes)
-		pRes->AddRef();
-	byte* p = AddCommand(eRC_ParseShader, 12 + 2 * sizeof(void*));
-	AddPointer(p, pSH);
-	AddPointer(p, pRes);
-	AddDWORD64(p, nMaskGen);
-	AddDWORD(p, flags);
-	EndCommand(p);
+	else if (IsLevelLoadingThread())
+	{
+		AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock);
+
+		TArray<byte>& queue = m_CommandsLoading;
+		pSH->AddRef();
+		if (pRes)
+			pRes->AddRef();
+		byte* p = AddCommandTo(eRC_ParseShader, 12 + 2 * sizeof(void*), queue);
+		AddPointer(p, pSH);
+		AddPointer(p, pRes);
+		AddDWORD64(p, nMaskGen);
+		AddDWORD(p, flags);
+		EndCommandTo(p, queue);
+	}
+	else
+	{
+		LOADINGLOCK_COMMANDQUEUE
+		pSH->AddRef();
+		if (pRes)
+			pRes->AddRef();
+		TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+		byte* p = AddCommandTo(eRC_ParseShader, 12 + 2 * sizeof(void*), queue);
+		AddPointer(p, pSH);
+		AddPointer(p, pRes);
+		AddDWORD64(p, nMaskGen);
+		AddDWORD(p, flags);
+		EndCommand(p);
+	}
 }
 
 void SRenderThread::RC_UpdateShaderItem(SShaderItem* pShaderItem, IMaterial* pMaterial)
@@ -408,10 +419,24 @@ void SRenderThread::RC_UpdateShaderItem(SShaderItem* pShaderItem, IMaterial* pMa
 
 	if (m_eVideoThreadMode == eVTM_Disabled)
 	{
-		byte* p = AddCommand(eRC_UpdateShaderItem, sizeof(SShaderItem*) + sizeof(IMaterial*));
-		AddPointer(p, pShaderItem);
-		AddPointer(p, pMaterial);
-		EndCommand(p);
+		if (IsLevelLoadingThread())
+		{
+			AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+
+			TArray<byte>& queue = m_CommandsLoading;
+			byte* p = AddCommandTo(eRC_UpdateShaderItem, sizeof(SShaderItem*) + sizeof(IMaterial*), queue);
+			AddPointer(p, pShaderItem);
+			AddPointer(p, pMaterial);
+			EndCommandTo(p, queue);
+		}
+		else
+		{
+			TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+			byte* p = AddCommandTo(eRC_UpdateShaderItem, sizeof(SShaderItem*) + sizeof(IMaterial*), queue);
+			AddPointer(p, pShaderItem);
+			AddPointer(p, pMaterial);
+			EndCommandTo(p, queue);
+		}
 	}
 	else
 	{
@@ -425,7 +450,7 @@ void SRenderThread::RC_UpdateShaderItem(SShaderItem* pShaderItem, IMaterial* pMa
 
 void SRenderThread::RC_RefreshShaderResourceConstants(SShaderItem* pShaderItem, IMaterial* pMaterial)
 {
-	if (IsRenderThread())
+	if (IsRenderThread() || IsLevelLoadingThread())
 	{
 		return gRenDev->RT_RefreshShaderResourceConstants(pShaderItem);
 	}
@@ -478,10 +503,24 @@ void SRenderThread::RC_UpdateMaterialConstants(CShaderResources* pSR, IShader* p
 
 	if (m_eVideoThreadMode == eVTM_Disabled)
 	{
-		byte* p = AddCommand(eRC_UpdateMaterialConstants, 2 * sizeof(void*));
-		AddPointer(p, pSR);
-		AddPointer(p, pSH);
-		EndCommand(p);
+		if (IsLevelLoadingThread())
+		{
+			AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+
+			TArray<byte>& queue = m_CommandsLoading;
+			byte* p = AddCommandTo(eRC_UpdateMaterialConstants, 2*sizeof(void*), queue);
+			AddPointer(p, pSR);
+			AddPointer(p, pSH);
+			EndCommandTo(p, queue);
+		}
+		else
+		{
+			TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+			byte* p = AddCommandTo(eRC_UpdateMaterialConstants, 2*sizeof(void*), queue);
+			AddPointer(p, pSR);
+			AddPointer(p, pSH);
+			EndCommandTo(p, queue);
+		}
 	}
 	else
 	{
@@ -513,7 +552,7 @@ void SRenderThread::RC_ForceMeshGC(bool instant, bool wait)
 
 	if (IsRenderThread())
 	{
-		CRenderMesh::Tick();
+		CRenderMesh::Tick(instant ? MAX_RELEASED_MESH_FRAMES : 1);
 		return;
 	}
 
@@ -550,10 +589,24 @@ void SRenderThread::RC_ReleaseGraphicsPipeline()
 	if (IsRenderThread())
 	{
 		gRenDev->RT_GraphicsPipelineShutdown();
+		return;
 	}
 
 	LOADINGLOCK_COMMANDQUEUE
 	byte* p = AddCommand(eRC_ReleaseGraphicsPipeline, 0);
+	EndCommand(p);
+}
+
+void SRenderThread::RC_ResetDeviceObjectFactory()
+{
+	if (IsRenderThread())
+	{
+		gRenDev->RT_ResetDeviceObjectFactory();
+		return;
+	}
+
+	LOADINGLOCK_COMMANDQUEUE
+	byte* p = AddCommand(eRC_ResetDeviceObjectFactory, 0);
 	EndCommand(p);
 }
 
@@ -575,8 +628,10 @@ void SRenderThread::RC_ResetPostEffects(bool bOnSpecChange)
 {
 	if (IsRenderThread())
 	{
-		if (gRenDev->m_RP.m_pREPostProcess)
-			gRenDev->m_RP.m_pREPostProcess->Reset(bOnSpecChange);
+		if (gRenDev->m_pPostProcessMgr)
+		{
+			gRenDev->m_pPostProcessMgr->Reset(bOnSpecChange);
+		}
 		return;
 	}
 
@@ -613,17 +668,38 @@ void SRenderThread::RC_UpdateTextureRegion(CTexture* pTex, byte* data, int nX, i
 
 	if (m_eVideoThreadMode == eVTM_Disabled)
 	{
-		byte* p = AddCommand(eRC_UpdateTexture, 28 + 2 * sizeof(void*));
-		AddPointer(p, pTex);
-		AddPointer(p, pData);
-		AddDWORD(p, nX);
-		AddDWORD(p, nY);
-		AddDWORD(p, nZ);
-		AddDWORD(p, USize);
-		AddDWORD(p, VSize);
-		AddDWORD(p, ZSize);
-		AddDWORD(p, eTFSrc);
-		EndCommand(p);
+		if (IsLevelLoadingThread())
+		{
+			AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+
+			TArray<byte>& queue = m_CommandsLoading;
+			byte* p = AddCommandTo(eRC_UpdateTexture, 28+2*sizeof(void*), queue);
+			AddPointer(p, pTex);
+			AddPointer(p, pData);
+			AddDWORD(p, nX);
+			AddDWORD(p, nY);
+			AddDWORD(p, nZ);
+			AddDWORD(p, USize);
+			AddDWORD(p, VSize);
+			AddDWORD(p, ZSize);
+			AddDWORD(p, eTFSrc);
+			EndCommandTo(p, queue);
+		}
+		else
+		{
+			TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+			byte* p = AddCommandTo(eRC_UpdateTexture, 28+2*sizeof(void*), queue);
+			AddPointer(p, pTex);
+			AddPointer(p, pData);
+			AddDWORD(p, nX);
+			AddDWORD(p, nY);
+			AddDWORD(p, nZ);
+			AddDWORD(p, USize);
+			AddDWORD(p, VSize);
+			AddDWORD(p, ZSize);
+			AddDWORD(p, eTFSrc);
+			EndCommandTo(p, queue);
+		}
 	}
 	else
 	{
@@ -671,19 +747,31 @@ void SRenderThread::RC_EntityDelete(IRenderNode* pRenderNode)
 		return SDynTexture_Shadow::RT_EntityDelete(pRenderNode);
 	}
 
-	LOADINGLOCK_COMMANDQUEUE
-	byte* p = AddCommand(eRC_EntityDelete, sizeof(void*));
-	AddPointer(p, pRenderNode);
-	EndCommand(p);
-}
+	if (IsLevelLoadingThread())
+	{
+		AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
 
-void TexBlurAnisotropicVertical(CTexture* pTex, int nAmount, float fScale, float fDistribution, bool bAlphaOnly);
+		TArray<byte>& queue = m_CommandsLoading;
+		byte* p = AddCommandTo(eRC_EntityDelete, sizeof(void*), queue);
+		AddPointer(p, pRenderNode);
+		EndCommandTo(p, queue);
+	}
+	else
+	{
+		LOADINGLOCK_COMMANDQUEUE
+		TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+		byte* p = AddCommandTo(eRC_EntityDelete, sizeof(void*), queue);
+		AddPointer(p, pRenderNode);
+		EndCommandTo(p, queue);
+	}
+}
 
 void SRenderThread::RC_TexBlurAnisotropicVertical(CTexture* Tex, float fAnisoScale)
 {
 	if (IsRenderThread())
 	{
-		TexBlurAnisotropicVertical(Tex, 1, 8 * max(1.0f - min(fAnisoScale / 100.0f, 1.0f), 0.2f), 1, false);
+		CStandardGraphicsPipeline& gp = gcpRendD3D->GetGraphicsPipeline();
+		gp.ExecuteAnisotropicVerticalBlur(Tex, 1, 8 * max(1.0f - min(fAnisoScale / 100.0f, 1.0f), 0.2f), 1, false);
 		return;
 	}
 
@@ -694,7 +782,7 @@ void SRenderThread::RC_TexBlurAnisotropicVertical(CTexture* Tex, float fAnisoSca
 	EndCommand(p);
 }
 
-bool SRenderThread::RC_CreateDeviceTexture(CTexture* pTex, byte* pData[6])
+bool SRenderThread::RC_CreateDeviceTexture(CTexture* pTex, const void* pData[])
 {
 #if !defined(MULTITHREADED_RESOURCE_CREATION)
 	if (IsRenderThread())
@@ -707,12 +795,36 @@ bool SRenderThread::RC_CreateDeviceTexture(CTexture* pTex, byte* pData[6])
 		return !IsFailed();
 
 	LOADINGLOCK_COMMANDQUEUE
-	byte* p = AddCommand(eRC_CreateDeviceTexture, 7 * sizeof(void*));
+	// double nullptr terminator
+	int len = 0; if (pData) while (pData[len] || pData[len + 1]) ++len;
+	byte* p = AddCommand(eRC_CreateDeviceTexture, 4 + (len + 1) * sizeof(void*));
 	AddPointer(p, pTex);
-	for (int i = 0; i < 6; i++)
+	AddDWORD(p, len);
+	while (--len >= 0)
+		AddPointer(p, pData[len]);
+	EndCommand(p);
+	FlushAndWait();
+
+	return !IsFailed();
+}
+
+bool SRenderThread::RC_CreateDeviceTexture(CTexture* pTex, D3DResource* pNatTex)
+{
+#if !defined(MULTITHREADED_RESOURCE_CREATION)
+	if (IsRenderThread())
+#endif
 	{
-		AddPointer(p, pData[i]);
+		return pTex->RT_CreateDeviceTexture(pNatTex);
 	}
+
+	if (pTex->IsAsyncDevTexCreation())
+		return !IsFailed();
+
+	LOADINGLOCK_COMMANDQUEUE
+	byte* p = AddCommand(eRC_CreateDeviceTexture, 4 + 2 * sizeof(void*));
+	AddPointer(p, pTex);
+	AddDWORD(p, 0xFFFFFFFFU);
+	AddPointer(p, pNatTex);
 	EndCommand(p);
 	FlushAndWait();
 
@@ -761,7 +873,7 @@ void SRenderThread::RC_ClearTarget(void* pkVoid, const ColorF& kColor)
 
 void SRenderThread::RC_CreateResource(SResourceAsync* pRes)
 {
-	if (IsRenderThread())
+	if (IsRenderThread() || IsLevelLoadingThread())
 	{
 		gRenDev->RT_CreateResource(pRes);
 		return;
@@ -787,20 +899,7 @@ void SRenderThread::RC_StopVideoThread()
 	EndCommand(p);
 }
 
-void SRenderThread::RC_PreactivateShaders()
-{
-	if (IsRenderThread())
-	{
-		CHWShader::RT_PreactivateShaders();
-		return;
-	}
-
-	LOADINGLOCK_COMMANDQUEUE
-	byte* p = AddCommand(eRC_PreactivateShaders, 0);
-	EndCommand(p);
-}
-
-void SRenderThread::RC_PrecacheShader(CShader* pShader, SShaderCombination& cmb, bool bForce, bool bCompressedOnly, CShaderResources* pRes)
+void SRenderThread::RC_PrecacheShader(CShader* pShader, SShaderCombination& cmb, bool bForce, CShaderResources* pRes)
 {
 	if (IsRenderLoadingThread())
 	{
@@ -813,19 +912,19 @@ void SRenderThread::RC_PrecacheShader(CShader* pShader, SShaderCombination& cmb,
 		memcpy(p, &cmb, sizeof(cmb));
 		p += sizeof(SShaderCombination);
 		AddDWORD(p, bForce);
-		AddDWORD(p, bCompressedOnly);
 		AddPointer(p, pRes);
 		EndCommandTo(p, m_CommandsLoading);
 	}
 	else if (IsRenderThread())
 	{
-		pShader->mfPrecache(cmb, bForce, bCompressedOnly, pRes);
-		return;
+		pShader->mfPrecache(cmb, bForce, pRes);
 	}
-	else
+	else if (IsLevelLoadingThread())
 	{
-		LOADINGLOCK_COMMANDQUEUE
-		byte* p = AddCommand(eRC_PrecacheShader, sizeof(void*) * 2 + 8 + sizeof(SShaderCombination));
+		AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+
+		TArray<byte>& queue = m_CommandsLoading;
+		byte* p = AddCommandTo(eRC_PrecacheShader, sizeof(void*) * 2 + 8 + sizeof(SShaderCombination), queue);
 		pShader->AddRef();
 		if (pRes)
 			pRes->AddRef();
@@ -833,9 +932,22 @@ void SRenderThread::RC_PrecacheShader(CShader* pShader, SShaderCombination& cmb,
 		memcpy(p, &cmb, sizeof(cmb));
 		p += sizeof(SShaderCombination);
 		AddDWORD(p, bForce);
-		AddDWORD(p, bCompressedOnly);
 		AddPointer(p, pRes);
-		EndCommand(p);
+		EndCommandTo(p, queue);
+	}
+	else
+	{
+		TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+		byte* p = AddCommandTo(eRC_PrecacheShader, sizeof(void*) * 2 + 8 + sizeof(SShaderCombination), queue);
+		pShader->AddRef();
+		if (pRes)
+			pRes->AddRef();
+		AddPointer(p, pShader);
+		memcpy(p, &cmb, sizeof(cmb));
+		p += sizeof(SShaderCombination);
+		AddDWORD(p, bForce);
+		AddPointer(p, pRes);
+		EndCommandTo(p, queue);
 	}
 }
 
@@ -850,17 +962,25 @@ void SRenderThread::RC_ReleaseShaderResource(CShaderResources* pRes)
 	}
 	else if (IsRenderThread())
 	{
-		//SAFE_DELETE(pRes);
 		if (pRes)
 			pRes->RT_Release();
 		return;
 	}
+	else if (IsLevelLoadingThread())
+	{
+		AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+
+		TArray<byte>& queue = m_CommandsLoading;
+		byte* p = AddCommandTo(eRC_ReleaseShaderResource, sizeof(void*), queue);
+		AddPointer(p, pRes);
+		EndCommandTo(p, queue);
+	}
 	else
 	{
-		LOADINGLOCK_COMMANDQUEUE
-		byte* p = AddCommand(eRC_ReleaseShaderResource, sizeof(void*));
+		TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+		byte* p = AddCommandTo(eRC_ReleaseShaderResource, sizeof(void*), queue);
 		AddPointer(p, pRes);
-		EndCommand(p);
+		EndCommandTo(p, queue);
 	}
 }
 
@@ -878,22 +998,30 @@ void SRenderThread::RC_ReleaseBaseResource(CBaseResource* pRes)
 		SAFE_DELETE(pRes);
 		return;
 	}
+	else if (IsLevelLoadingThread())
+	{
+		AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+		TArray<byte>& queue = m_CommandsLoading;
+		byte* p = AddCommandTo(eRC_ReleaseBaseResource, sizeof(void*), queue);
+		AddPointer(p, pRes);
+		EndCommandTo(p, queue);
+	}
 	else
 	{
-		LOADINGLOCK_COMMANDQUEUE
-		byte* p = AddCommand(eRC_ReleaseBaseResource, sizeof(void*));
+		TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+		byte* p = AddCommandTo(eRC_ReleaseBaseResource, sizeof(void*), queue);
 		AddPointer(p, pRes);
-		EndCommand(p);
+		EndCommandTo(p, queue);
 	}
 }
 
 void SRenderThread::RC_ReleaseSurfaceResource(SDepthTexture* pRes)
 {
-	if (IsRenderThread())
+	if (IsRenderThread() || IsLevelLoadingThread())
 	{
 		if (pRes)
 		{
-			pRes->Release();
+			pRes->Release(true);
 		}
 		return;
 	}
@@ -906,7 +1034,7 @@ void SRenderThread::RC_ReleaseSurfaceResource(SDepthTexture* pRes)
 
 void SRenderThread::RC_ReleaseResource(SResourceAsync* pRes)
 {
-	if (IsRenderThread())
+	if (IsRenderThread() || IsLevelLoadingThread())
 	{
 		gRenDev->RT_ReleaseResource(pRes);
 		return;
@@ -915,6 +1043,21 @@ void SRenderThread::RC_ReleaseResource(SResourceAsync* pRes)
 	LOADINGLOCK_COMMANDQUEUE
 	byte* p = AddCommand(eRC_ReleaseResource, sizeof(void*));
 	AddPointer(p, pRes);
+	EndCommand(p);
+}
+
+void SRenderThread::RC_ReleaseOptics(IOpticsElementBase* pOpticsElement)
+{
+	if (IsRenderThread() || IsLevelLoadingThread())
+	{
+		gRenDev->RT_ReleaseOptics(pOpticsElement);
+		return;
+	}
+
+	LOADINGLOCK_COMMANDQUEUE
+	byte* p = AddCommand(eRC_ReleaseOptics, sizeof(void*));
+	pOpticsElement->AddRef();
+	AddPointer(p, pOpticsElement);
 	EndCommand(p);
 }
 
@@ -1001,7 +1144,7 @@ void SRenderThread::RC_PrecacheDefaultShaders()
 
 void SRenderThread::RC_RelinkTexture(CTexture* pTex)
 {
-	if (IsRenderThread())
+	if (IsRenderThread() || IsLevelLoadingThread())
 	{
 		pTex->RT_Relink();
 		return;
@@ -1015,7 +1158,7 @@ void SRenderThread::RC_RelinkTexture(CTexture* pTex)
 
 void SRenderThread::RC_UnlinkTexture(CTexture* pTex)
 {
-	if (IsRenderThread())
+	if (IsRenderThread() || IsLevelLoadingThread())
 	{
 		pTex->RT_Unlink();
 		return;
@@ -1027,22 +1170,7 @@ void SRenderThread::RC_UnlinkTexture(CTexture* pTex)
 	EndCommand(p);
 }
 
-void SRenderThread::RC_CreateREPostProcess(CRendElementBase** re)
-{
-	if (IsRenderThread())
-	{
-		return gRenDev->RT_CreateREPostProcess(re);
-	}
-
-	LOADINGLOCK_COMMANDQUEUE
-	byte* p = AddCommand(eRC_CreateREPostProcess, sizeof(void*));
-	AddPointer(p, re);
-	EndCommand(p);
-
-	FlushAndWait();
-}
-
-bool SRenderThread::RC_CheckUpdate2(CRenderMesh* pMesh, CRenderMesh* pVContainer, EVertexFormat eVF, uint32 nStreamMask)
+bool SRenderThread::RC_CheckUpdate2(CRenderMesh* pMesh, CRenderMesh* pVContainer, InputLayoutHandle eVF, uint32 nStreamMask)
 {
 	if (IsRenderThread())
 	{
@@ -1077,12 +1205,20 @@ void SRenderThread::RC_ReleaseCB(void* pCB)
 		gRenDev->RT_ReleaseCB(pCB);
 		return;
 	}
+	else if (IsLevelLoadingThread())
+	{
+		AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+		TArray<byte>& queue = m_CommandsLoading;
+		byte* p = AddCommandTo(eRC_ReleaseCB, sizeof(void*), queue);
+		AddPointer(p, pCB);
+		EndCommandTo(p, queue);
+	}
 	else
 	{
-		LOADINGLOCK_COMMANDQUEUE
-		byte* p = AddCommand(eRC_ReleaseCB, sizeof(void*));
+		TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+		byte* p = AddCommandTo(eRC_ReleaseCB, sizeof(void*), queue);
 		AddPointer(p, pCB);
-		EndCommand(p);
+		EndCommandTo(p, queue);
 	}
 
 }
@@ -1457,7 +1593,7 @@ void SRenderThread::RC_SetCamera()
 
 		gRenDev->GetProjectionMatrix((float*)&pData[0]);
 		gRenDev->GetModelViewMatrix((float*)&pData[sizeof(Matrix44)]);
-		*(Matrix44*)((float*)&pData[sizeof(Matrix44) * 2]) = gRenDev->m_CameraZeroMatrix[m_nCurThreadFill];
+		gRenDev->GetCameraZeroMatrix((float*)&pData[sizeof(Matrix44) * 2]);
 
 		if (gRenDev->m_RP.m_TI[m_nCurThreadFill].m_PersFlags & RBPF_OBLIQUE_FRUSTUM_CLIPPING)
 		{
@@ -1471,8 +1607,8 @@ void SRenderThread::RC_SetCamera()
 			mObliqueProjMatrix.m22 = pPlane.n[2];
 			mObliqueProjMatrix.m32 = pPlane.d;
 
-			Matrix44* mProj = (Matrix44*)&pData[0];
-			*mProj = (*mProj) * mObliqueProjMatrix;
+			Matrix44f* mProj = (Matrix44f*)&pData[0];
+			*mProj = Matrix44A(*mProj) * mObliqueProjMatrix;
 
 			gRenDev->m_RP.m_TI[m_nCurThreadFill].m_PersFlags &= ~RBPF_OBLIQUE_FRUSTUM_CLIPPING;
 		}
@@ -1505,9 +1641,19 @@ void SRenderThread::RC_PostLoadLevel()
 		return;
 	}
 
-	LOADINGLOCK_COMMANDQUEUE
-	byte* p = AddCommand(eRC_PostLevelLoading, 0);
-	EndCommand(p);
+	if (IsLevelLoadingThread())
+	{
+		AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+		TArray<byte>& queue = m_CommandsLoading;
+		byte* p = AddCommandTo(eRC_PostLevelLoading, 0, queue);
+		EndCommandTo(p, queue);
+	}
+	else
+	{
+		LOADINGLOCK_COMMANDQUEUE
+		byte* p = AddCommand(eRC_PostLevelLoading, 0);
+		EndCommand(p);
+	}
 }
 
 void SRenderThread::RC_PushFog()
@@ -1556,18 +1702,6 @@ void SRenderThread::RC_PopVP()
 	}
 	else
 		gRenDev->FX_PopVP();
-}
-
-void SRenderThread::RC_FlushTextMessages()
-{
-	if (!IsRenderThread())
-	{
-		LOADINGLOCK_COMMANDQUEUE
-		byte* p = AddCommand(eRC_FlushTextMessages, 0);
-		EndCommand(p);
-	}
-	else
-		gRenDev->RT_FlushTextMessages();
 }
 
 void SRenderThread::RC_FlushTextureStreaming(bool bAbort)
@@ -1711,6 +1845,19 @@ void SRenderThread::RC_EndFrame(bool bWait)
 
 	LOADINGLOCK_COMMANDQUEUE
 	gRenDev->GetIRenderAuxGeom()->Commit(); // need to issue flush of main thread's aux cb before EndFrame (otherwise it is processed after p3dDev->EndScene())
+
+	if (m_eVideoThreadMode == eVTM_Disabled)
+	{
+		AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+
+		if (const unsigned int size = m_CommandsLoading.size())
+		{
+			byte* buf = m_Commands[m_nCurThreadFill].Grow(size);
+			memcpy(buf, &m_CommandsLoading[0], size);
+			m_CommandsLoading.Free();
+		}
+	}
+
 	byte* p = AddCommand(eRC_EndFrame, 0);
 	EndCommand(p);
 	SyncMainWithRender();
@@ -1728,15 +1875,31 @@ void SRenderThread::RC_PrecacheResource(ITexture* pTP, float fMipFactor, float f
 
 	pTP->AddRef();
 
-	LOADINGLOCK_COMMANDQUEUE
-	byte* p = AddCommand(eRC_PrecacheTexture, 20 + sizeof(void*));
-	AddPointer(p, pTP);
-	AddFloat(p, fMipFactor);
-	AddFloat(p, fTimeToReady);
-	AddDWORD(p, Flags);
-	AddDWORD(p, nUpdateId);
-	AddDWORD(p, nCounter);
-	EndCommand(p);
+	if (IsLevelLoadingThread())
+	{
+		AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+		TArray<byte>& queue = m_CommandsLoading;
+		byte* p = AddCommandTo(eRC_PrecacheTexture, 20+sizeof(void*), queue);
+		AddPointer(p, pTP);
+		AddFloat(p, fMipFactor);
+		AddFloat(p, fTimeToReady);
+		AddDWORD(p, Flags);
+		AddDWORD(p, nUpdateId);
+		AddDWORD(p, nCounter);
+		EndCommandTo(p, queue);
+	}
+	else
+	{
+		LOADINGLOCK_COMMANDQUEUE
+		byte* p = AddCommand(eRC_PrecacheTexture, 20+sizeof(void*));
+		AddPointer(p, pTP);
+		AddFloat(p, fMipFactor);
+		AddFloat(p, fTimeToReady);
+		AddDWORD(p, Flags);
+		AddDWORD(p, nUpdateId);
+		AddDWORD(p, nCounter);
+		EndCommand(p);
+	}
 }
 
 void SRenderThread::RC_ReleaseDeviceTexture(CTexture* pTexture)
@@ -1753,6 +1916,13 @@ void SRenderThread::RC_ReleaseDeviceTexture(CTexture* pTexture)
 		{
 			pTexture->RT_ReleaseDevice();
 		}
+		return;
+	}
+	else if(IsLevelLoadingThread())
+	{
+		m_rdldLock.Lock();
+		pTexture->RT_ReleaseDevice();
+		m_rdldLock.Unlock();
 		return;
 	}
 
@@ -1798,27 +1968,6 @@ void SRenderThread::RC_DrawLines(Vec3 v[], int nump, ColorF& col, int flags, flo
 		AddData(p, v, nump * sizeof(Vec3));
 		EndCommand(p);
 	}
-}
-
-void SRenderThread::RC_DrawStringU(IFFont_RenderProxy* pFont, float x, float y, float z, const char* pStr, const bool asciiMultiLine, const STextDrawContext& ctx)
-{
-	if (IsRenderThread())
-	{
-		gRenDev->RT_DrawStringU(pFont, x, y, z, pStr, asciiMultiLine, ctx);
-		return;
-	}
-
-	LOADINGLOCK_COMMANDQUEUE
-	byte* p = AddCommand(eRC_DrawStringU, Align4(16 + sizeof(void*) + sizeof(STextDrawContext) + TextCommandSize(pStr)));
-	AddPointer(p, pFont);
-	AddFloat(p, x);
-	AddFloat(p, y);
-	AddFloat(p, z);
-	AddDWORD(p, asciiMultiLine ? 1 : 0);
-	new(p) STextDrawContext(ctx);
-	p += sizeof(STextDrawContext);
-	AddText(p, pStr);
-	EndCommand(p);
 }
 
 void SRenderThread::RC_ClearTargetsImmediately(int8 nType, uint32 nFlags, const ColorF& vColor, float depth)
@@ -1916,20 +2065,6 @@ void SRenderThread::RC_PrepareStereo(int mode, int output)
 	EndCommand(p);
 }
 
-void SRenderThread::RC_CopyToStereoTex(int channel)
-{
-	if (IsRenderThread())
-	{
-		gRenDev->RT_CopyToStereoTex(channel);
-		return;
-	}
-
-	LOADINGLOCK_COMMANDQUEUE
-	byte* p = AddCommand(eRC_CopyToStereoTex, 4);
-	AddDWORD(p, channel);
-	EndCommand(p);
-}
-
 void SRenderThread::RC_SetStereoEye(int eye)
 {
 	if (IsRenderThread())
@@ -2000,7 +2135,7 @@ void SRenderThread::RC_SetTexture(int nTex, int nUnit)
 {
 	if (IsRenderThread())
 	{
-		CTexture::ApplyForID(nUnit, nTex, -1, -1);
+		CTexture::ApplyForID(nUnit, nTex, EDefaultSamplerStates::Unspecified, -1);
 		return;
 	}
 
@@ -2023,23 +2158,6 @@ void SRenderThread::RC_PreprGenerateFarTrees(CREFarTreeSprites* pRE, const SRend
 	byte* p = AddCommand(eRC_PreprGenerateFarTrees, sizeof(void*) + sizeof(SRenderingPassInfo));
 	AddPointer(p, pRE);
 	AddRenderingPassInfo(p, const_cast<SRenderingPassInfo*>(&passInfo));
-	EndCommand(p);
-}
-void SRenderThread::RC_PreprGenerateCloud(CRendElementBase* pRE, CShader* pShader, CShaderResources* pRes, CRenderObject* pObject)
-{
-	if (IsRenderThread())
-	{
-		CRECloud* pREC = (CRECloud*)pRE;
-		pREC->GenerateCloudImposter(pShader, pRes, pObject);
-		return;
-	}
-
-	LOADINGLOCK_COMMANDQUEUE
-	byte* p = AddCommand(eRC_PreprGenerateCloud, 4 * sizeof(void*));
-	AddPointer(p, pRE);
-	AddPointer(p, pShader);
-	AddPointer(p, pRes);
-	AddPointer(p, pObject);
 	EndCommand(p);
 }
 
@@ -2093,11 +2211,27 @@ void SRenderThread::RC_GenerateSkyDomeTextures(CREHDRSky* pSky, int32 width, int
 
 	if (m_eVideoThreadMode == eVTM_Disabled)
 	{
-		byte* p = AddCommand(eRC_GenerateSkyDomeTextures, sizeof(void*) + sizeof(int32) * 2);
-		AddPointer(p, pSky);
-		AddDWORD(p, width);
-		AddDWORD(p, height);
-		EndCommand(p);
+		if (IsLevelLoadingThread())
+		{
+			AUTO_LOCK_T(CryCriticalSectionNonRecursive, m_CommandsLoadingLock); 
+
+			TArray<byte>& queue = m_CommandsLoading;
+			byte* p = AddCommandTo(eRC_GenerateSkyDomeTextures, sizeof(void*) + sizeof(int32)*2, queue);
+			AddPointer(p, pSky);
+			AddDWORD(p, width);
+			AddDWORD(p, height);
+			EndCommandTo(p, queue);
+		}
+		else
+		{
+			TArray<byte>& queue = m_Commands[m_nCurThreadFill];
+			byte* p = AddCommandTo(eRC_GenerateSkyDomeTextures, sizeof(void*) + sizeof(int32)*2, queue);
+			AddPointer(p, pSky);
+			AddDWORD(p, width);
+			AddDWORD(p, height);
+			EndCommandTo(p, queue);
+		}
+		
 	}
 	else
 	{
@@ -2196,8 +2330,8 @@ void SRenderThread::ProcessCommands()
 	if (m_eVideoThreadMode == eVTM_Disabled)
 		gcpRendD3D->BindContextToThread(CryGetCurrentThreadId());
 
-	#if defined(OPENGL) && !DXGL_FULL_EMULATION
-		#if CRY_OPENGL_SINGLE_CONTEXT
+	#if CRY_RENDERER_OPENGL && !DXGL_FULL_EMULATION
+		#if OGL_SINGLE_CONTEXT
 	if (m_eVideoThreadMode == eVTM_Disabled)
 		m_kDXGLDeviceContextHandle.Set(gcpRendD3D->GetDeviceContext().GetRealDeviceContext());
 		#else
@@ -2206,7 +2340,7 @@ void SRenderThread::ProcessCommands()
 	if (m_eVideoThreadMode == eVTM_Disabled)
 		m_kDXGLDeviceContextHandle.Set(gcpRendD3D->GetDeviceContext().GetRealDeviceContext(), !CRenderer::CV_r_multithreaded);
 		#endif
-	#endif //defined(OPENGL) && !DXGL_FULL_EMULATION
+	#endif //CRY_RENDERER_OPENGL && !DXGL_FULL_EMULATION
 
 	#ifdef DO_RENDERSTATS
 	CTimeValue Time;
@@ -2261,17 +2395,20 @@ void SRenderThread::ProcessCommands()
 		case eRC_ReleaseGraphicsPipeline:
 			gRenDev->RT_GraphicsPipelineShutdown();
 			break;
+		case eRC_ResetDeviceObjectFactory:
+			gRenDev->RT_ResetDeviceObjectFactory();
+			break;
 		case eRC_ReleasePostEffects:
 			if (gRenDev->m_pPostProcessMgr)
 				gRenDev->m_pPostProcessMgr->ReleaseResources();
 			break;
 		case eRC_ResetPostEffects:
-			if (gRenDev->m_RP.m_pREPostProcess)
-				gRenDev->m_RP.m_pREPostProcess->mfReset();
+			if (gRenDev->m_pPostProcessMgr)
+				gRenDev->m_pPostProcessMgr->Reset();
 			break;
 		case eRC_ResetPostEffectsOnSpecChange:
-			if (gRenDev->m_RP.m_pREPostProcess)
-				gRenDev->m_RP.m_pREPostProcess->Reset(true);
+			if (gRenDev->m_pPostProcessMgr)
+				gRenDev->m_pPostProcessMgr->Reset(true);
 			break;
 		case eRC_DisableTemporalEffects:
 			gRenDev->RT_DisableTemporalEffects();
@@ -2365,7 +2502,9 @@ void SRenderThread::ProcessCommands()
 						gRenDev->EF_ClearTargetsLater(nFlags, fDepth, 0);
 						break;
 					}
+					return;
 				}
+
 				switch (nType)
 				{
 				case 0:
@@ -2415,10 +2554,18 @@ void SRenderThread::ProcessCommands()
 			}
 			break;
 		case eRC_ReleaseDeviceTexture:
-			assert(m_eVideoThreadMode == eVTM_Disabled);
 			{
 				CTexture* pTexture = ReadCommand<CTexture*>(n);
-				pTexture->RT_ReleaseDevice();
+				if (m_eVideoThreadMode != eVTM_Disabled)
+				{
+					m_rdldLock.Lock();
+					pTexture->RT_ReleaseDevice();
+					m_rdldLock.Unlock();
+				}
+				else
+				{
+					pTexture->RT_ReleaseDevice();
+				}
 			}
 			break;
 		case eRC_AuxFlush:
@@ -2461,7 +2608,7 @@ void SRenderThread::ProcessCommands()
 			{
 				int nTex = ReadCommand<int>(n);
 				int nUnit = ReadCommand<int>(n);
-				CTexture::ApplyForID(nUnit, nTex, -1, -1);
+				CTexture::ApplyForID(nUnit, nTex, EDefaultSamplerStates::Unspecified, -1);
 			}
 			break;
 		case eRC_DrawLines:
@@ -2477,21 +2624,6 @@ void SRenderThread::ProcessCommands()
 				n += nump * sizeof(Vec3);
 
 				gRenDev->RT_DrawLines(pv, nump, col, flags, fGround);
-			}
-			break;
-		case eRC_DrawStringU:
-			{
-				IFFont_RenderProxy* pFont = ReadCommand<IFFont_RenderProxy*>(n);
-				float x = ReadCommand<float>(n);
-				float y = ReadCommand<float>(n);
-				float z = ReadCommand<float>(n);
-				bool asciiMultiLine = ReadCommand<int>(n) != 0;
-				const STextDrawContext* pCtx = (const STextDrawContext*) &m_Commands[threadId][n];
-				n += sizeof(STextDrawContext);
-				const char* pStr = ReadTextCommand<const char*>(n);
-
-				if (m_eVideoThreadMode == eVTM_Disabled)
-					gRenDev->RT_DrawStringU(pFont, x, y, z, pStr, asciiMultiLine, *pCtx);
 			}
 			break;
 		case eRC_SetState:
@@ -2567,6 +2699,12 @@ void SRenderThread::ProcessCommands()
 				gRenDev->RT_ReleaseResource(pRes);
 			}
 			break;
+		case eRC_ReleaseOptics:
+			{
+				IOpticsElementBase* pOpticsElement = ReadCommand<IOpticsElementBase*>(n);
+				gRenDev->RT_ReleaseOptics(pOpticsElement);
+			}
+		break;
 		case eRC_ReleaseRenderResources:
 			{
 				int nFlags = ReadCommand<int>(n);
@@ -2601,7 +2739,7 @@ void SRenderThread::ProcessCommands()
 				SDepthTexture* pRes = ReadCommand<SDepthTexture*>(n);
 				if (pRes)
 				{
-					pRes->Release();
+					pRes->Release(true);
 				}
 			}
 			break;
@@ -2616,7 +2754,7 @@ void SRenderThread::ProcessCommands()
 			{
 				CRenderMesh* pMesh = ReadCommand<CRenderMesh*>(n);
 				CRenderMesh* pVContainer = ReadCommand<CRenderMesh*>(n);
-				EVertexFormat eVF = ReadCommand<EVertexFormat>(n);
+				InputLayoutHandle eVF = ReadCommand<InputLayoutHandle>(n);
 				uint32 nStreamMask = ReadCommand<uint32>(n);
 				pMesh->RT_CheckUpdate(pVContainer, eVF, nStreamMask);
 			}
@@ -2625,12 +2763,23 @@ void SRenderThread::ProcessCommands()
 			{
 				m_rdldLock.Lock();
 				CTexture* pTex = ReadCommand<CTexture*>(n);
-				byte* pData[6];
-				for (int i = 0; i < 6; i++)
+				unsigned int len = ReadCommand<unsigned int>(n);
+				if (len != 0xFFFFFFFFU)
 				{
-					pData[i] = ReadCommand<byte*>(n);
+					const void** pData = new const void*[len + 2];
+					// double nullptr terminator
+					pData[len + 0] = nullptr;
+					pData[len + 1] = nullptr;
+					while (len-- != 0)
+						pData[len] = ReadCommand<byte*>(n);
+					m_bSuccessful = pTex->RT_CreateDeviceTexture(pData);
+					delete[] pData;
 				}
-				m_bSuccessful = pTex->RT_CreateDeviceTexture(pData);
+				else
+				{
+					D3DResource* pNatTex = ReadCommand<D3DResource*>(n);
+					m_bSuccessful = pTex->RT_CreateDeviceTexture(pNatTex);
+				}
 				m_rdldLock.Unlock();
 			}
 			break;
@@ -2649,12 +2798,6 @@ void SRenderThread::ProcessCommands()
 				ColorF kColor = ReadCommand<ColorF>(n);
 
 				RC_ClearTarget(pkTexture, kColor);
-			}
-			break;
-		case eRC_CreateREPostProcess:
-			{
-				CRendElementBase** pRE = ReadCommand<CRendElementBase**>(n);
-				gRenDev->RT_CreateREPostProcess(pRE);
 			}
 			break;
 
@@ -2787,8 +2930,7 @@ void SRenderThread::ProcessCommands()
 
 				if (m_eVideoThreadMode == eVTM_Disabled)
 				{
-					gRenDev->SetMatrices(ProjMat.GetData(), ViewMat.GetData());
-					gRenDev->m_CameraZeroMatrix[threadId] = CameraZeroMat;
+					gRenDev->SetMatrices(ProjMat.GetData(), ViewMat.GetData(), CameraZeroMat.GetData());
 
 					gRenDev->RT_SetCameraInfo();
 				}
@@ -2868,12 +3010,6 @@ void SRenderThread::ProcessCommands()
 					gRenDev->RT_PrepareStereo(mode, output);
 			}
 			break;
-		case eRC_CopyToStereoTex:
-			{
-				int channel = ReadCommand<int>(n);
-				gRenDev->RT_CopyToStereoTex(channel);
-			}
-			break;
 		case eRC_SetStereoEye:
 			{
 				int eye = ReadCommand<int>(n);
@@ -2893,16 +3029,6 @@ void SRenderThread::ProcessCommands()
 					int nR = passInfo.GetRecursiveLevel();
 					gRenDev->GenerateObjSprites(pRE->m_arrVegetationSprites[nThreadID][nR], passInfo);
 				}
-			}
-			break;
-		case eRC_PreprGenerateCloud:
-			assert(m_eVideoThreadMode == eVTM_Disabled);
-			{
-				CRECloud* pRE = ReadCommand<CRECloud*>(n);
-				CShader* pShader = ReadCommand<CShader*>(n);
-				CShaderResources* pRes = ReadCommand<CShaderResources*>(n);
-				CRenderObject* pObject = ReadCommand<CRenderObject*>(n);
-				pRE->GenerateCloudImposter(pShader, pRes, pObject);
 			}
 			break;
 		case eRC_DynTexUpdate:
@@ -2955,9 +3081,6 @@ void SRenderThread::ProcessCommands()
 		case eRC_PopVP:
 			gRenDev->FX_PopVP();
 			break;
-		case eRC_FlushTextMessages:
-			gRenDev->RT_FlushTextMessages();
-			break;
 		case eRC_FlushTextureStreaming:
 			{
 				bool bAbort = ReadCommand<DWORD>(n) != 0;
@@ -3009,11 +3132,6 @@ void SRenderThread::ProcessCommands()
 				SDynTexture_Shadow::RT_EntityDelete(pRN);
 			}
 			break;
-		case eRC_PreactivateShaders:
-			{
-				CHWShader::RT_PreactivateShaders();
-			}
-			break;
 		case eRC_SubmitWind:
 			{
 				const SWindGrid* pWind = ReadCommand<SWindGrid*>(n);
@@ -3025,10 +3143,9 @@ void SRenderThread::ProcessCommands()
 				CShader* pShader = ReadCommand<CShader*>(n);
 				SShaderCombination cmb = ReadCommand<SShaderCombination>(n);
 				bool bForce = ReadCommand<DWORD>(n) != 0;
-				bool bCompressedOnly = ReadCommand<DWORD>(n) != 0;
 				CShaderResources* pRes = ReadCommand<CShaderResources*>(n);
 
-				pShader->mfPrecache(cmb, bForce, bCompressedOnly, pRes);
+				pShader->mfPrecache(cmb, bForce, pRes);
 
 				SAFE_RELEASE(pRes);
 				pShader->Release();
@@ -3052,7 +3169,8 @@ void SRenderThread::ProcessCommands()
 				float fAnisoScale = ReadCommand<float>(n);
 				if (m_eVideoThreadMode == eVTM_Disabled)
 				{
-					TexBlurAnisotropicVertical(pTex, 1, 8 * max(1.0f - min(fAnisoScale / 100.0f, 1.0f), 0.2f), 1, false);
+					CStandardGraphicsPipeline& gp = gcpRendD3D->GetGraphicsPipeline();
+					gp.ExecuteAnisotropicVerticalBlur(pTex, 1, 8 * max(1.0f - min(fAnisoScale / 100.0f, 1.0f), 0.2f), 1, false);
 				}
 			}
 			break;
@@ -3119,16 +3237,12 @@ void SRenderThread::ProcessCommands()
 			{
 				if (m_eVideoThreadMode == eVTM_Disabled)
 					gRenDev->RT_RenderDebug();
-				else
-				{
-					gRenDev->RT_FlushTextMessages();
-				}
 			}
 			break;
 
 		case eRC_ForceMeshGC:
 			if (m_eVideoThreadMode == eVTM_Disabled)
-				CRenderMesh::Tick();
+				CRenderMesh::Tick(MAX_RELEASED_MESH_FRAMES);
 			break;
 
 		case eRC_DevBufferSync:
@@ -3313,14 +3427,14 @@ void SRenderThread::Process()
 		const uint64 elapsed = CryGetTicks() - start;
 		gEnv->pSystem->GetCurrentUpdateTimeStats().RenderTime = elapsed;
 	}
-#if defined(OPENGL) && !DXGL_FULL_EMULATION
-	#if CRY_OPENGL_SINGLE_CONTEXT
+#if CRY_RENDERER_OPENGL && !DXGL_FULL_EMULATION
+	#if OGL_SINGLE_CONTEXT
 	m_kDXGLDeviceContextHandle.Set(NULL);
 	#else
 	m_kDXGLDeviceContextHandle.Set(NULL, !CRenderer::CV_r_multithreaded);
 	m_kDXGLContextHandle.Set(NULL);
 	#endif
-#endif //defined(OPENGL) && !DXGL_FULL_EMULATION
+#endif //CRY_RENDERER_OPENGL && !DXGL_FULL_EMULATION
 }
 
 void SRenderThread::ProcessLoading()
@@ -3350,14 +3464,14 @@ void SRenderThread::ProcessLoading()
 			SwitchMode(false);
 		}
 	}
-#if defined(OPENGL) && !DXGL_FULL_EMULATION
-	#if CRY_OPENGL_SINGLE_CONTEXT
+#if CRY_RENDERER_OPENGL && !DXGL_FULL_EMULATION
+	#if OGL_SINGLE_CONTEXT
 	m_kDXGLDeviceContextHandle.Set(NULL);
 	#else
 	m_kDXGLDeviceContextHandle.Set(NULL, !CRenderer::CV_r_multithreaded);
 	m_kDXGLContextHandle.Set(NULL);
 	#endif
-#endif //defined(OPENGL) && !DXGL_FULL_EMULATION
+#endif //CRY_RENDERER_OPENGL && !DXGL_FULL_EMULATION
 }
 
 #ifndef STRIP_RENDER_THREAD
@@ -3427,13 +3541,9 @@ void SRenderThread::SyncMainWithRender()
 
 	//gRenDev->m_RP.m_pCurrentRenderView->PrepareForRendering();
 
-	IGameFramework* pGameFramework = gEnv->pGame ? gEnv->pGame->GetIGameFramework() : NULL;
-	if (pGameFramework && !pGameFramework->IsGamePaused())
+	if (gEnv->pCharacterManager && gEnv->pGameFramework && !gEnv->pGameFramework->IsGamePaused())
 	{
-		if (gEnv->pCharacterManager)
-		{
-			gEnv->pCharacterManager->UpdateRendererFrame();
-		}
+		gEnv->pCharacterManager->UpdateRendererFrame();
 	}
 
 	SignalFlushCond();

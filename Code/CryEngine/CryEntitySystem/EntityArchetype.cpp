@@ -18,7 +18,6 @@
 #include "ScriptProperties.h"
 #include <CryString/CryPath.h>
 #include "EntitySystem.h"
-#include "EntityAttributesProxy.h"
 
 #define ENTITY_ARCHETYPES_LIBS_PATH "/Libs/EntityArchetypes/"
 
@@ -30,7 +29,7 @@ CEntityArchetype::CEntityArchetype(IEntityClass* pClass)
 	m_pClass = pClass;
 
 	// Try to load the script if it is not yet valid.
-	if (CEntityScript* pScript = (CEntityScript*)m_pClass->GetIEntityScript())
+	if (CEntityScript* pScript = static_cast<CEntityScript*>(m_pClass->GetIEntityScript()))
 	{
 		pScript->LoadScript();
 
@@ -40,19 +39,13 @@ CEntityArchetype::CEntityArchetype(IEntityClass* pClass)
 			m_pProperties->Clone(pScript->GetPropertiesTable(), true, true);
 		}
 	}
-
-	// Get the attributes from the base class desc
-	EntityAttributeUtils::CloneAttributes(m_pClass->GetEntityAttributes(), m_attributes);
 }
 
 //////////////////////////////////////////////////////////////////////////
 void CEntityArchetype::LoadFromXML(XmlNodeRef& propertiesNode, XmlNodeRef& objectVarsNode)
 {
-	if (IEntityPropertyHandler* pPropertyHandler = m_pClass->GetPropertyHandler())
-	{
-		pPropertyHandler->LoadArchetypeXMLProperties(m_name, propertiesNode);
-	}
-	else
+	// Lua specific behavior
+	if (m_pClass->GetScriptTable() != nullptr)
 	{
 		m_ObjectVars = objectVarsNode->clone();
 
@@ -99,29 +92,27 @@ void CEntityArchetype::LoadFromXML(XmlNodeRef& propertiesNode, XmlNodeRef& objec
 	}
 }
 
-void CEntityArchetype::LoadEntityAttributesFromXML(const XmlNodeRef& entityAttributes)
+//////////////////////////////////////////////////////////////////////////
+CEntityArchetypeManager::CEntityArchetypeManager()
+	: m_pEntityArchetypeManagerExtension(nullptr)
 {
-	// Read the entity attributes
-	SEntityAttributesSerializer entityAttributesReader(m_attributes);
-	Serialization::LoadXmlNode(entityAttributesReader, entityAttributes);
-}
-
-void CEntityArchetype::SaveEntityAttributesToXML(XmlNodeRef& entityAttributes)
-{
-	// Read the entity attributes
-	SEntityAttributesSerializer entityAttributesReader(m_attributes);
-	Serialization::SaveXmlNode(entityAttributes, entityAttributesReader);
 }
 
 //////////////////////////////////////////////////////////////////////////
 IEntityArchetype* CEntityArchetypeManager::CreateArchetype(IEntityClass* pClass, const char* sArchetype)
 {
 	CEntityArchetype* pArchetype = stl::find_in_map(m_nameToArchetypeMap, sArchetype, NULL);
-	if (pArchetype && stricmp(pClass->GetName(), pArchetype->GetName()) == 0)
+	if (pArchetype)
 		return pArchetype;
 	pArchetype = new CEntityArchetype((CEntityClass*)pClass);
 	pArchetype->SetName(sArchetype);
 	m_nameToArchetypeMap[pArchetype->GetName()] = pArchetype;
+
+	if (m_pEntityArchetypeManagerExtension)
+	{
+		m_pEntityArchetypeManagerExtension->OnArchetypeAdded(*pArchetype);
+	}
+
 	return pArchetype;
 }
 
@@ -158,6 +149,11 @@ void CEntityArchetypeManager::UnloadArchetype(const char* sArchetype)
 	ArchetypesNameMap::iterator it = m_nameToArchetypeMap.find(sArchetype);
 	if (it != m_nameToArchetypeMap.end())
 	{
+		if (m_pEntityArchetypeManagerExtension)
+		{
+			m_pEntityArchetypeManagerExtension->OnArchetypeRemoved(*it->second);
+		}
+
 		m_nameToArchetypeMap.erase(it);
 	}
 }
@@ -166,6 +162,11 @@ void CEntityArchetypeManager::UnloadArchetype(const char* sArchetype)
 void CEntityArchetypeManager::Reset()
 {
 	MEMSTAT_LABEL_SCOPED("CEntityArchetypeManager::Reset");
+
+	if (m_pEntityArchetypeManagerExtension)
+	{
+		m_pEntityArchetypeManagerExtension->OnAllArchetypesRemoved();
+	}
 
 	m_nameToArchetypeMap.clear();
 	DynArray<string>().swap(m_loadedLibs);
@@ -230,8 +231,10 @@ bool CEntityArchetypeManager::LoadLibrary(const string& library)
 				pArchetype->LoadFromXML(props, objVars);
 			}
 
-			XmlNodeRef attributes = node->findChild("Attributes");
-			pArchetype->LoadEntityAttributesFromXML(attributes);
+			if (m_pEntityArchetypeManagerExtension)
+			{
+				m_pEntityArchetypeManagerExtension->LoadFromXML(*pArchetype, node);
+			}
 		}
 	}
 
@@ -239,4 +242,16 @@ bool CEntityArchetypeManager::LoadLibrary(const string& library)
 	m_loadedLibs.push_back(library);
 
 	return true;
+}
+
+//////////////////////////////////////////////////////////////////////////
+void CEntityArchetypeManager::SetEntityArchetypeManagerExtension(IEntityArchetypeManagerExtension* pEntityArchetypeManagerExtension)
+{
+	m_pEntityArchetypeManagerExtension = pEntityArchetypeManagerExtension;
+}
+
+//////////////////////////////////////////////////////////////////////////
+IEntityArchetypeManagerExtension* CEntityArchetypeManager::GetEntityArchetypeManagerExtension() const
+{
+	return m_pEntityArchetypeManagerExtension;
 }

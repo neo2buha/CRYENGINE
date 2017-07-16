@@ -21,6 +21,8 @@
 
 #include "Effects/GameEffects/SceneBlurGameEffect.h"
 
+#include <IPerceptionManager.h>
+
 #ifndef _RELEASE
 #include "GameCVars.h"
 #include <CryRenderer/IRenderAuxGeom.h>
@@ -54,7 +56,7 @@ CSmokeManager::CSmokeManager()
 	, m_clientInSmoke(false)
 	, m_loadedParticleEffects(false)
 {
-	std::memset(PRFETCH_PADDING, 0, sizeof(PRFETCH_PADDING));
+	memset(PRFETCH_PADDING, 0, sizeof(PRFETCH_PADDING));
 	Init();
 }
 
@@ -438,7 +440,7 @@ void CSmokeManager::CreateNewSmokeInstance(EntityId grenadeId, EntityId grenadeO
 	{
 		CreateSmokeObstructionObject(newSmokeInstance);
 
-		if (gEnv->pAISystem)
+		if (IPerceptionManager::GetInstance())
 		{
 			// Associate event with vehicle if the shooter is in a vehicle (tank cannon shot, etc)
 			EntityId ownerId = grenadeId;
@@ -450,7 +452,7 @@ void CSmokeManager::CreateNewSmokeInstance(EntityId grenadeId, EntityId grenadeO
 			}
 
 			SAIStimulus stim(AISTIM_GRENADE, AIGRENADE_SMOKE, ownerId, grenadeId, newSmokeInstance.vPositon, ZERO, kMaxSmokeRadius*1.5f);
-			gEnv->pAISystem->RegisterStimulus(stim);
+			IPerceptionManager::GetInstance()->RegisterStimulus(stim);
 		}
 	}
 }
@@ -642,7 +644,7 @@ void CSmokeManager::DrawSmokeDebugSpheres()
 
 		// Draw blur amount to screen
 		ColorF textCol(0.0f,1.0f,0.0f,1.0f);
-		gEnv->pRenderer->Draw2dLabel(50.0f,20.0f,1.4f,&textCol.r,false,"Client Blur Amount: %f",m_clientBlurAmount);
+		IRenderAuxText::Draw2dLabel(50.0f,20.0f,1.4f,&textCol.r,false,"Client Blur Amount: %f",m_clientBlurAmount);
 	}
 }
 #endif

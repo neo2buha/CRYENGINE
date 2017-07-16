@@ -34,7 +34,6 @@
 #include <CryScriptSystem/IScriptSystem.h>
 #include <CrySystem/IProcess.h>
 #include <CrySystem/IBudgetingSystem.h>
-#include <CryGame/IGame.h>
 #include <CryGame/IGameFramework.h>
 #include <CryNetwork/INotificationNetwork.h>
 #include <CrySystem/ICodeCheckpointMgr.h>
@@ -43,10 +42,10 @@
 #include <CryDynamicResponseSystem/IDynamicResponseSystem.h>
 #include <Cry3DEngine/ITimeOfDay.h>
 #include <CryMono/IMonoRuntime.h>
+#include <CrySchematyc/ICore.h>
 
 #include "CryPak.h"
 #include "XConsole.h"
-#include "Log.h"
 #include "CrySizerStats.h"
 #include "CrySizerImpl.h"
 #include "NotificationNetwork.h"
@@ -90,6 +89,12 @@
 #include <CryString/StringUtils.h>
 #include <CrySystem/Scaleform/IFlashUI.h>
 #include "CryWaterMark.h"
+
+#include "ExtensionSystem/CryPluginManager.h"
+#include "ProjectManager/ProjectManager.h"
+
+#include "DebugCallStack.h"
+
 WATERMARKDATA(_m);
 
 #if USE_STEAM
@@ -102,9 +107,15 @@ WATERMARKDATA(_m);
 
 #include "HMDManager.h"
 
+<<<<<<< HEAD
 #include <ILevelSystem.h>
+=======
+#include <../CryAction/ILevelSystem.h>
+#include <../CryAction/IViewSystem.h>
+>>>>>>> upstream/stabilisation
 
 #include <CryCore/CrtDebugStats.h>
+#include "Interprocess/StatsAgent.h"
 
 // Define global cvars.
 SSystemCVars g_cvars;
@@ -122,8 +133,11 @@ CMTSafeHeap* g_pPakHeap = 0;// = &g_pakHeap;
 //////////////////////////////////////////////////////////////////////////
 #include "Validator.h"
 
+<<<<<<< HEAD
 #include "IViewSystem.h"
 
+=======
+>>>>>>> upstream/stabilisation
 #if CRY_PLATFORM_ANDROID
 namespace
 {
@@ -196,12 +210,14 @@ struct SCVarsWhitelistConfigSink : public ILoadConfigurationEntrySink
 /////////////////////////////////////////////////////////////////////////////////
 // System Implementation.
 //////////////////////////////////////////////////////////////////////////
-CSystem::CSystem()
+CSystem::CSystem(const SSystemInitParams& startupParams)
+	:
 #if defined(SYS_ENV_AS_STRUCT)
-	: m_env(gEnv)
+	m_env(gEnv),
 #endif
+	m_startupParams(startupParams)
 {
-	m_systemGlobalState = ESYSTEM_GLOBAL_STATE_UNKNOWN;
+	m_systemGlobalState = ESYSTEM_GLOBAL_STATE_INIT;
 	m_iHeight = 0;
 	m_iWidth = 0;
 	m_iColorBits = 0;
@@ -213,11 +229,10 @@ CSystem::CSystem()
 
 	if (m_pSystemEventDispatcher)
 	{
-		m_pSystemEventDispatcher->RegisterListener(this);
+		m_pSystemEventDispatcher->RegisterListener(this, "CSystem");
 	}
 
 #if CRY_PLATFORM_WINDOWS
-	m_hInst = NULL;
 	m_hWnd = NULL;
 	#if _MSC_VER < 1000
 	int sbh = _set_sbh_threshold(1016);
@@ -251,6 +266,8 @@ CSystem::CSystem()
 	m_env.bNoAssertDialog = false;
 	m_env.bTesting = false;
 
+	m_env.pGameFramework = startupParams.pGameFramework;
+
 #if CRY_PLATFORM_DURANGO
 	m_env.ePLM_State = EPLM_UNDEFINED;
 #endif
@@ -268,6 +285,8 @@ CSystem::CSystem()
 #endif
 	//////////////////////////////////////////////////////////////////////////
 
+	m_randomGenerator.SetState(m_Time.GetAsyncTime().GetMicroSecondsAsInt64());
+
 	m_pStreamEngine = NULL;
 	m_PhysThread = 0;
 
@@ -282,9 +301,11 @@ CSystem::CSystem()
 	m_rStencilBits = NULL;
 	m_rFullscreen = NULL;
 	m_rDriver = NULL;
+	m_pPhysicsLibrary = NULL;
 	m_sysNoUpdate = NULL;
 	m_pMemoryManager = NULL;
 	m_pProcess = NULL;
+	m_pMtState = NULL;
 
 	m_pValidator = NULL;
 	m_pCmdLine = NULL;
@@ -334,17 +355,16 @@ CSystem::CSystem()
 	m_sys_firstlaunch = NULL;
 	m_sys_enable_budgetmonitoring = NULL;
 	m_sys_preload = NULL;
+	m_sys_use_Mono = nullptr;
 
 	//	m_sys_filecache = NULL;
 	m_gpu_particle_physics = NULL;
 	m_pCpu = NULL;
-	m_sys_game_folder = NULL;
 
 	m_bQuit = false;
 	m_bShaderCacheGenMode = false;
 	m_bRelaunch = false;
 	m_iLoadingMode = 0;
-	m_bTestMode = false;
 	m_bEditor = false;
 	m_bPreviewMode = false;
 	m_bIgnoreUpdates = false;
@@ -388,7 +408,9 @@ CSystem::CSystem()
 
 	m_pXMLUtils = new CXmlUtils(this);
 	m_pArchiveHost = Serialization::CreateArchiveHost();
-	m_pTestSystem = new CTestSystemLegacy;
+
+	m_pTestSystem = stl::make_unique<CTestSystemLegacy>(this);
+
 	m_pMemoryManager = CryGetIMemoryManager();
 	m_pResourceManager = new CResourceManager;
 	m_pTextModeConsole = NULL;
@@ -396,10 +418,15 @@ CSystem::CSystem()
 	m_pDiskProfiler = NULL;
 
 #if defined(ENABLE_LOADING_PROFILER)
-	CBootProfiler::GetInstance().Init(this);
+	if (!startupParams.bShaderCacheGen)
+	{
+		CBootProfiler::GetInstance().Init(this);
+	}
 #endif
 
 	InitThreadSystem();
+
+	LOADING_TIME_PROFILE_SECTION_NAMED("CSystem Boot");
 
 	m_pMiniGUI = NULL;
 	m_pPerfHUD = NULL;
@@ -421,13 +448,15 @@ CSystem::CSystem()
 
 	m_PlatformOSCreateFlags = 0;
 
-	m_eRuntimeState = ESYSTEM_EVENT_LEVEL_UNLOAD;
-
 	m_bHasRenderedErrorMessage = false;
 	m_bIsSteamInitialized = false;
 
 	m_pImeManager = NULL;
 	RegisterWindowMessageHandler(this);
+
+	m_pPluginManager = new CCryPluginManager(startupParams);
+
+	m_pUserAnalyticsSystem = new CUserAnalyticsSystem();
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -438,7 +467,6 @@ CSystem::~CSystem()
 
 	SAFE_DELETE(m_pImeManager);
 	UnregisterWindowMessageHandler(this);
-	CRY_ASSERT(m_windowMessageHandlers.empty() && "There exists a dangling window message handler somewhere");
 
 	FreeLib(m_dll.hNetwork);
 	FreeLib(m_dll.hAI);
@@ -472,6 +500,8 @@ CSystem::~CSystem()
 
 	SAFE_DELETE(g_pPakHeap);
 
+	m_pTestSystem.reset();
+
 	m_env.pSystem = 0;
 #if !defined(SYS_ENV_AS_STRUCT)
 	gEnv = 0;
@@ -479,6 +509,10 @@ CSystem::~CSystem()
 
 	// The FrameProfileSystem should clean up as late as possible as some modules create profilers during shutdown!
 	m_FrameProfileSystem.Done();
+
+#if CRY_PLATFORM_WINDOWS
+	((DebugCallStack*)IDebugCallStack::instance())->uninstallErrorHandler();
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -543,12 +577,24 @@ void CSystem::ShutDown()
 	CLoadingProfilerSystem::ShutDown();
 #endif
 
+	if (m_pSystemEventDispatcher)
+	{
+		m_pSystemEventDispatcher->RemoveListener(this);
+	}
+
 	if (m_pUserCallback)
 		m_pUserCallback->OnShutdown();
 
 	GetIRemoteConsole()->Stop();
 
 	SAFE_DELETE(m_pTextModeConsole);
+
+	//////////////////////////////////////////////////////////////////////////
+	// Interprocess Communication
+	//////////////////////////////////////////////////////////////////////////
+#if defined(ENABLE_STATS_AGENT)
+	CStatsAgent::ClosePipe();
+#endif
 
 	KillPhysicsThread();
 
@@ -590,17 +636,8 @@ void CSystem::ShutDown()
 				m_env.pNetwork->FastShutdown();
 			}
 
-			//@TODO: release game.
-			//SAFE_RELEASE(m_env.pGame);
-			//FreeLib(m_dll.hGame);
-
 			SAFE_RELEASE(m_env.pRenderer);
 			FreeLib(m_dll.hRenderer);
-
-			if (m_env.pGame != NULL)
-			{
-				m_env.pGame->Shutdown();
-			}
 
 			// Shut down audio as late as possible but before the console gets released!
 			SAFE_RELEASE(m_env.pAudioSystem);
@@ -609,6 +646,10 @@ void CSystem::ShutDown()
 			SAFE_RELEASE(m_env.pProfileLogSystem);
 			m_env.pLog->FlushAndClose();
 			SAFE_RELEASE(m_env.pLog);   // creates log backup
+
+	#if CRY_PLATFORM_WINDOWS
+			((DebugCallStack*)IDebugCallStack::instance())->uninstallErrorHandler();
+	#endif
 
 	#if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID
 			return; //safe clean return
@@ -632,14 +673,27 @@ void CSystem::ShutDown()
 	//////////////////////////////////////////////////////////////////////////
 	if (m_env.pEntitySystem)
 		m_env.pEntitySystem->Unload();
-	//@TODO: Release game.
-	//SAFE_RELEASE(m_env.pGame);
+
 	if (m_env.pPhysicalWorld)
 	{
 		m_env.pPhysicalWorld->SetPhysicsStreamer(0);
 		m_env.pPhysicalWorld->SetPhysicsEventClient(0);
 	}
 
+<<<<<<< HEAD
+=======
+	UnloadEngineModule("CryFlowGraph");
+	SAFE_DELETE(m_pPluginManager);
+
+	if (gEnv->pMonoRuntime != nullptr)
+	{
+		gEnv->pMonoRuntime->Shutdown();
+	}
+
+	SAFE_DELETE(m_pUserAnalyticsSystem);
+	UnloadEngineModule(m_sys_dll_response_system->GetString());
+
+>>>>>>> upstream/stabilisation
 #if defined(INCLUDE_SCALEFORM_SDK) || defined(CRY_FEATURE_SCALEFORM_HELPER)
 	if (m_env.pRenderer)
 		m_env.pRenderer->FlushRTCommands(true, true, true);
@@ -664,23 +718,31 @@ void CSystem::ShutDown()
 	SAFE_DELETE(m_env.pLiveCreateHost);
 	SAFE_DELETE(m_env.pLiveCreateManager);
 	SAFE_RELEASE(m_env.pHardwareMouse);
-	SAFE_RELEASE(m_env.pMovieSystem);
+	UnloadEngineModule("CryMovie");
 	SAFE_DELETE(m_env.pServiceNetwork);
-	SAFE_RELEASE(m_env.pAISystem);
-	SAFE_RELEASE(m_env.pCryFont);
-	SAFE_RELEASE(m_env.pNetwork);
-	SAFE_DELETE(m_env.pLobby);
+	UnloadEngineModule("CryAISystem");
+	UnloadEngineModule("CryFont");
+	UnloadEngineModule("CryNetwork");
+	UnloadEngineModule("CryLobby");
 	//	SAFE_RELEASE(m_env.pCharacterManager);
-	SAFE_RELEASE(m_env.p3DEngine); // depends on EntitySystem
-	SAFE_RELEASE(m_env.pEntitySystem);
-	SAFE_RELEASE(m_env.pPhysicalWorld);
+	UnloadEngineModule("CryAnimation");
+	UnloadEngineModule("Cry3DEngine"); // depends on EntitySystem
+	UnloadEngineModule("CrySchematyc");
+	UnloadEngineModule("CryEntitySystem");
+
+	SAFE_DELETE(m_pPhysRenderer); // Must be destroyed before unloading CryPhysics as it holds memory that was allocated by that module
+	UnloadEngineModule("CryPhysics");
 	if (m_env.pConsole)
 		((CXConsole*)m_env.pConsole)->FreeRenderResources();
 	SAFE_RELEASE(m_pIZLibCompressor);
 	SAFE_RELEASE(m_pIZLibDecompressor);
 	SAFE_RELEASE(m_pILZ4Decompressor);
 	SAFE_RELEASE(m_pIBudgetingSystem);
+
 	SAFE_RELEASE(m_env.pRenderer);
+
+	auto r_driver = m_env.pConsole->GetCVar("r_driver")->GetString();
+	CloseRenderLibrary(r_driver);
 
 	SAFE_RELEASE(m_env.pCodeCheckpointMgr);
 
@@ -700,6 +762,7 @@ void CSystem::ShutDown()
 	SAFE_RELEASE(m_rStencilBits);
 	SAFE_RELEASE(m_rFullscreen);
 	SAFE_RELEASE(m_rDriver);
+	SAFE_RELEASE(m_pPhysicsLibrary);
 
 	SAFE_RELEASE(m_sysWarnings);
 	SAFE_RELEASE(m_sysKeyboard);
@@ -734,14 +797,13 @@ void CSystem::ShutDown()
 		m_env.pInput->ShutDown();
 		m_env.pInput = NULL;
 	}
+	UnloadEngineModule("CryInput");
 
 	SAFE_RELEASE(m_pNotificationNetwork);
-	SAFE_RELEASE(m_env.pScriptSystem);
+	UnloadEngineModule("CryScriptSystem");
 
 	SAFE_DELETE(m_pMemStats);
 	SAFE_DELETE(m_pSizer);
-
-	SAFE_DELETE(m_pPhysRenderer);
 
 	SAFE_DELETE(m_env.pOverloadSceneManager);
 
@@ -766,11 +828,13 @@ void CSystem::ShutDown()
 
 	SAFE_DELETE(m_pCpu);
 
-	delete m_pCmdLine;
-	m_pCmdLine = 0;
+	SAFE_DELETE(m_pCmdLine);
 
 	// Shut down audio as late as possible but before the streaming system and console get released!
 	SAFE_RELEASE(m_env.pAudioSystem);
+	UnloadEngineModule("CryAudioSystem");
+
+	SAFE_DELETE(m_pProjectManager);
 
 	// Shut down the CryPak system after audio!
 	SAFE_DELETE(m_env.pCryPak);
@@ -816,7 +880,7 @@ void CSystem::Quit()
 	if (GetIRenderer())
 		GetIRenderer()->RestoreGamma();
 
-	if ((m_pCVarQuit && m_pCVarQuit->GetIVal() != 0) || m_bTestMode)
+	if (m_pCVarQuit && m_pCVarQuit->GetIVal() != 0)
 	{
 		// Dispatch the fast-shutdown event so other systems can do any last minute processing.
 		if (m_pSystemEventDispatcher != NULL)
@@ -824,20 +888,11 @@ void CSystem::Quit()
 			m_pSystemEventDispatcher->OnSystemEvent(ESYSTEM_EVENT_FAST_SHUTDOWN, 0, 0);
 		}
 
-		//Ensure that the load ticker is not currently running. It can perform tasks on the network systems while they're being shut down
-		if (m_env.pGame && m_env.pGame->GetIGameFramework())
-		{
-			m_env.pGame->GetIGameFramework()->StopNetworkStallTicker();
-		}
-
 		if (m_env.pNetwork)
 			m_env.pNetwork->FastShutdown();
 
 		// HACK! to save cvars on quit.
 		SaveConfiguration();
-
-		if (m_env.pGame)
-			m_env.pGame->Shutdown();
 
 		if (gEnv->pFlashUI)
 			gEnv->pFlashUI->Shutdown();
@@ -997,7 +1052,7 @@ public:
 #ifdef ENABLE_LW_PROFILERS
 				QueryPerformanceCounter(&stepStart);
 #endif
-				IGameFramework* pIGameFramework = gEnv->pGame->GetIGameFramework();
+				IGameFramework* pIGameFramework = gEnv->pGameFramework;
 				while ((step = m_stepRequested) > 0 || m_doZeroStep)
 				{
 					stepped = true;
@@ -1132,7 +1187,6 @@ void CSystem::CreatePhysicsThread()
 {
 	if (!m_PhysThread)
 	{
-		ScopedSwitchToGlobalHeap globalHeap;
 		m_PhysThread = new CPhysicsThreadTask;
 		if (!gEnv->pThreadManager->SpawnThread(m_PhysThread, "Physics"))
 		{
@@ -1143,7 +1197,7 @@ void CSystem::CreatePhysicsThread()
 	if (g_cvars.sys_limit_phys_thread_count)
 	{
 		PhysicsVars* pVars = gEnv->pPhysicalWorld->GetPhysVars();
-		pVars->numThreads = max(1, min(pVars->numThreads, (int)m_pCpu->GetPhysCPUCount() - 1));
+		pVars->numThreads = max(1, min(pVars->numThreads, (int)m_pCpu->GetLogicalCPUCount() - 1));
 	}
 }
 
@@ -1179,6 +1233,7 @@ int CSystem::SetThreadState(ESubsystem subsys, bool bActive)
 //////////////////////////////////////////////////////////////////////////
 void CSystem::SleepIfInactive()
 {
+	LOADING_TIME_PROFILE_SECTION;
 #if !defined(_RELEASE) || defined(PERFORMANCE_BUILD)
 	// Disable throttling, when various Profilers are in use
 
@@ -1219,10 +1274,10 @@ void CSystem::SleepIfInactive()
 		{
 			PumpWindowMessage(true, m_hWnd);
 		}
-		if (gEnv->pGame && gEnv->pGame->GetIGameFramework())
+		if (gEnv->pGameFramework)
 		{
 			// During the time demo, do not sleep even in inactive window.
-			if (gEnv->pGame->GetIGameFramework()->IsInTimeDemo())
+			if (gEnv->pGameFramework->IsInTimeDemo())
 				break;
 		}
 		Sleep(5);
@@ -1233,48 +1288,68 @@ void CSystem::SleepIfInactive()
 //////////////////////////////////////////////////////////////////////////
 void CSystem::SleepIfNeeded()
 {
-	FUNCTION_PROFILER(this, PROFILE_SYSTEM);
+	LOADING_TIME_PROFILE_SECTION;
+	CRY_PROFILE_FUNCTION(PROFILE_SYSTEM)
 
-	ITimer* const pTimer = gEnv->pTimer;
-	static bool firstCall = true;
+	static ICVar * pSysMaxFPS = NULL;
+	static ICVar* pVSync = NULL;
 
-	typedef MiniQueue<CTimeValue, 32> PrevNow;
-	static PrevNow prevNow;
-	if (firstCall)
+	if (pSysMaxFPS == NULL && gEnv && gEnv->pConsole)
+		pSysMaxFPS = gEnv->pConsole->GetCVar("sys_MaxFPS");
+	if (pVSync == NULL && gEnv && gEnv->pConsole)
+		pVSync = gEnv->pConsole->GetCVar("r_Vsync");
+
+	int32 maxFPS = 0;
+
+	if (m_bDedicatedServer)
 	{
-		m_lastTickTime = pTimer->GetAsyncTime();
-		prevNow.Push(m_lastTickTime);
-		firstCall = false;
-		return;
+		const float maxRate = m_svDedicatedMaxRate->GetFVal();
+		maxFPS = int32(maxRate);
+	}
+	else
+	{
+		if (pSysMaxFPS && pVSync)
+		{
+			uint32 vSync = pVSync->GetIVal();
+			if (vSync == 0)
+			{
+				maxFPS = pSysMaxFPS->GetIVal();
+				if (maxFPS == 0)
+				{
+					const bool bInLoading = (ESYSTEM_GLOBAL_STATE_RUNNING != m_systemGlobalState);
+					if (bInLoading || IsPaused())
+					{
+						maxFPS = 60;
+					}
+				}
+			}
+		}
 	}
 
-	const float maxRate = m_svDedicatedMaxRate->GetFVal();
-	const float minTime = 1.0f / maxRate;
-	CTimeValue now = pTimer->GetAsyncTime();
-	float elapsed = (now - m_lastTickTime).GetSeconds();
-
-	if (prevNow.Full())
-		prevNow.Pop();
-	prevNow.Push(now);
-
-	static bool allowStallCatchup = true;
-	if (elapsed > minTime && allowStallCatchup)
+	if (maxFPS > 0)
 	{
-		allowStallCatchup = false;
+		const int64 safeMarginMS = 5; // microseconds
+		const int64 thresholdMs = (1000 * 1000) / (maxFPS);
+
+		ITimer* pTimer = gEnv->pTimer;
+		static int64 sTimeLast = pTimer->GetAsyncTime().GetMicroSecondsAsInt64();
+		int64 currentTime = pTimer->GetAsyncTime().GetMicroSecondsAsInt64();
+		for (;; )
+		{
+			const int64 frameTime = currentTime - sTimeLast;
+			if (frameTime >= thresholdMs)
+				break;
+			if (thresholdMs - frameTime > 10 * 1000)
+				CrySleep(1);
+			else
+				CrySleep(0);
+
+			currentTime = pTimer->GetAsyncTime().GetMicroSecondsAsInt64();
+		}
+
 		m_lastTickTime = pTimer->GetAsyncTime();
-		return;
+		sTimeLast = m_lastTickTime.GetMicroSecondsAsInt64() + safeMarginMS;
 	}
-	allowStallCatchup = true;
-
-	float totalElapsed = (now - prevNow.Front()).GetSeconds();
-	float wantSleepTime = CLAMP(minTime * (prevNow.Size() - 1) - totalElapsed, 0, (minTime - elapsed) * 0.9f);
-	static float sleepTime = 0;
-	sleepTime = (15 * sleepTime + wantSleepTime) / 16;
-	int sleepMS = (int)(1000.0f * sleepTime + 0.5f);
-	if (sleepMS > 0)
-		Sleep(sleepMS);
-
-	m_lastTickTime = pTimer->GetAsyncTime();
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -1377,8 +1452,35 @@ extern int g_nDebugThreads;
 int prev_sys_float_exceptions = -1;
 
 //////////////////////////////////////////////////////////////////////
+void CSystem::PrePhysicsUpdate()
+{
+	if (m_env.pGameFramework)
+	{
+		m_env.pGameFramework->PrePhysicsUpdate();
+	}
+
+	if (m_pPluginManager)
+	{
+		m_pPluginManager->Update(IPluginUpdateListener::EUpdateType_PrePhysicsUpdate);
+	}
+
+	//////////////////////////////////////////////////////////////////////
+	//update entity system
+	if (m_env.pEntitySystem && g_cvars.sys_entitysystem)
+	{
+		if (gEnv->pSchematyc != nullptr)
+		{
+			gEnv->pSchematyc->PrePhysicsUpdate();
+		}
+
+		m_env.pEntitySystem->PrePhysicsUpdate();
+	}
+}
+
+//////////////////////////////////////////////////////////////////////
 bool CSystem::Update(int updateFlags, int nPauseMode)
 {
+	LOADING_TIME_PROFILE_SECTION;
 	CRY_PROFILE_REGION(PROFILE_SYSTEM, "System: Update");
 	CRYPROFILE_SCOPE_PROFILE_MARKER("CSystem::Update()");
 
@@ -1388,8 +1490,6 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 	{
 	#if defined(MAP_LOADING_SLICING)
 		gEnv->pSystemScheduler->SchedulingSleepIfNeeded();
-	#else
-		SleepIfNeeded();
 	#endif // defined(MAP_LOADING_SLICING)
 	}
 #endif //EXCLUDE_UPDATE_ON_CONSOLE
@@ -1515,13 +1615,6 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 	else
 		m_bPaused = false;
 
-	if (m_env.pGame)
-	{
-		//bool bDevMode = m_env.pGame->GetModuleState( EGameDevMode );
-		//if (bDevMode != m_bInDevMode)
-		//SetDevMode(bDevMode);
-	}
-
 #if CRY_PLATFORM_WINDOWS
 	if (m_bInDevMode && g_cvars.sys_vtune != 0)
 	{
@@ -1556,8 +1649,20 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 	if (m_bIgnoreUpdates)
 		return true;
 #endif //EXCLUDE_UPDATE_ON_CONSOLE
+
+	const bool bNotLoading = !IsLoading();
+
 	if (m_env.pCharacterManager)
-		m_env.pCharacterManager->Update(nPauseMode != 0);
+	{
+		if (bNotLoading)
+		{
+			m_env.pCharacterManager->Update(nPauseMode != 0);
+		}
+		else
+		{
+			m_env.pCharacterManager->DummyUpdate();
+		}
+	}
 
 	//static bool sbPause = false;
 	//bool bPause = false;
@@ -1594,52 +1699,12 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 	}
 #endif
 
-	//limit frame rate if vsync is turned off
-	//for consoles this is done inside renderthread to be vsync dependent
-	{
-		FRAME_PROFILER("FRAME_CAP", gEnv->pSystem, PROFILE_SYSTEM);
-		static ICVar* pSysMaxFPS = NULL;
-		static ICVar* pVSync = NULL;
-
-		if (pSysMaxFPS == NULL && gEnv && gEnv->pConsole)
-			pSysMaxFPS = gEnv->pConsole->GetCVar("sys_MaxFPS");
-		if (pVSync == NULL && gEnv && gEnv->pConsole)
-			pVSync = gEnv->pConsole->GetCVar("r_Vsync");
-
-		if (pSysMaxFPS && pVSync)
-		{
-			int32 maxFPS = pSysMaxFPS->GetIVal();
-			uint32 vSync = pVSync->GetIVal();
-
-			if (maxFPS == 0 && vSync == 0)
-			{
-				IGameFramework* pGameFrm = m_env.pGame ? m_env.pGame->GetIGameFramework() : 0;
-				ILevelSystem* pLvlSys = pGameFrm ? pGameFrm->GetILevelSystem() : 0;
-				const bool inLevel = pLvlSys && pLvlSys->GetCurrentLevel() != 0;
-				maxFPS = !inLevel || IsPaused() ? 60 : 0;
-			}
-
-			if (maxFPS > 0 && vSync == 0)
-			{
-				CTimeValue timeFrameMax;
-				const float safeMarginFPS = 0.5f;//save margin to not drop below 30 fps
-				static CTimeValue sTimeLast = gEnv->pTimer->GetAsyncTime();
-				timeFrameMax.SetMilliSeconds((int64)(1000.f / ((float)maxFPS + safeMarginFPS)));
-				const CTimeValue timeLast = timeFrameMax + sTimeLast;
-				while (timeLast.GetValue() > gEnv->pTimer->GetAsyncTime().GetValue())
-				{
-					CrySleep(0);
-				}
-				sTimeLast = gEnv->pTimer->GetAsyncTime();
-			}
-		}
-	}
-
 	//////////////////////////////////////////////////////////////////////
 	//update time subsystem
 	m_Time.UpdateOnFrameStart();
 
-	if (m_env.p3DEngine)
+	// Don't do a thing if we're not in a level
+	if (m_env.p3DEngine && bNotLoading)
 		m_env.p3DEngine->OnFrameStart();
 
 	//////////////////////////////////////////////////////////////////////
@@ -1656,7 +1721,7 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 
 	//////////////////////////////////////////////////////////////////////////
 	// Update script system.
-	if (m_env.pScriptSystem)
+	if (m_env.pScriptSystem && bNotLoading)
 	{
 		m_env.pScriptSystem->Update();
 	}
@@ -1727,7 +1792,7 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 #endif //EXCLUDE_UPDATE_ON_CONSOLE
 	//////////////////////////////////////////////////////////////////////
 	//update sound system Part 1 if in Editor / in Game Mode Viewsystem updates the Listeners
-	if (!m_env.IsEditorGameMode() && m_env.pGame)
+	if (!m_env.IsEditorGameMode())
 	{
 		if ((updateFlags & ESYSUPDATE_EDITOR) != 0 && !bNoUpdate && nPauseMode != 1)
 		{
@@ -1735,20 +1800,18 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 			// Updating all views here is a bit of a workaround, since we need
 			//	to ensure that sound listeners owned by inactive views are also
 			//	marked as inactive. Ideally that should happen when exiting game mode.
-			if (IGameFramework* const pIGameFramework = m_env.pGame->GetIGameFramework())
-			{
-				pIGameFramework->GetIViewSystem()->UpdateSoundListeners();
 
-				/*if (IView* const pActiveView = pIGameFramework->GetIViewSystem()->GetActiveView())
-				   {
-				   EntityId const nListenerID = pActiveView->GetSoundListenerID();
+			gEnv->pGameFramework->GetIViewSystem()->UpdateSoundListeners();
 
-				   if (nListenerID != INVALID_ENTITYID)
-				   {
-				    pIGameFramework->GetIViewSystem()->UpdateSoundListeners();
-				   }
-				   }*/
-			}
+			/*if (IView* const pActiveView = pIGameFramework->GetIViewSystem()->GetActiveView())
+			   {
+			   EntityId const nListenerID = pActiveView->GetSoundListenerID();
+
+			   if (nListenerID != INVALID_ENTITYID)
+			   {
+			    pIGameFramework->GetIViewSystem()->UpdateSoundListeners();
+			   }
+			   }*/
 		}
 	}
 
@@ -1760,7 +1823,7 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 	//////////////////////////////////////////////////////////////////////
 	// update physic system
 	//static float time_zero = 0;
-	if (!m_bUIFrameworkMode)
+	if (!m_bUIFrameworkMode && bNotLoading)
 	{
 		if (m_sys_physics_enable_MT->GetIVal() > 0 && !gEnv->IsDedicated())
 			CreatePhysicsThread();
@@ -1779,23 +1842,9 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 
 			//////////////////////////////////////////////////////////////////////
 			// update entity system (a little bit) before physics
-			if (nPauseMode != 1)
+			if (nPauseMode != 1 && !bNoUpdate)
 			{
-				if (!bNoUpdate)
-				{
-					//////////////////////////////////////////////////////////////////////
-					//update game
-					if (m_env.pGame)
-					{
-						m_env.pGame->PrePhysicsUpdate();
-					}
-					//////////////////////////////////////////////////////////////////////
-					//update entity system
-					if (m_env.pEntitySystem && g_cvars.sys_entitysystem)
-					{
-						m_env.pEntitySystem->PrePhysicsUpdate();
-					}
-				}
+				PrePhysicsUpdate();
 			}
 
 			// intermingle physics/AI updates so that if we get a big timestep (frame rate glitch etc) the
@@ -1863,6 +1912,7 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 					m_env.pPhysicalWorld->TimeStep(0); // make sure objects get all notifications; flush deleted ents
 				gEnv->pPhysicalWorld->TracePendingRays(2);
 
+				if (bNotLoading)
 				{
 					FRAME_PROFILER("SysUpdate:PumpLoggedEvents", this, PROFILE_SYSTEM);
 					CRYPROFILE_SCOPE_PROFILE_MARKER("PumpLoggedEvents");
@@ -1892,6 +1942,7 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 		}
 		else
 		{
+			if (bNotLoading)
 			{
 				FRAME_PROFILER("SysUpdate:PumpLoggedEvents", this, PROFILE_SYSTEM);
 				CRYPROFILE_SCOPE_PROFILE_MARKER("PumpLoggedEvents");
@@ -1900,23 +1951,9 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 
 			//////////////////////////////////////////////////////////////////////
 			// update entity system (a little bit) before physics
-			if (nPauseMode != 1)
+			if (nPauseMode != 1 && !bNoUpdate)
 			{
-				if (!bNoUpdate)
-				{
-					//////////////////////////////////////////////////////////////////////
-					//update game
-					if (m_env.pGame)
-					{
-						m_env.pGame->PrePhysicsUpdate();
-					}
-					//////////////////////////////////////////////////////////////////////
-					//update entity system
-					if (m_env.pEntitySystem && g_cvars.sys_entitysystem)
-					{
-						m_env.pEntitySystem->PrePhysicsUpdate();
-					}
-				}
+				PrePhysicsUpdate();
 			}
 
 			if ((nPauseMode != 1) && !(updateFlags & ESYSUPDATE_IGNORE_PHYSICS))
@@ -2077,6 +2114,25 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 		//CryLog("Task calculate PI = %f ", Pi); // Thats funny , but it works :-)
 	}
 #endif
+
+	//////////////////////////////////////////////////////////////////////////
+	//update stats agent
+#ifdef ENABLE_STATS_AGENT
+	CStatsAgent::Update();
+#endif // #ifdef ENABLE_STATS_AGENT
+
+	m_pSystemEventDispatcher->Update();
+
+	if (gEnv->pSchematyc != nullptr)
+	{
+		gEnv->pSchematyc->Update();
+	}
+
+	if (m_pPluginManager)
+	{
+		m_pPluginManager->Update(IPluginUpdateListener::EUpdateType_Update);
+	}
+
 	//Now update frame statistics
 	CTimeValue cur_time = gEnv->pTimer->GetAsyncTime();
 
@@ -2086,22 +2142,13 @@ bool CSystem::Update(int updateFlags, int nPauseMode)
 		if ((cur_time - it->first) < a_second)
 			break;
 
-	{
-		ScopedSwitchToGlobalHeap globalHeap;
+	if (it != m_updateTimes.begin())
+		m_updateTimes.erase(m_updateTimes.begin(), it);
 
-		if (it != m_updateTimes.begin())
-			m_updateTimes.erase(m_updateTimes.begin(), it);
-
-		float updateTime = (cur_time - updateStart).GetMilliSeconds();
-		m_updateTimes.push_back(std::make_pair(cur_time, updateTime));
-	}
+	float updateTime = (cur_time - updateStart).GetMilliSeconds();
+	m_updateTimes.push_back(std::make_pair(cur_time, updateTime));
 
 	UpdateUpdateTimes();
-
-	m_pSystemEventDispatcher->Update();
-
-	if (!gEnv->IsEditing() && m_eRuntimeState == ESYSTEM_EVENT_LEVEL_GAMEPLAY_START)
-		gEnv->pCryPak->DisableRuntimeFileAccess(true);
 
 	return !m_bQuit;
 
@@ -2145,7 +2192,7 @@ void CSystem::DoWorkDuringOcclusionChecks()
 
 void CSystem::UpdateAudioSystems()
 {
-	if (m_env.pAudioSystem != nullptr)
+	if (m_env.pAudioSystem != nullptr && !IsLoading()) //do not update pAudioSystem during async level load
 	{
 		CRY_PROFILE_SECTION(PROFILE_SYSTEM, "UpdateAudioSystems");
 		CRYPROFILE_SCOPE_PROFILE_MARKER("UpdateAudioSystems");
@@ -2247,11 +2294,15 @@ void CSystem::Warning(EValidatorModule module, EValidatorSeverity severity, int 
 }
 
 //////////////////////////////////////////////////////////////////////////
-int CSystem::ShowMessage(const char* text, const char* caption, unsigned int uType)
+EQuestionResult CSystem::ShowMessage(const char* text, const char* caption, EMessageBox uType)
 {
 	if (m_pUserCallback)
 		return m_pUserCallback->ShowMessage(text, caption, uType);
+#if CRY_PLATFORM_WINDOWS
+	return eQR_None;
+#else
 	return CryMessageBox(text, caption, uType);
+#endif
 }
 
 inline const char* ValidatorModuleToString(EValidatorModule module)
@@ -2334,6 +2385,9 @@ void CSystem::WarningV(EValidatorModule module, EValidatorSeverity severity, int
 		break;
 	case VALIDATOR_COMMENT:
 		ltype = ILog::eComment;
+		break;
+	case VALIDATOR_ASSERT:
+		ltype = ILog::eAssert;
 		break;
 	default:
 		break;
@@ -2610,11 +2664,8 @@ void CSystem::debug_GetCallStackRaw(void** callstack, uint32& callstackLength)
 void CSystem::ApplicationTest(const char* szParam)
 {
 	assert(szParam);
-
-	if (!m_pTestSystem)
-		m_pTestSystem = new CTestSystemLegacy;
-
-	m_pTestSystem->ApplicationTest(szParam);
+	if (m_pTestSystem)
+		m_pTestSystem->ApplicationTest(szParam);
 }
 
 void CSystem::ExecuteCommandLine()
@@ -2717,6 +2768,12 @@ ESystemConfigSpec CSystem::GetMaxConfigSpec() const
 }
 
 //////////////////////////////////////////////////////////////////////////
+IProjectManager* CSystem::GetIProjectManager()
+{
+	return m_pProjectManager;
+}
+
+//////////////////////////////////////////////////////////////////////////
 CPNoise3* CSystem::GetNoiseGen()
 {
 	static CPNoise3 m_pNoiseGen;
@@ -2749,6 +2806,25 @@ const sUpdateTimes* CSystem::GetUpdateTimeStats(uint32& index, uint32& num)
 	index = m_UpdateTimesIdx;
 	num = NUM_UPDATE_TIMES;
 	return m_UpdateTimes;
+}
+
+void CSystem::FillRandomMT(uint32* pOutWords, uint32 numWords)
+{
+	AUTO_LOCK(m_mtLock);
+	if (!m_pMtState)
+	{
+		struct TicksTime
+		{
+			int64  ticks;
+			time_t tm;
+		};
+
+		TicksTime tt = { CryGetTicks(), time(nullptr) };
+		m_pMtState = new CMTRand_int32(reinterpret_cast<uint32*>(&tt), sizeof(tt) / sizeof(uint32));
+	}
+
+	for (uint32 i = 0; i < numWords; ++i)
+		pOutWords[i] = m_pMtState->GenerateUint32();
 }
 
 void CSystem::UpdateUpdateTimes()
@@ -2933,11 +3009,7 @@ void CSystem::OnLanguageAudioCVarChanged(ICVar* const pLanguageAudio)
 
 			if (gEnv->pAudioSystem != nullptr)
 			{
-				SAudioRequest audioRequest;
-				audioRequest.flags = eAudioRequestFlags_PriorityHigh | eAudioRequestFlags_ExecuteBlocking;
-				SAudioManagerRequestData<eAudioManagerRequestType_ChangeLanguage> requestData;
-				audioRequest.pData = &requestData;
-				gEnv->pAudioSystem->PushRequest(audioRequest);
+				gEnv->pAudioSystem->OnLanguageChanged();
 			}
 		}
 	}
@@ -2991,11 +3063,24 @@ void CSystem::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lparam
 {
 	switch (event)
 	{
+	case ESYSTEM_EVENT_LEVEL_LOAD_END:
+		{
+			SetSystemGlobalState(ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_END);
+		}
+		break;
 	case ESYSTEM_EVENT_LEVEL_LOAD_START_LOADINGSCREEN:
 	case ESYSTEM_EVENT_LEVEL_UNLOAD:
-		gEnv->pCryPak->DisableRuntimeFileAccess(false);
-	case ESYSTEM_EVENT_LEVEL_GAMEPLAY_START:
-		m_eRuntimeState = event;
+		{
+			gEnv->pCryPak->DisableRuntimeFileAccess(false);
+		}
+		break;
+	case ESYSTEM_EVENT_LEVEL_PRECACHE_END:
+		{
+			if (!gEnv->IsEditing())
+			{
+				gEnv->pCryPak->DisableRuntimeFileAccess(true);
+			}
+		}
 		break;
 	}
 }
@@ -3008,9 +3093,7 @@ ESystemGlobalState CSystem::GetSystemGlobalState(void)
 const char* CSystem::GetSystemGlobalStateName(const ESystemGlobalState systemGlobalState)
 {
 	static const char* const s_systemGlobalStateNames[] = {
-		"UNKNOWN",                 // ESYSTEM_GLOBAL_STATE_UNKNOWN,
 		"INIT",                    // ESYSTEM_GLOBAL_STATE_INIT,
-		"RUNNING",                 // ESYSTEM_GLOBAL_STATE_RUNNING,
 		"LEVEL_LOAD_PREPARE",      // ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START_PREPARE,
 		"LEVEL_LOAD_START",        // ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START,
 		"LEVEL_LOAD_MATERIALS",    // ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START_MATERIALS,
@@ -3021,7 +3104,9 @@ const char* CSystem::GetSystemGlobalStateName(const ESystemGlobalState systemGlo
 		"LEVEL_LOAD_PRECACHE",     // ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START_PRECACHE,
 		"LEVEL_LOAD_TEXTURES",     // ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START_TEXTURES,
 		"LEVEL_LOAD_END",          // ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_END,
-		"LEVEL_LOAD_COMPLETE"      // ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_COMPLETE
+		"LEVEL_LOAD_ENDING",       // ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_ENDING,
+		"LEVEL_LOAD_COMPLETE",     // ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_COMPLETE
+		"RUNNING",                 // ESYSTEM_GLOBAL_STATE_RUNNING,
 	};
 	const size_t numElements = CRY_ARRAY_COUNT(s_systemGlobalStateNames);
 	const size_t index = (size_t)systemGlobalState;

@@ -15,11 +15,13 @@ class CPoseBlenderAim : public IAnimationPoseBlenderDir
 
 	CRYGENERATE_CLASS(CPoseBlenderAim, "AnimationPoseModifier_PoseBlenderAim", 0x058c3e18b9574faf, 0x8989b9cb2cff0d64)
 
+	virtual ~CPoseBlenderAim() {}
+
 	// This interface
 public:
 	void SetState(bool state) override                                                    { m_blender.m_Set.bUseDirIK = state; }
 	void SetTarget(const Vec3& target) override                                           { if (target.IsValid()) m_blender.m_Set.vDirIKTarget = target; }
-	void SetLayer(uint32 layer) override                                                  { m_blender.m_Set.nDirLayer = MAX(layer, 1); }
+	void SetLayer(uint32 layer) override                                                  { m_blender.m_Set.nDirLayer = uint8(std::max(layer, (uint32)1)); }
 	void SetFadeoutAngle(f32 angleRadians) override                                       { m_blender.m_Set.fDirIKFadeoutRadians = angleRadians; }
 	void SetFadeOutSpeed(f32 time) override                                               { m_blender.m_Set.fDirIKFadeOutTime = (time > 0.0f) ? 1.0f / time : FLT_MAX; }
 	void SetFadeInSpeed(f32 time) override                                                { m_blender.m_Set.fDirIKFadeInTime = (time > 0.0f) ? 1.0f / time : FLT_MAX; }

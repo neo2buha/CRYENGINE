@@ -80,16 +80,10 @@ void CParamMod<TParamModContext, T >::AddToComponent(CParticleComponent* pCompon
 {
 	AddToComponent(pComponent, pFeature);
 	pComponent->AddParticleData(dataType);
-}
 
-template<typename TParamModContext, typename T>
-void CParamMod<TParamModContext, T >::AddToComponent(CParticleComponent* pComponent, CParticleFeature* pFeature, EParticleDataType dataType, EParticleDataType initDataType)
-{
-	AddToComponent(pComponent, pFeature, dataType);
-
-	if (!m_modUpdate.empty())
+	if (dataType.info().hasInit && !m_modUpdate.empty())
 	{
-		pComponent->AddParticleData(initDataType);
+		pComponent->AddParticleData(InitType(dataType));
 		pComponent->AddToUpdateList(EUL_Update, pFeature);
 	}
 }
@@ -117,7 +111,7 @@ void CParamMod<TParamModContext, T >::Serialize(Serialization::IArchive& ar)
 }
 
 template<typename TParamModContext, typename T>
-void CParamMod<TParamModContext, T >::InitParticles(const SUpdateContext& context, EParticleDataType dataType, EParticleDataType initDataType) const
+void CParamMod<TParamModContext, T >::InitParticles(const SUpdateContext& context, EParticleDataType dataType) const
 {
 	CRY_PFX2_PROFILE_DETAIL;
 
@@ -126,28 +120,19 @@ void CParamMod<TParamModContext, T >::InitParticles(const SUpdateContext& contex
 
 	CRY_PFX2_ASSERT(dataStream.IsValid());
 
-	SUpdateRange spawnRange;
-	spawnRange.m_firstParticleId = context.m_container.GetFirstSpawnParticleId();
-	spawnRange.m_lastParticleId = context.m_container.GetLastParticleId();
+	SUpdateRange spawnRange = container.GetSpawnedRange();
 	const floatv baseValue = ToFloatv(m_baseValue);
 
-	CRY_PFX2_FOR_SPAWNED_PARTICLEGROUP(context);
-	dataStream.Store(particleGroupId, baseValue);
-	CRY_PFX2_FOR_END;
+	CRY_PFX2_FOR_SPAWNED_PARTICLEGROUP(context)
+	{
+		dataStream.Store(particleGroupId, baseValue);
+	}
+	CRY_PFX2_FOR_END
 
-	for (auto& pModifier : m_modInit)
+	for (auto & pModifier : m_modInit)
 		pModifier->Modify(context, spawnRange, dataStream, dataType, EMD_PerParticle);
 
-	if (initDataType != dataType)
-	{
-		IOFStream initDataStream = GetParticleStream(container, initDataType);
-		if (initDataStream.IsValid())
-		{
-			CRY_PFX2_FOR_SPAWNED_PARTICLEGROUP(context);
-			initDataStream.Store(particleGroupId, dataStream.Load(particleGroupId));
-			CRY_PFX2_FOR_END;
-		}
-	}
+	container.CopyData(InitType(dataType), dataType, container.GetSpawnedRange());
 }
 
 template<typename TParamModContext, typename T>
@@ -166,13 +151,15 @@ void CParamMod<TParamModContext, T >::ModifyInit(const SUpdateContext& context, 
 	IOFStream dataStream(data);
 
 	const floatv baseValue = ToFloatv(m_baseValue.Get());
-	CRY_PFX2_FOR_RANGE_PARTICLESGROUP(range);
-	dataStream.Store(particleGroupId, baseValue);
-	CRY_PFX2_FOR_END;
+	CRY_PFX2_FOR_RANGE_PARTICLESGROUP(range)
+	{
+		dataStream.Store(particleGroupId, baseValue);
+	}
+	CRY_PFX2_FOR_END
 
 	const EModDomain domain = Context().GetDomain();
 	for (auto& pModifier : m_modInit)
-		pModifier->Modify(context, range, dataStream, EParticleDataType(0), domain);
+		pModifier->Modify(context, range, dataStream, EParticleDataType(), domain);
 }
 
 template<typename TParamModContext, typename T>
@@ -183,7 +170,7 @@ void CParamMod<TParamModContext, T >::ModifyUpdate(const SUpdateContext& context
 
 	const EModDomain domain = Context().GetDomain();
 	for (auto& pModifier : m_modUpdate)
-		pModifier->Modify(context, range, dataStream, EParticleDataType(0), domain);
+		pModifier->Modify(context, range, dataStream, EParticleDataType(), domain);
 }
 
 template<typename TParamModContext, typename T>
@@ -193,25 +180,33 @@ TRange<typename T::TType> CParamMod<TParamModContext, T >::GetValues(const SUpda
 	IOFStream stream(data);
 
 	const floatv baseValue = ToFloatv(m_baseValue.Get());
-	CRY_PFX2_FOR_RANGE_PARTICLESGROUP(range);
-	stream.Store(particleGroupId, baseValue);
-	CRY_PFX2_FOR_END;
+	CRY_PFX2_FOR_RANGE_PARTICLESGROUP(range)
+	{
+		stream.Store(particleGroupId, baseValue);
+	}
+	CRY_PFX2_FOR_END
 
-	for (auto& pMod : m_modInit)
+	for (auto & pMod : m_modInit)
 	{
 		if (pMod->GetDomain() >= domain)
-			pMod->Modify(context, range, stream, EParticleDataType(0), domain);
+			pMod->Modify(context, range, stream, EParticleDataType(), domain);
 		else
 			minmax = minmax * pMod->GetMinMax();
 	}
 	for (auto& pMod : m_modUpdate)
 	{
 		if (updating && pMod->GetDomain() >= domain)
-			pMod->Modify(context, range, stream, EParticleDataType(0), domain);
+			pMod->Modify(context, range, stream, EParticleDataType(), domain);
 		else
 			minmax = minmax * pMod->GetMinMax();
 	}
 	return minmax;
+}
+
+template<typename TParamModContext, typename T>
+TRange<typename T::TType> CParamMod<TParamModContext, T >::GetValues(const SUpdateContext& context, TVarArray<TType> data, EModDomain domain, bool updating) const
+{
+	return GetValues(context, data.data(), SUpdateRange(0, data.size()), domain, updating);
 }
 
 template<typename TParamModContext, typename T>
@@ -229,23 +224,38 @@ void CParamMod<TParamModContext, T >::AddToUpdate(IModifier* pMod)
 }
 
 template<typename TParamModContext, typename T>
-void pfx2::CParamMod<TParamModContext, T >::Sample(TType* samples, int numSamples) const
-{
-	const T baseValue = m_baseValue.Get();
-	for (int i = 0; i < numSamples; ++i)
-		samples[i] = baseValue;
-
-	for (auto& pModifier : m_modifiers)
-		if (pModifier->IsEnabled())
-			pModifier->Sample(samples, numSamples);
-}
-
-template<typename TParamModContext, typename T>
 TRange<typename T::TType> CParamMod<TParamModContext, T >::GetValueRange(const SUpdateContext& context) const
 {
 	floatv curValue;
 	auto minmax = GetValues(context, (float*)&curValue, SUpdateRange(0, 1), EMD_PerEffect, true);
 	return minmax * (*(float*)&curValue);
+}
+
+template<typename TParamModContext, typename T>
+TRange<typename T::TType> CParamMod<TParamModContext, T >::GetValueRange() const
+{
+	TRange<TType> minmax(m_baseValue.Get());
+	for (auto& pMod : m_modInit)
+		minmax = minmax * pMod->GetMinMax();
+	for (auto& pMod : m_modUpdate)
+		minmax = minmax * pMod->GetMinMax();
+	return minmax;
+}
+
+template<typename TParamModContext, typename T>
+void pfx2::CParamMod<TParamModContext, T >::Sample(TType* samples, int numSamples) const
+{
+	const T baseValue = m_baseValue.Get();
+	for (int i = 0; i < numSamples; ++i)
+	{
+		samples[i] = baseValue;
+	}
+
+	for (auto& pModifier : m_modifiers)
+	{
+		if (pModifier->IsEnabled())
+			pModifier->Sample(samples, numSamples);
+	}
 }
 
 template<typename TParamModContext, typename T>

@@ -157,6 +157,14 @@ struct SSpectatorInfo
 
 struct SMeleeHitParams
 {
+	SMeleeHitParams()
+		: m_targetId(INVALID_ENTITYID)
+		, m_hitOffset(ZERO)
+		, m_hitNormal(ZERO)
+		, m_surfaceIdx(0)
+		, m_boostedMelee(false)
+	{}
+
 	EntityId m_targetId;
 	Vec3 m_hitOffset;
 	Vec3 m_hitNormal;
@@ -585,13 +593,9 @@ public:
 	virtual bool Init( IGameObject * pGameObject ) override;
 	virtual void PostInit( IGameObject * pGameObject ) override;
 	void ReloadClientXmlData();
-	virtual void InitLocalPlayer() override;
 	virtual bool ReloadExtension( IGameObject * pGameObject, const SEntitySpawnParams &params ) override;
 	virtual void PostReloadExtension( IGameObject * pGameObject, const SEntitySpawnParams &params ) override;
-	virtual bool GetEntityPoolSignature( TSerialize signature ) override;
 	virtual void ProcessEvent(SEntityEvent& event) override;
-	virtual void SetAuthority( bool auth ) override;
-	virtual void SerializeXML( XmlNodeRef& node, bool bLoading ) override;
 	virtual void Update(SEntityUpdateContext& ctx, int updateSlot) override;
 	virtual void SerializeSpawnInfo( TSerialize ser ) override;
 	virtual ISerializableInfoPtr GetSpawnInfo() override;
@@ -748,6 +752,8 @@ public:
 	void SetAnimatedCharacterParams( const SAnimatedCharacterParams& params );
 
 	void SwitchPlayerInput(IPlayerInput* pNewPlayerInput);
+
+	virtual bool IsInteracting() const override;
 
 protected:
 
@@ -1123,8 +1129,6 @@ public:
 	virtual void SwitchDemoModeSpectator(bool activate) override;
 	bool IsTimeDemo() const { return m_timedemo; }
 
-	void StopLoopingSounds();
-
 	void RegisterPlayerEventListener	(IPlayerEventListener *pPlayerEventListener);
 	void UnregisterPlayerEventListener(IPlayerEventListener *pPlayerEventListener);
 	void RegisterPlayerUpdateListener(IPlayerUpdateListener *pListener);
@@ -1429,6 +1433,8 @@ private:
 
 	virtual void ReadDataFromXML(bool isReloading = false) override;
 
+	virtual void InitLocalPlayer() override;
+
 	static void StrikeTargetPosition(const int currentPoint, const int numberOfPoints, Vec3& targetPos);
 
 	void UpdateThirdPersonState();
@@ -1544,12 +1550,12 @@ protected:
 
 
 	IInteractor*         m_pInteractor;
-	IEntityAudioProxyPtr m_pIEntityAudioProxy;
-	AudioControlId      m_waterEnter;
-	AudioControlId      m_waterExit;
-	AudioControlId      m_waterDiveIn;
-	AudioControlId      m_waterDiveOut;
-	AudioControlId      m_waterInOutSpeed;
+	IEntityAudioComponent* m_pIEntityAudioComponent;
+	CryAudio::ControlId m_waterEnter;
+	CryAudio::ControlId m_waterExit;
+	CryAudio::ControlId m_waterDiveIn;
+	CryAudio::ControlId m_waterDiveOut;
+	CryAudio::ControlId m_waterInOutSpeed;
 
 	SStagingParams m_stagingParams;
 
@@ -1668,7 +1674,7 @@ private:
 	uint8                   m_RMIBenchmarkSeq;
 #endif
 
-	typedef std::map<int32, AudioProxyId> TJointToAudioProxyLookup;
+	typedef std::map<int32, CryAudio::AuxObjectId> TJointToAudioProxyLookup;
 	TJointToAudioProxyLookup		m_cJointAudioProxies;
 
 public:

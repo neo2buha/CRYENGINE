@@ -389,18 +389,17 @@ IPhysicalEntity* CObjectIdentifier::FindPhysicalEntity()
 	#define BS_MAX_NUM_TO_PLAYBACK  10
 
 BreakStream::BreakStream()
+	: m_pent(nullptr)
+	, m_breakIdx(0xffff)
+	, m_subBreakIdx(~0)
+	, m_mode(k_invalid)
+	, m_type(0)
+	, m_numFramesLeft(0)
+	, m_invalidFindCount(0)
+	, m_waitForDependent(0)
+	, m_logHostMigrationInfo(1)
 {
-	#if defined(_DEBUG)
-	// No need to set this, its done by the serialiser or the break_replicator
-	m_breakIdx = 0xffff;
-	#endif
-	m_subBreakIdx = ~0;
-	m_waitForDependent = 0;
-	m_pent = NULL;
-	m_numFramesLeft = 0;
-	m_mode = k_invalid;
-	m_invalidFindCount = 0;
-	m_logHostMigrationInfo = 1;
+	m_identifier.Reset();
 }
 
 BreakStream::~BreakStream()
@@ -431,7 +430,7 @@ bool BreakStream::CanSendPayload()
 
 void BreakStream::OnEndFrame()
 {
-	const int n = iselnz(m_numFramesLeft, m_numFramesLeft - 1, 0);
+	const int n = m_numFramesLeft ? m_numFramesLeft - 1 : 0;
 	if (m_mode == k_playing && n == 0)
 	{
 		if (m_pent)
@@ -687,7 +686,7 @@ void PartBreak::OnEndFrame()
 {
 	DEBUG_ASSERT(m_mode != k_finished);
 
-	m_numFramesLeft = iselnz(m_numFramesLeft, m_numFramesLeft - 1, 0);
+	m_numFramesLeft = m_numFramesLeft ? m_numFramesLeft - 1 : 0;
 
 	if (m_mode == k_recording)
 	{
@@ -882,7 +881,7 @@ void PlaneBreak::SerializeWith(CBitArray& array)
 
 	CBreakReplicator::SerialisePosition(array, m_be.pt, CNetworkCVars::Get().BreakMaxWorldSize, CBreakReplicator::m_accurateWorldPosNumBits);
 
-	m_be.partid[1] = GetSlotIdx(m_be.partid[1], 0) << 8 | GetSlotIdx(m_be.partid[1], 1);
+	m_be.partid[1] = EntityPhysicsUtils::GetSlotIdx(m_be.partid[1], 0) << 8 | EntityPhysicsUtils::GetSlotIdx(m_be.partid[1], 1);
 
 	SerializeDirHelper(array, m_be.n, 8, 8);
 	array.Serialize(m_be.idmat[0], -1, 254);
@@ -892,7 +891,7 @@ void PlaneBreak::SerializeWith(CBitArray& array)
 	array.Serialize(m_be.mass[0], 1.f, 1000.f, 8);
 	SerializeDirVector(array, m_be.vloc[0], 20.f, 8, 8, 8);
 
-	m_be.partid[1] = (m_be.partid[1] & 0xff) + (m_be.partid[1] >> 8) * PARTID_MAX_SLOTS;
+	m_be.partid[1] = (m_be.partid[1] & 0xff) + (m_be.partid[1] >> 8) * EntityPhysicsUtils::PARTID_MAX_SLOTS;
 
 	// Looks like we dont need these
 	m_be.partid[0] = 0;
@@ -974,7 +973,7 @@ bool PlaneBreak::IsRenderMeshReady()
 			{
 				IStatObj::SSubObject* pSubObj;
 				Matrix34A mtx;
-				IStatObj* pStatObj = pRenderNode->GetEntityStatObj(0, 0, &mtx);
+				IStatObj* pStatObj = pRenderNode->GetEntityStatObj(0, &mtx);
 				if (pStatObj && pStatObj->GetFlags() & STATIC_OBJECT_COMPOUND)
 					if (pSubObj = pStatObj->GetSubObject(m_be.partid[1]))
 						pStatObj = pSubObj->pStatObj;
@@ -1121,7 +1120,13 @@ CBreakReplicator* CBreakReplicator::m_pThis = NULL;
 int CBreakReplicator::m_accurateWorldPosNumBits = 0;
 int CBreakReplicator::m_inaccurateWorldPosNumBits = 0;
 
+// Suppress warning for unintialized array CBreakReplicator::m_pendingStreams
+// cppcheck-suppress uninitMemberVar
 CBreakReplicator::CBreakReplicator(CGameContext* pGameCtx)
+	: m_bDefineProtocolMode_server(false)
+	, m_activeStartIdx(0)
+	, m_numPendingStreams(0)
+	, m_timeSinceLevelLoaded(-1.0f)
 {
 	(void)pGameCtx;
 
@@ -1135,8 +1140,6 @@ CBreakReplicator::CBreakReplicator(CGameContext* pGameCtx)
 	DEBUG_ASSERT(m_pThis == NULL);
 	m_pThis = this;
 	m_streams.reserve(100);
-	m_activeStartIdx = 0;
-	m_numPendingStreams = 0;
 
 	// Initialise a dummy stream. This is used as a place holder for
 	// stream indexes that have not yet been serialised over on a client
@@ -1158,8 +1161,7 @@ CBreakReplicator::CBreakReplicator(CGameContext* pGameCtx)
 		pWorld->AddEventClient(EventPhysJointBroken::id, OnJointBroken, true, 100000.f);
 	}
 
-	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this);
-	m_timeSinceLevelLoaded = -1.f;
+	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this, "CBreakReplicator");
 
 	float max = CNetworkCVars::Get().BreakMaxWorldSize;
 	m_inaccurateWorldPosNumBits = IntegerLog2_RoundUp(uint32(max / WORLD_POS_SAMPLE_DISTANCE_APPART_INACCURATE));

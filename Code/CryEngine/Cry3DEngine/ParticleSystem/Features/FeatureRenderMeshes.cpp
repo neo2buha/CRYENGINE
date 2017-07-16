@@ -7,10 +7,13 @@
 
 CRY_PFX2_DBG
 
-volatile bool gFeatureRenderMeshes = false;
-
 namespace pfx2
 {
+
+EParticleDataType PDT(EPDT_MeshGeometry, IMeshObj*);
+
+extern EParticleDataType EPDT_Alpha, EPDT_Color;
+
 
 SERIALIZATION_ENUM_DEFINE(ESizeMode, : uint8,
                           Size,
@@ -41,7 +44,7 @@ public:
 
 	CFeatureRenderMeshes()
 		: m_scale(1.0f, 1.0f, 1.0f)
-		, m_sizeMode(ESizeMode::Size)
+		, m_sizeMode(ESizeMode::Scale)
 		, m_originMode(EOriginMode::Origin)
 		, m_piecesMode(EPiecesMode::RandomPiece)
 		, m_piecePlacement(EPiecePlacement::Standard)
@@ -62,11 +65,11 @@ public:
 
 	virtual void         AddToComponent(CParticleComponent* pComponent, SComponentParams* pParams) override
 	{
-		pParams->m_pMesh = m_pStaticObject = Get3DEngine()->LoadStatObj(m_meshName.c_str(), NULL, NULL, true);
+		pParams->m_pMesh = m_pStaticObject = Get3DEngine()->LoadStatObj(m_meshName.c_str(), NULL, NULL, m_piecesMode == EPiecesMode::Whole);
 		pParams->m_meshCentered = m_originMode == EOriginMode::Center;
 		if (m_pStaticObject)
 		{
-			pComponent->AddToUpdateList(EUL_Render, this);
+			pComponent->AddToUpdateList(EUL_RenderDeferred, this);
 			pComponent->AddParticleData(EPVF_Position);
 			pComponent->AddParticleData(EPQF_Orientation);
 
@@ -78,7 +81,11 @@ public:
 				{
 					if (IStatObj::SSubObject* pSub = m_pStaticObject->GetSubObject(i))
 						if (pSub->nType == STATIC_SUB_OBJECT_MESH && pSub->pStatObj && pSub->pStatObj->GetRenderMesh())
+						{
+							if (string(pSub->name).Right(5) == "_main")
+								continue;
 							m_aSubObjects.push_back(pSub);
+						}
 				}
 
 				if (m_aSubObjects.size() > 0)
@@ -106,6 +113,7 @@ public:
 		TIStream<uint> spawnIds = container.GetTIStream<uint>(EPDT_SpawnId);
 		IOVec3Stream positions = container.GetIOVec3Stream(EPVF_Position);
 		IOQuatStream orientations = container.GetIOQuatStream(EPQF_Orientation);
+		IFStream sizes = container.GetIFStream(EPDT_Size, 1.0f);
 		uint pieceCount = m_aSubObjects.size();
 		Vec3 center = m_pStaticObject->GetAABB().GetCenter();
 
@@ -114,8 +122,7 @@ public:
 			uint piece;
 			if (m_piecesMode == EPiecesMode::RandomPiece)
 			{
-				SChaosKey key;
-				piece = key.Rand();
+				piece = context.m_spawnRng.Rand();
 			}
 			else if (m_piecesMode == EPiecesMode::AllPieces)
 			{
@@ -130,23 +137,24 @@ public:
 			{
 				Vec3 position = positions.Load(particleId);
 				Quat orientation = orientations.Load(particleId);
+				const float size = sizes.Load(particleId);
 
 				if (m_piecePlacement == EPiecePlacement::CenteredSubPlacement)
 				{
 					// Offset by main object center
-					position -= orientation * center;
+					position -= orientation * center * size;
 				}
 
 				// Place pieces according to sub-transforms; scale is ignored
 				Matrix34 const& localTM = m_aSubObjects[piece]->localTM;
 
-				position += orientation * localTM.GetTranslation();
+				position += orientation * localTM.GetTranslation() * size;
 				orientation = orientation * Quat(localTM);
 
-				if (m_originMode == EOriginMode::Center)
+				if (context.m_params.m_meshCentered)
 				{
 					Vec3 subCenter = m_aSubObjects[piece]->pStatObj->GetAABB().GetCenter();
-					position += orientation * subCenter;
+					position += orientation * subCenter * size;
 				}
 
 				positions.Store(particleId, position);
@@ -156,15 +164,13 @@ public:
 		CRY_PFX2_FOR_END;
 	}
 
-	virtual void Render(ICommonParticleComponentRuntime* pCommonComponentRuntime, CParticleComponent* pComponent, IRenderNode* pNode, const SRenderContext& renderContext) override
+	virtual void Render(CParticleEmitter* pEmitter, ICommonParticleComponentRuntime* pCommonComponentRuntime, CParticleComponent* pComponent, const SRenderContext& renderContext) override
 	{
 		CRY_PROFILE_FUNCTION(PROFILE_PARTICLE);
 
 		CParticleComponentRuntime* pComponentRuntime = pCommonComponentRuntime->GetCpuRuntime();
 		if (!pComponentRuntime)
 			return;
-		pComponentRuntime->WaitUntilUpdateEnded();
-		pComponentRuntime->SetStateUpdateStarted();
 		auto context = SUpdateContext(pComponentRuntime);
 		auto& passInfo = renderContext.m_passInfo;
 		SRendParams renderParams = renderContext.m_renderParams;
@@ -182,8 +188,8 @@ public:
 		IMeshObj* pMeshObj = m_pStaticObject;
 
 		const AABB bBox = m_pStaticObject->GetAABB();
-		const float invObjectSize = (m_sizeMode == ESizeMode::Size) ? __fres(bBox.GetRadius()) : 1.0f;
-		Vec3 offset = (m_originMode == EOriginMode::Center) ? -bBox.GetCenter() : Vec3(ZERO);
+		const float invObjectSize = (m_sizeMode == ESizeMode::Size) ? rsqrt_fast(bBox.GetRadiusSqr()) : 1.0f;
+		Vec3 offset = -bBox.GetCenter();
 
 		renderParams.dwFObjFlags |= FOB_TRANS_MASK;
 
@@ -204,7 +210,7 @@ public:
 				offset = -pMeshObj->GetAABB().GetCenter();
 			}
 
-			if (m_originMode == EOriginMode::Center)
+			if (context.m_params.m_meshCentered)
 				wsMatrix.SetTranslation(wsMatrix * offset);
 
 			renderParams.fAlpha = alphas.SafeLoad(particleId);
@@ -219,8 +225,16 @@ public:
 			pMeshObj->Render(renderParams, passInfo);
 		}
 		CRY_PFX2_FOR_END;
+	}
 
-		pComponentRuntime->SetStateUpdateEnded();
+	virtual uint GetNumResources() const override
+	{
+		return m_meshName.empty() ? 0 : 1;
+	}
+
+	virtual const char* GetResourceName(uint resourceId) const override
+	{
+		return m_meshName.c_str();
 	}
 
 private:
@@ -235,6 +249,6 @@ private:
 	std::vector<IStatObj::SSubObject*> m_aSubObjects;
 };
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureRenderMeshes, "Render", "Meshes", defaultIcon, renderFeatureColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureRenderMeshes, "Render", "Meshes", colorRender);
 
 }

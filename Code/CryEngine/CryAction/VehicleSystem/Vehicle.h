@@ -23,7 +23,7 @@
 #include "VehicleDamages.h"
 #include <CryCore/Containers/CryListenerSet.h>
 
-#include <CryEntitySystem/IComponent.h>
+#include <CryEntitySystem/IEntityComponent.h>
 
 #include "Animation/VehicleAnimationComponent.h"
 
@@ -177,8 +177,9 @@ public:
 	};
 
 	//IEntityEvent
-	virtual void                   ProcessEvent(SEntityEvent& entityEvent);
-	virtual ComponentEventPriority GetEventPriority(const int eventID) const;
+	virtual void                   ProcessEvent(SEntityEvent& entityEvent) final;
+	virtual uint64                 GetEventMask() const final;
+	virtual ComponentEventPriority GetEventPriority() const final;
 	//~IEntityEvent
 
 	// IVehicle
@@ -189,7 +190,6 @@ public:
 	virtual void Reset(bool enterGame);
 	virtual bool ReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params);
 	virtual void PostReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params) {}
-	virtual bool GetEntityPoolSignature(TSerialize signature);
 	virtual void Release()                                                                       { delete this; }
 	virtual void GetMemoryUsage(ICrySizer* pSizer) const;
 
@@ -218,7 +218,6 @@ public:
 	virtual void                        UpdatePassenger(float frameTime, EntityId playerId = 0);
 
 	virtual void                        SetChannelId(uint16 id) {};
-	virtual void                        SetAuthority(bool auth);
 
 	virtual void                        FullSerialize(TSerialize ser);
 	virtual bool                        NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int flags);
@@ -736,7 +735,7 @@ protected:
 
 	EntityId                     m_lastWeaponId;
 
-	IEntityAudioProxyPtr         m_pIEntityAudioProxy;
+	IEntityAudioComponent*         m_pIEntityAudioComponent;
 
 	typedef std::vector<SVehicleSoundInfo> TVehicleSoundEvents;
 	TVehicleSoundEvents m_soundEvents;

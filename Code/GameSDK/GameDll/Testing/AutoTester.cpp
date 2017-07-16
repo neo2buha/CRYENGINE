@@ -165,7 +165,7 @@ void CAutoTester::Start(const char *stateSetup, const char *outputPath, bool qui
 					}
 					else if (stricmp(tokenName, "level") == 0)
 					{
-						IGameRulesSystem * gameRulesSystem = gEnv->pGame->GetIGameFramework()->GetIGameRulesSystem();
+						IGameRulesSystem * gameRulesSystem = gEnv->pGameFramework->GetIGameRulesSystem();
 						const char * sv_gamerules = gEnv->pConsole->GetCVar("sv_gamerules")->GetString();
 						const char * fullGameRulesName = gameRulesSystem->GetGameRulesName(sv_gamerules);
 						bool isMultiPlayerMode = (fullGameRulesName && strcmp(fullGameRulesName, "SinglePlayer") != 0);
@@ -313,9 +313,12 @@ void CAutoTester::AddTestCaseResult(const char *testSuiteName, XmlNodeRef &testC
 #endif
 	XmlString xmlStr = xmlToSave->getXML();
 
-	CDebugAllowFileAccess allowFileAccess;
-	FILE *file = gEnv->pCryPak->FOpen( fileName,"wt" );
-	allowFileAccess.End();
+	FILE* file = nullptr;
+	{
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+		file = gEnv->pCryPak->FOpen(fileName, "wt");
+	}
+
 	if (file)
 	{
 		const char *sxml = (const char*)xmlStr;
@@ -727,7 +730,7 @@ void CAutoTester::UpdateTestNumClients()
 {
 	if(gEnv->bServer)
 	{
-		IGameFramework *pFramework = gEnv->pGame->GetIGameFramework();
+		IGameFramework *pFramework = gEnv->pGameFramework;
 		int numChannels = 1; //local channel
 
 		if(pFramework)
@@ -818,7 +821,7 @@ void CAutoTester::UpdateTestNumClientsLevelRotate()
 {
 	if(gEnv->bServer)
 	{
-		IGameFramework *pFramework = gEnv->pGame->GetIGameFramework();
+		IGameFramework *pFramework = gEnv->pGameFramework;
 		int numChannels = 1; //local channel
 
 		if(pFramework)
@@ -946,7 +949,7 @@ void CAutoTester::UpdateTestFeatureTests()
 
 void CAutoTester::UpdatePerformanceTestInGame()
 {
-	IActor* pPlayer = gEnv->pGame->GetIGameFramework()->GetClientActor();
+	IActor* pPlayer = gEnv->pGameFramework->GetClientActor();
 	if (pPlayer)
 	{
 		float timeSeconds=gEnv->pTimer->GetFrameStartTime().GetSeconds();

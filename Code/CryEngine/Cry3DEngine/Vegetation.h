@@ -24,7 +24,7 @@ public:
 	IPhysicalEntity*                            m_pPhysEnt;
 	SVegetationSpriteInfo*                      m_pSpriteInfo;
 	CDeformableNode*                            m_pDeformable;
-	PodArrayAABB<CRenderObject::SInstanceData>* m_pInstancingInfo;
+	PodArrayAABB<CRenderObject::SInstanceInfo>* m_pInstancingInfo;
 
 #if defined(SEG_WORLD)
 	uint16 m_nStaticTypeSlot;
@@ -56,7 +56,7 @@ public:
 	const char*          GetName(void) const final;
 	virtual CLodValue    ComputeLod(int wantedLod, const SRenderingPassInfo& passInfo) final;
 	virtual void         Render(const SRendParams& RendParams, const SRenderingPassInfo& passInfo) final { assert(0); }
-	void                 Render(const SRenderingPassInfo& passInfo, const CLodValue& lodValue, SSectorTextureSet* pTerrainTexInfo, uint32 nDynLMMask) const;
+	void                 Render(const SRenderingPassInfo& passInfo, const CLodValue& lodValue, SSectorTextureSet* pTerrainTexInfo) const;
 	IPhysicalEntity*     GetPhysics(void) const final                                                    { return m_pPhysEnt; }
 	IRenderMesh*         GetRenderMesh(int nLod) final;
 	void                 SetPhysics(IPhysicalEntity* pPhysEnt) final                                     { m_pPhysEnt = pPhysEnt; }
@@ -71,9 +71,9 @@ public:
 	IFoliage*            GetFoliage(int nSlot = 0) final;
 	float                GetSpriteSwitchDist() const;
 	bool                 IsBreakable() { pe_params_part pp; pp.ipart = 0; return m_pPhysEnt && m_pPhysEnt->GetParams(&pp) && pp.idmatBreakable >= 0; }
-	void                 AddBending(Vec3 const& v);
+	bool                 IsBending() const;
 	virtual float        GetMaxViewDist() final;
-	IStatObj*            GetEntityStatObj(unsigned int nPartId = 0, unsigned int nSubPartId = 0, Matrix34A* pMatrix = NULL, bool bReturnOnlyVisible = false) final;
+	IStatObj*            GetEntityStatObj(unsigned int nSubPartId = 0, Matrix34A* pMatrix = NULL, bool bReturnOnlyVisible = false) final;
 	virtual EERType      GetRenderNodeType() final;
 	virtual void         Dephysicalize(bool bKeepIfReferenced = false) final;
 	void                 Dematerialize() final;
@@ -122,7 +122,7 @@ public:
 	//	float GetLodForDistance(float fDistance);
 	void         Init();
 	void         ShutDown();
-	void         OnRenderNodeBecomeVisible(const SRenderingPassInfo& passInfo) final;
+	void         OnRenderNodeBecomeVisibleAsync(const SRenderingPassInfo& passInfo) final;
 	void         UpdateSpriteInfo(SVegetationSpriteInfo& properties, float fSpriteAmount, SSectorTextureSet* pTerrainTexInfo, const SRenderingPassInfo& passInfo) const;
 	void         UpdateBending();
 	static void  InitVegDecomprTable();
@@ -169,6 +169,9 @@ public:
 	{
 		FillBBoxFromExtends(aabb, m_boxExtends, m_vPos);
 	}
+
+	// Apply bending parameters to the CRenderObject
+	void FillBendingData(CRenderObject* pObj) const;
 };
 
 #endif // _CVegetation_H_

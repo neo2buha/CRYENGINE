@@ -14,14 +14,6 @@
 #include <vector>
 #include <map>
 
-struct SEntitySchedulingProfiles
-{
-	uint32 normal;
-	uint32 owned;
-
-	void   GetMemoryUsage(ICrySizer* pSizer) const { /*nothing*/ }
-};
-
 class CGameObjectSystem : public IGameObjectSystem
 {
 public:
@@ -30,8 +22,8 @@ public:
 	IGameObjectSystem::ExtensionID                     GetID(const char* name) override;
 	const char*                                        GetName(IGameObjectSystem::ExtensionID id) override;
 	uint32                                             GetExtensionSerializationPriority(IGameObjectSystem::ExtensionID id) override;
-	IGameObjectExtensionPtr                            Instantiate(IGameObjectSystem::ExtensionID id, IGameObject* pObject) override;
-	virtual void                                       RegisterExtension(const char* name, IGameObjectExtensionCreatorBase* pCreator, IEntityClassRegistry::SEntityClassDesc* pClsDesc) override;
+	IGameObjectExtension*                            Instantiate(IGameObjectSystem::ExtensionID id, IGameObject* pObject) override;
+	virtual void                                       RegisterExtension(const char* szName, IGameObjectExtensionCreatorBase* pCreator, IEntityClassRegistry::SEntityClassDesc* pClsDesc) override;
 	virtual void                                       RegisterSchedulingProfile(const char* szEntityClassName, const char* szNormalPolicy, const char* szOwnedPolicy) override;
 	virtual void                                       DefineProtocol(bool server, IProtocolBuilder* pBuilder) override;
 	virtual void                                       BroadcastEvent(const SGameObjectEvent& evt) override;
@@ -41,7 +33,7 @@ public:
 	virtual const char*                                GetEventName(uint32 id) override;
 
 	virtual IGameObject*                               CreateGameObjectForEntity(EntityId entityId) override;
-	virtual IEntityProxyPtr                            CreateGameObjectEntityProxy(IEntity& entity, IGameObject** pGameObject = NULL) override;
+	virtual IEntityComponent*                          CreateGameObjectEntityProxy(IEntity& entity, IGameObject** pGameObject = NULL) override;
 
 	virtual void                                       PostUpdate(float frameTime) override;
 	virtual void                                       SetPostUpdate(IGameObject* pGameObject, bool enable) override;
@@ -82,7 +74,7 @@ private:
 	};
 	std::vector<SExtensionInfo> m_extensionInfo;
 
-	static IEntityProxyPtr CreateGameObjectWithPreactivatedExtension(
+	static IEntityComponent* CreateGameObjectWithPreactivatedExtension(
 	  IEntity* pEntity, SEntitySpawnParams& params, void* pUserData);
 
 	CGameObjectDispatch       m_dispatch;

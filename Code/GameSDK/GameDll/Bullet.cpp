@@ -7,7 +7,7 @@ $DateTime$
 
 -------------------------------------------------------------------------
 History:
-- 18:10:2005   14:14 : Created by Márcio Martins
+- 18:10:2005   14:14 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -23,7 +23,8 @@ History:
 #include "WeaponSystem.h"
 #include <CryAnimation/ICryAnimation.h>
 #include <CryAISystem/IAIObject.h>
-#include "AI/GameAIEnv.h"
+
+#include <IPerceptionManager.h>
 
 struct SPhysicsRayWrapper
 {
@@ -330,7 +331,8 @@ void CBullet::HandleEvent(const SGameObjectEvent &event)
 			//====================================~ Process Hit ======================================
 
 			//==================================== Notify AI    ======================================
-			if (gEnv->pAISystem)
+			IPerceptionManager* perceptionManager = IPerceptionManager::GetInstance();
+			if (perceptionManager)
 			{
 				if (gEnv->pEntitySystem->GetEntity(m_ownerId))
 				{
@@ -340,10 +342,10 @@ void CBullet::HandleEvent(const SGameObjectEvent &event)
 					const float soundRadius = pParams ? pParams->fImpactSoundRadius : 20.0f;
 
 					SAIStimulus stim(AISTIM_BULLET_HIT, 0, m_ownerId, pTarget ? pTarget->GetId() : 0, pCollision->pt, pCollision->vloc[0].GetNormalizedSafe(ZERO), radius);
-					gEnv->pAISystem->RegisterStimulus(stim);
+					perceptionManager->RegisterStimulus(stim);
 
 					SAIStimulus stimSound(AISTIM_SOUND, AISTIM_BULLET_HIT, m_ownerId, 0, pCollision->pt, ZERO, soundRadius);
-					gEnv->pAISystem->RegisterStimulus(stimSound);
+					perceptionManager->RegisterStimulus(stimSound);
 				}
 			}
 			//=========================================~ Notify AI ===============================
@@ -782,10 +784,10 @@ void SDebugBulletPenetration::Update(float frameTime)
 		const Vec3 textLineOffset(0.0f, 0.0f, 0.14f);
 		const float textColor[4] = {1.0f, 1.0f, 1.0f, alpha};
 
-		gEnv->pRenderer->DrawLabelEx(baseText - (textLineOffset * 2.0f), 1.25f, textColor, true, false, "Damage: %.1f", currentHit.damage);
-		gEnv->pRenderer->DrawLabelEx(baseText - (textLineOffset * 3.0f), 1.25f, textColor, true, false, "Pierceability: %d", currentHit.surfacePierceability);
-		gEnv->pRenderer->DrawLabelEx(baseText - (textLineOffset * 4.0f), 1.25f, textColor, true, false, "%s", GetPenetrationLevelByPierceability(currentHit.surfacePierceability));
-		gEnv->pRenderer->DrawLabelEx(baseText - (textLineOffset * 5.0f), 1.25f, textColor, true, false, currentHit.tooThick ? "Too thick!" : "------");
+		IRenderAuxText::DrawLabelExF(baseText - (textLineOffset * 2.0f), 1.25f, textColor, true, false, "Damage: %.1f", currentHit.damage);
+		IRenderAuxText::DrawLabelExF(baseText - (textLineOffset * 3.0f), 1.25f, textColor, true, false, "Pierceability: %d", currentHit.surfacePierceability);
+		IRenderAuxText::DrawLabelEx (baseText - (textLineOffset * 4.0f), 1.25f, textColor, true, false, GetPenetrationLevelByPierceability(currentHit.surfacePierceability));
+		IRenderAuxText::DrawLabelEx (baseText - (textLineOffset * 5.0f), 1.25f, textColor, true, false, currentHit.tooThick ? "Too thick!" : "------");
 
 	}
 

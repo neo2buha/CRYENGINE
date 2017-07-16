@@ -3,6 +3,7 @@
 #include "StdAfx.h"
 #include "ShaderResources.h"
 #include "GraphicsPipeline/Common/GraphicsPipelineStateSet.h"
+#include "Common/Textures/TextureHelpers.h"
 
 #include "DriverD3D.h"
 
@@ -107,6 +108,7 @@ void CShaderResources::RT_Release()
 void CShaderResources::Cleanup()
 {
 	//assert(gRenDev->m_pRT->IsRenderThread());
+	m_resources.Clear();
 
 	for (int i = 0; i < EFTT_MAX; i++)
 	{
@@ -132,6 +134,14 @@ void CShaderResources::Cleanup()
 	}
 }
 
+void CShaderResources::ClearPipelineStateCache()
+{
+	if (m_pipelineStateCache)
+	{
+		m_pipelineStateCache->Clear();
+	}
+}
+
 CShaderResources::~CShaderResources()
 {
 	Cleanup();
@@ -143,12 +153,34 @@ CShaderResources::~CShaderResources()
 }
 
 CShaderResources::CShaderResources()
+	: m_resources(this, OnTextureInvalidated)
 {
 	m_pipelineStateCache = std::make_shared<CGraphicsPipelineStateLocalCache>();
 	Reset();
 }
 
+CShaderResources::CShaderResources(const CShaderResources& src)
+	: m_resources(src.m_resources, this, OnTextureInvalidated)
+{
+	m_pipelineStateCache = std::make_shared<CGraphicsPipelineStateLocalCache>();
+	Reset();
+
+	SBaseShaderResources::operator=(src);
+
+	for (int i = 0; i < EFTT_MAX; i++)
+	{
+		if (!src.m_Textures[i])
+			continue;
+		AddTextureMap(i);
+		*m_Textures[i] = *src.m_Textures[i];
+	}
+
+	m_Constants = src.m_Constants;
+	m_IdGroup = src.m_IdGroup;
+}
+
 CShaderResources::CShaderResources(SInputShaderResources* pSrc)
+	: m_resources(this, OnTextureInvalidated)
 {
 	assert(pSrc);
 	PREFAST_ASSUME(pSrc);
@@ -197,27 +229,10 @@ CShaderResources::CShaderResources(SInputShaderResources* pSrc)
 	SetInputLM(pSrc->m_LMaterial);
 }
 
-CShaderResources& CShaderResources::operator=(const CShaderResources& src)
-{
-	Cleanup();
-	SBaseShaderResources::operator=(src);
-	int i;
-	for (i = 0; i < EFTT_MAX; i++)
-	{
-		if (!src.m_Textures[i])
-			continue;
-		AddTextureMap(i);
-		*m_Textures[i] = *src.m_Textures[i];
-	}
-	m_Constants = src.m_Constants;
-	m_IdGroup = src.m_IdGroup;
-	return *this;
-}
 
 CShaderResources* CShaderResources::Clone() const
 {
-	CShaderResources* pSR = new CShaderResources();
-	*pSR = *this;
+	CShaderResources* pSR = new CShaderResources(*this);
 	pSR->m_nRefCounter = 1;
 	for (uint32 i = 0; i < CShader::s_ShaderResources_known.Num(); i++)
 	{
@@ -235,7 +250,6 @@ CShaderResources* CShaderResources::Clone() const
 		return CShader::s_ShaderResources_known[1];
 	}
 	pSR->m_Id = CShader::s_ShaderResources_known.Num();
-	ScopedSwitchToGlobalHeap globalHeap;
 	CShader::s_ShaderResources_known.AddElem(pSR);
 
 	return pSR;
@@ -621,14 +635,18 @@ void CShaderResources::RT_UpdateConstants(IShader* pISH)
 		Vec4 deformWave(0, 0, 0, 1);
 		if (m_pDeformInfo && m_pDeformInfo->m_fDividerX != 0)
 		{
+<<<<<<< HEAD
 			deformWave.x = gcpRendD3D->m_RP.m_TI[gcpRendD3D->m_RP.m_nProcessThreadID].m_RealTime * m_pDeformInfo->m_WaveX.m_Freq + m_pDeformInfo->m_WaveX.m_Phase;
+=======
+			deformWave.x = m_pDeformInfo->m_WaveX.m_Freq + m_pDeformInfo->m_WaveX.m_Phase;
+>>>>>>> upstream/stabilisation
 			deformWave.y = m_pDeformInfo->m_WaveX.m_Amp;
 			deformWave.z = m_pDeformInfo->m_WaveX.m_Level;
 			deformWave.w = 1.0f / m_pDeformInfo->m_fDividerX;
 		}
 
 		Vec4* pDst = (Vec4*)&m_Constants[0];
-		*alias_cast<Matrix44*>(&pDst[REG_PM_TCM_MATRIX]) = matrixTCM;
+		*alias_cast<Matrix44f*>(&pDst[REG_PM_TCM_MATRIX]) = matrixTCM;
 		pDst[REG_PM_DEFORM_WAVE] = deformWave;
 		pDst[REG_PM_DETAILTILING_ALPHAREF] = detailTilingAndAlpharef;
 
@@ -699,7 +717,7 @@ void CShaderResources::RT_UpdateConstants(IShader* pISH)
 		for (int j = 0; j < (int)pTech->m_Passes.Num(); j++)
 		{
 			SShaderPass* pPass = &pTech->m_Passes[j];
-			assert((pPass->m_VShader && pPass->m_PShader) || pPass->m_CShader);
+			//assert((pPass->m_VShader && pPass->m_PShader) || pPass->m_CShader);
 			if (pPass->m_VShader)
 			{
 				AddShaderParamToArray(FXParams, Params, eHWSC_Vertex);
@@ -732,7 +750,7 @@ void CShaderResources::RT_UpdateConstants(IShader* pISH)
 		std::sort(Params.begin(), Params.end(), CompareItem());
 	}
 
-	std::vector<Vec4>* pConstants = &m_Constants;
+	auto* __restrict pConstants = &m_Constants;
 	SFXParam* pPR;
 	int nFirstConst = FIRST_REG_PM;
 	int nLastConst = -1;
@@ -766,35 +784,109 @@ void CShaderResources::RT_UpdateConstants(IShader* pISH)
 
 	if (m_Constants.size())
 	{
-		*ppBuf = gcpRendD3D->m_DevBufMan.CreateConstantBuffer(m_Constants.size() * sizeof(Vec4), false);
-		(*ppBuf)->UpdateBuffer(&m_Constants[0], m_Constants.size() * sizeof(Vec4));
+		// NOTE: The pointers and the size is 16 byte aligned
+		size_t nSize = m_Constants.size() * sizeof(Vec4);
 
-#if !defined(_RELEASE) && CRY_PLATFORM_WINDOWS
+		*ppBuf = gcpRendD3D->m_DevBufMan.CreateConstantBufferRaw(nSize, false);
+		(*ppBuf)->UpdateBuffer(&m_Constants[0], Align(nSize, 256));
+
+#if !defined(_RELEASE) && (CRY_PLATFORM_WINDOWS || CRY_PLATFORM_ORBIS) && !CRY_RENDERER_GNM
 		if (*ppBuf)
 		{
 			string name = string("PM CBuffer ") + pSH->GetName() + "@" + m_szMaterialName;
-			(*ppBuf)->m_buffer->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)name.length(), name.c_str());
-		}
-#elif !defined(_RELEASE) && CRY_PLATFORM_ORBIS
-		if (*ppBuf)
-		{
-			string name = string("PM CBuffer ") + pSH->GetName() + "@" + m_szMaterialName;
-			(*ppBuf)->m_buffer->DebugSetName(name.c_str());
+
+			#if CRY_RENDERER_VULKAN || CRY_PLATFORM_ORBIS
+				(*ppBuf)->GetD3D()->DebugSetName(name.c_str());
+			#else
+				(*ppBuf)->GetD3D()->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)name.length(), name.c_str());
+			#endif
 		}
 #endif
 	}
 
-	if (!m_pCompiledResourceSet)
+	m_bResourcesDirty = true;
+
+	RT_UpdateResourceSet();
+}
+
+bool CShaderResources::OnTextureInvalidated(void* pThis, uint32 flags)
+{
+	reinterpret_cast<CShaderResources*>(pThis)->m_bResourcesDirty = true;
+	return true;
+};
+
+void CShaderResources::RT_UpdateResourceSet()
+{
+	CRY_ASSERT(gRenDev->m_pRT->IsRenderThread());
+	uint32_t flags = m_flags;
+
+	// create resource set if necessary
+	if (!m_pCompiledResourceSet || (flags & eFlagRecreateResourceSet))
 	{
-		m_pCompiledResourceSet = CCryDeviceWrapper::GetObjectFactory().CreateResourceSet();
+		flags &= ~eFlagRecreateResourceSet;
+		m_pCompiledResourceSet = GetDeviceObjectFactory().CreateResourceSet();
 	}
 
+<<<<<<< HEAD
 	if (m_pCompiledResourceSet)
+=======
+	flags &= ~(EFlags_AnimatedSequence | EFlags_DynamicUpdates);
+
+	// per material constant buffer
+	CDeviceResourceSetDesc::EDirtyFlags dirtyFlags = m_resources.SetConstantBuffer(eConstantBufferShaderSlot_PerMaterial, m_pCB, EShaderStage_AllWithoutCompute);
+
+	// material textures
+	bool bContainsInvalidTexture = false;
+	for (EEfResTextures texType = EFTT_DIFFUSE; texType < EFTT_MAX; texType = EEfResTextures(texType + 1))
+>>>>>>> upstream/stabilisation
 	{
-		// Compile resource set from current material
-		m_pCompiledResourceSet->Fill(pSH, this, EShaderStage_AllWithoutCompute);
-		m_pCompiledResourceSet->Build();
+		ResourceViewHandle hView = EDefaultResourceViews::Default;
+		CTexture* pTex = nullptr;
+
+		if (m_Textures[texType])
+		{
+			const STexSamplerRT& smp = m_Textures[texType]->m_Sampler;
+			if (smp.m_pDynTexSource)
+			{
+				hView = EDefaultResourceViews::sRGB;
+				flags |= EFlags_DynamicUpdates;
+
+				if (ITexture* pITex = smp.m_pDynTexSource->GetTexture())
+				{
+					pTex = CTexture::GetByID(pITex->GetTextureID());
+				}
+				else
+				{
+					m_flags = flags;
+					m_bResourcesDirty = true;
+					return; // flash texture has not been allocated yet. abort
+				}
+			}
+			else if (smp.m_pAnimInfo && (smp.m_pAnimInfo->m_NumAnimTexs > 1))
+			{
+				flags |= EFlags_AnimatedSequence;
+				pTex = smp.m_pTex;
+			}
+			else if (smp.m_pTex)
+			{
+				pTex = smp.m_pTex;
+			}
+		}
+		else
+		{
+			pTex = TextureHelpers::LookupTexDefault(texType);
+		}
+
+		bContainsInvalidTexture |= !CTexture::IsTextureExist(pTex);
+		dirtyFlags |= m_resources.SetTexture(IShader::GetTextureSlot(texType), pTex, hView, EShaderStage_AllWithoutCompute);
 	}
+
+	if (!bContainsInvalidTexture)
+	{
+		m_pCompiledResourceSet->Update(m_resources, dirtyFlags);
+	}
+
+	m_flags = flags;
 }
 
 void CShaderResources::CloneConstants(const IRenderShaderResources* pISrc)
@@ -828,7 +920,12 @@ void CShaderResources::CloneConstants(const IRenderShaderResources* pISrc)
 			pCB0Dst = pCB0Src;
 		}
 
+<<<<<<< HEAD
 		m_pCompiledResourceSet = pSrc->m_pCompiledResourceSet ? CCryDeviceWrapper::GetObjectFactory().CloneResourceSet(pSrc->m_pCompiledResourceSet) : nullptr;
+=======
+		m_pCompiledResourceSet = pSrc->m_pCompiledResourceSet;
+		m_flags |= eFlagRecreateResourceSet;
+>>>>>>> upstream/stabilisation
 	}
 }
 
@@ -850,17 +947,13 @@ void CShaderResources::ReleaseConstants()
 
 static void sChangeAniso(SEfResTexture* pTex)
 {
-	int nTS = pTex->m_Sampler.m_nTexState;
-	if (nTS < 0 || nTS >= (int)CTexture::s_TexStates.size())
-		return;
+	SamplerStateHandle nTS = pTex->m_Sampler.m_nTexState;
 	int8 nAniso = min(CRenderer::CV_r_texminanisotropy, CRenderer::CV_r_texmaxanisotropy);
 	if (nAniso < 1)
 		return;
-	STexState* pTS = &CTexture::s_TexStates[nTS];
-	STexState ST = *pTS;
+	SSamplerState ST = CDeviceObjectFactory::LookupSamplerState(nTS).first;
 	if (ST.m_nAnisotropy == nAniso)
 		return;
-	ST.m_pDeviceState = NULL; //otherwise state change is not applied
 
 	if (nAniso >= 16)
 		ST.m_nMipFilter =
@@ -884,7 +977,7 @@ static void sChangeAniso(SEfResTexture* pTex)
 		    ST.m_nMagFilter = FILTER_TRILINEAR;
 
 	ST.m_nAnisotropy = nAniso;
-	pTex->m_Sampler.m_nTexState = CTexture::GetTexState(ST);
+	pTex->m_Sampler.m_nTexState = CDeviceObjectFactory::GetOrCreateSamplerStateHandle(ST);
 }
 
 void CShaderResources::AdjustForSpec()

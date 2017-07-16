@@ -6,41 +6,18 @@
 #pragma once
 
 #include <CryAISystem/IMNM.h>
+#include <CryAISystem/NavigationSystem/NavigationIdTypes.h>
+#include <functional>
 
 struct IAIPathAgent;
 struct IOffMeshNavigationManager;
+struct INavigationUpdatesManager;
 
 #ifdef SW_NAVMESH_USE_GUID
 typedef uint64 NavigationMeshGUID;
 typedef uint64 NavigationVolumeGUID;
 #endif
 
-enum ENavigationIDTag
-{
-	MeshIDTag = 0,
-	AgentTypeIDTag,
-	VolumeIDTag,
-};
-
-template<ENavigationIDTag T>
-struct TNavigationID
-{
-	explicit TNavigationID(uint32 id = 0) : id(id) {}
-
-	TNavigationID& operator=(const TNavigationID& other)        { id = other.id; return *this; }
-
-	ILINE          operator uint32() const                      { return id; }
-	ILINE bool     operator==(const TNavigationID& other) const { return id == other.id; }
-	ILINE bool     operator!=(const TNavigationID& other) const { return id != other.id; }
-	ILINE bool     operator<(const TNavigationID& other) const  { return id < other.id; }
-
-private:
-	uint32 id;
-};
-
-typedef TNavigationID<MeshIDTag>                                  NavigationMeshID;
-typedef TNavigationID<AgentTypeIDTag>                             NavigationAgentTypeID;
-typedef TNavigationID<VolumeIDTag>                                NavigationVolumeID;
 typedef Functor3<NavigationAgentTypeID, NavigationMeshID, uint32> NavigationMeshChangeCallback;
 typedef Functor2wRet<IPhysicalEntity&, uint32&, bool>             NavigationMeshEntityCallback;
 
@@ -53,6 +30,16 @@ struct INavigationSystemUser
 	virtual void UpdateForSynchronousWritingOperations() = 0;
 	virtual void CompleteRunningTasks() = 0;
 };
+
+namespace MNM
+{
+struct INavMesh;
+
+namespace TileGenerator
+{
+struct IExtension;
+} // namespace TileGenerator
+} // namespace MNM
 
 struct INavigationSystem
 {
@@ -132,6 +119,8 @@ struct INavigationSystem
 	virtual NavigationMeshID CreateMesh(const char* name, NavigationAgentTypeID agentTypeID, const CreateMeshParams& params) = 0;
 	virtual NavigationMeshID CreateMesh(const char* name, NavigationAgentTypeID agentTypeID, const CreateMeshParams& params, NavigationMeshID requestedID) = 0;
 #endif
+	virtual NavigationMeshID CreateMeshForVolumeAndUpdate(const char* name, NavigationAgentTypeID agentTypeID, const CreateMeshParams& params, const NavigationVolumeID volumeID) = 0;
+
 	virtual void             DestroyMesh(NavigationMeshID meshID) = 0;
 
 	virtual void SetMeshEntityCallback(NavigationAgentTypeID agentTypeID, const NavigationMeshEntityCallback& callback) = 0;
@@ -152,8 +141,8 @@ struct INavigationSystem
 	virtual NavigationVolumeID CreateVolume(Vec3* vertices, size_t vertexCount, float height, NavigationVolumeID requestedID) = 0;
 	virtual void               DestroyVolume(NavigationVolumeID volumeID) = 0;
 	virtual void               SetVolume(NavigationVolumeID volumeID, Vec3* vertices, size_t vertexCount, float height) = 0;
-	virtual bool               ValidateVolume(NavigationVolumeID volumeID) = 0;
-	virtual NavigationVolumeID GetVolumeID(NavigationMeshID meshID) = 0;
+	virtual bool               ValidateVolume(NavigationVolumeID volumeID) const = 0;
+	virtual NavigationVolumeID GetVolumeID(NavigationMeshID meshID) const = 0;
 
 #ifdef SW_NAVMESH_USE_GUID
 	virtual void SetExclusionVolume(const NavigationAgentTypeID* agentTypeIDs, size_t agentTypeIDCount, NavigationVolumeID volumeID, NavigationVolumeGUID guid) = 0;
@@ -168,14 +157,19 @@ struct INavigationSystem
 	virtual void             SetMeshName(NavigationMeshID meshID, const char* name) = 0;
 
 	virtual WorkingState     GetState() const = 0;
-	virtual WorkingState     Update(bool blocking = false) = 0;
-	virtual void             PauseNavigationUpdate() = 0;
-	virtual void             RestartNavigationUpdate() = 0;
 
-	virtual size_t           QueueMeshUpdate(NavigationMeshID meshID, const AABB& aabb) = 0;
-	virtual void             ProcessQueuedMeshUpdates() = 0;
+	// MNM regeneration tasks are queued up, but not executed
+	virtual void					PauseNavigationUpdate() = 0;
+	virtual void					RestartNavigationUpdate() = 0;
+	virtual WorkingState     		Update(bool blocking = false) = 0;
+	virtual uint32                  GetWorkingQueueSize() const = 0;
 
-	virtual void             Clear() = 0;
+	//! deprecated - RequestQueueMeshUpdate(meshID, aabb) should be used instead
+	virtual size_t					 QueueMeshUpdate(NavigationMeshID meshID, const AABB& aabb) = 0;
+
+	virtual void					 ProcessQueuedMeshUpdates() = 0;
+
+	virtual void					 Clear() = 0;
 
 	//! ClearAndNotify is used when the listeners need to be notified about the performed clear operation.
 	virtual void                  ClearAndNotify() = 0;
@@ -184,7 +178,8 @@ struct INavigationSystem
 	virtual void                  DebugDraw() = 0;
 	virtual void                  Reset() = 0;
 
-	virtual void                  WorldChanged(const AABB& aabb) = 0;
+	
+	virtual INavigationUpdatesManager* GetUpdateManager() = 0;
 
 	virtual void                  SetDebugDisplayAgentType(NavigationAgentTypeID agentTypeID) = 0;
 	virtual NavigationAgentTypeID GetDebugDisplayAgentType() const = 0;
@@ -217,32 +212,45 @@ struct INavigationSystem
 	virtual bool                SaveToFile(const char* fileName) const = 0;
 #endif
 
-	virtual void                             RegisterListener(INavigationSystemListener* pListener, const char* name = NULL) = 0;
-	virtual void                             UnRegisterListener(INavigationSystemListener* pListener) = 0;
+	virtual void RegisterListener(INavigationSystemListener* pListener, const char* name = NULL) = 0;
+	virtual void UnRegisterListener(INavigationSystemListener* pListener) = 0;
 
-	virtual void                             RegisterUser(INavigationSystemUser* pExtension, const char* name = NULL) = 0;
-	virtual void                             UnRegisterUser(INavigationSystemUser* pExtension) = 0;
+	virtual void RegisterUser(INavigationSystemUser* pExtension, const char* name = NULL) = 0;
+	virtual void UnRegisterUser(INavigationSystemUser* pExtension) = 0;
 
-	virtual void                             RegisterArea(const char* shapeName) = 0;
-	virtual void                             UnRegisterArea(const char* shapeName) = 0;
-	virtual NavigationVolumeID               GetAreaId(const char* shapeName) const = 0;
-	virtual void                             SetAreaId(const char* shapeName, NavigationVolumeID id) = 0;
-	virtual void                             UpdateAreaNameForId(const NavigationVolumeID id, const char* newShapeName) = 0;
+	//! Register editor Navigation Area shape.
+	//! \param shapeName Name of the Navigation Area shape.
+	//! \param outVolumeId Returns NavigationVolumeID, if there is a volume already loaded from exported data with the same shapeName.
+	//! \return true if the area name is successfully registered.
+	virtual bool               RegisterArea(const char* shapeName, NavigationVolumeID& outVolumeId) = 0;
+	virtual void               UnRegisterArea(const char* shapeName) = 0;
+	virtual NavigationVolumeID GetAreaId(const char* shapeName) const = 0;
+	virtual void               SetAreaId(const char* shapeName, NavigationVolumeID id) = 0;
+	virtual void               UpdateAreaNameForId(const NavigationVolumeID id, const char* newShapeName) = 0;
+	//! Remove navigation meshes and volumes which don't have corresponding registered Navigation Areas. This may happen in editor, when the exported level data is older that the saved level.
+	virtual void               RemoveLoadedMeshesWithoutRegisteredAreas() = 0;
 
-	virtual void                             StartWorldMonitoring() = 0;
-	virtual void                             StopWorldMonitoring() = 0;
+	virtual void               StartWorldMonitoring() = 0;
+	virtual void               StopWorldMonitoring() = 0;
 
-	virtual bool                             IsInUse() const = 0;
+	virtual bool               IsInUse() const = 0;
 
-	virtual void                             CalculateAccessibility() = 0;
+	virtual void               CalculateAccessibility() = 0;
 
-	virtual uint32                           GetTileIdWhereLocationIsAtForMesh(NavigationMeshID meshID, const Vec3& location) = 0;
-	virtual void                             GetTileBoundsForMesh(NavigationMeshID meshID, uint32 tileID, AABB& bounds) const = 0;
+	virtual MNM::TileID        GetTileIdWhereLocationIsAtForMesh(NavigationMeshID meshID, const Vec3& location) = 0;
+	virtual void               GetTileBoundsForMesh(NavigationMeshID meshID, uint32 tileID, AABB& bounds) const = 0;
 
-	virtual MNM::TriangleID                  GetTriangleIDWhereLocationIsAtForMesh(const NavigationAgentTypeID agentID, const Vec3& location) = 0;
+	virtual MNM::TriangleID    GetTriangleIDWhereLocationIsAtForMesh(const NavigationAgentTypeID agentID, const Vec3& location) = 0;
+
+	//! Get a MNM::INavMesh, which provides an access to the NavMesh data
+	virtual const MNM::INavMesh*             GetMNMNavMesh(NavigationMeshID meshID) const = 0;
 
 	virtual const IOffMeshNavigationManager& GetIOffMeshNavigationManager() const = 0;
 	virtual IOffMeshNavigationManager&       GetIOffMeshNavigationManager() = 0;
+
+	virtual TileGeneratorExtensionID         RegisterTileGeneratorExtension(MNM::TileGenerator::IExtension& extension) = 0;
+	virtual bool                             UnRegisterTileGeneratorExtension(const TileGeneratorExtensionID extensionId) = 0;
+
 	// </interfuscator:shuffle>
 };
 

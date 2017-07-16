@@ -54,7 +54,6 @@ bool CVehicleSeatSerializer::Init(IGameObject* pGameObject)
 		if (!GetGameObject()->BindToNetworkWithParent(eBTNM_Normal, parentId))
 			return false;
 
-	GetEntity()->Activate(0);
 	GetEntity()->Hide(true);
 
 	if (!IsDemoPlayback())
@@ -89,14 +88,6 @@ bool CVehicleSeatSerializer::ReloadExtension(IGameObject* pGameObject, const SEn
 	CRY_ASSERT_MESSAGE(false, "CVehicleSeatSerializer::ReloadExtension not implemented");
 
 	return false;
-}
-
-//------------------------------------------------------------------------
-bool CVehicleSeatSerializer::GetEntityPoolSignature(TSerialize signature)
-{
-	CRY_ASSERT_MESSAGE(false, "CVehicleSeatSerializer::GetEntityPoolSignature not implemented");
-
-	return true;
 }
 
 //------------------------------------------------------------------------

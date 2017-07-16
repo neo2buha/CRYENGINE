@@ -18,9 +18,10 @@
 #include <CryMath/Cry_Color.h>
 
 class ICrySizer;
+struct CryGUID;
 
 #if defined(_AFX) && !defined(RESOURCE_COMPILER)
-	#include "Util/GuidUtil.h"
+#include <CryCore/ToolsHelpers/GuidUtil.h>
 #endif
 
 class IXMLBinarySerializer;
@@ -93,6 +94,7 @@ public:
 	XmlNodeRef() : p(NULL) {}
 	XmlNodeRef(IXmlNode* p_);
 	XmlNodeRef(const XmlNodeRef& p_);
+	XmlNodeRef(XmlNodeRef&& other);
 
 	~XmlNodeRef();
 
@@ -103,6 +105,8 @@ public:
 
 	XmlNodeRef& operator=(IXmlNode* newp);
 	XmlNodeRef& operator=(const XmlNodeRef& newp);
+
+	XmlNodeRef& operator=(XmlNodeRef&& other);
 
 #if !defined(RESOURCE_COMPILER)
 	template<typename Sizer>
@@ -332,9 +336,19 @@ public:
 	bool getAttr(const char* key, char& value) const           { int v; if (getAttr(key, v)) { value = v; return true; } else return false; }
 	//! @}.
 
-#if defined(_AFX) && !defined(RESOURCE_COMPILER)
+#ifndef RESOURCE_COMPILER
+#ifdef _AFX
 	//! Gets CString attribute.
 	bool getAttr(const char* key, CString& value) const
+	{
+		if (!haveAttr(key))
+			return false;
+		value = getAttr(key);
+		return true;
+	}
+
+	//! Gets string attribute.
+	bool getAttr(const char* key, string& value) const
 	{
 		if (!haveAttr(key))
 			return false;
@@ -365,6 +379,11 @@ public:
 		return true;
 	}
 #endif //_AFX
+	// Those are defined as abstract here because CryGUID header has access to gEnv, which breaks compilation
+	virtual void setAttr(const char* key, const CryGUID& value) = 0;
+
+	virtual bool getAttr(const char* key, CryGUID& value) const = 0;
+#endif //RESOURCE_COMPILER
 
 	// Lets be friendly to him.
 	friend class XmlNodeRef;
@@ -397,9 +416,29 @@ inline XmlNodeRef::XmlNodeRef(const XmlNodeRef& p_) : p(p_.p)
 	if (p) p->AddRef();
 }
 
+// Move constructor
+inline XmlNodeRef::XmlNodeRef(XmlNodeRef&& other)
+{
+	if (this != &other)
+	{
+		p = other.p;
+		other.p = nullptr;
+	}
+}
+
 inline XmlNodeRef::~XmlNodeRef()
 {
 	if (p) p->Release();
+}
+
+inline XmlNodeRef& XmlNodeRef::operator=(XmlNodeRef&& other)
+{
+	if (this != &other)
+	{
+		p = other.p;
+		other.p = nullptr;
+	}
+	return *this;
 }
 
 inline XmlNodeRef& XmlNodeRef::operator=(IXmlNode* newp)

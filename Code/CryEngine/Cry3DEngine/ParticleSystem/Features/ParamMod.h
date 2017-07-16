@@ -140,17 +140,18 @@ public:
 
 	void                           AddToComponent(CParticleComponent* pComponent, CParticleFeature* pFeature);
 	void                           AddToComponent(CParticleComponent* pComponent, CParticleFeature* pFeature, EParticleDataType dataType);
-	void                           AddToComponent(CParticleComponent* pComponent, CParticleFeature* pFeature, EParticleDataType dataType, EParticleDataType initDataType);
 	void                           Serialize(Serialization::IArchive& ar);
 
-	void                           InitParticles(const SUpdateContext& context, EParticleDataType dataType, EParticleDataType initDataType) const;
+	void                           InitParticles(const SUpdateContext& context, EParticleDataType dataType) const;
 	void                           ModifyInit(const SUpdateContext& context, TType* data, SUpdateRange range) const;
 
 	void                           Update(const SUpdateContext& context, EParticleDataType dataType) const;
 	void                           ModifyUpdate(const SUpdateContext& context, TType* data, SUpdateRange range) const;
 
 	TRange<TType>                  GetValues(const SUpdateContext& context, TType* data, SUpdateRange range, EModDomain domain, bool updating) const;
+	TRange<TType>                  GetValues(const SUpdateContext& context, TVarArray<TType> data, EModDomain domain, bool updating) const;
 	TRange<TType>                  GetValueRange(const SUpdateContext& context) const;
+	TRange<TType>                  GetValueRange() const;
 	void                           Sample(TType* samples, int numSamples) const;
 
 	bool                           HasModifiers() const { return !m_modInit.empty() || !m_modUpdate.empty(); }

@@ -1,31 +1,20 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
-// -------------------------------------------------------------------------
-//  File name:
-//  Version:     v1.00
-//  Created:     11/02/2015 by Jan Pinter
-//  Description:
-// -------------------------------------------------------------------------
-//  History:
-//
-////////////////////////////////////////////////////////////////////////////
 #pragma once
-#ifndef __CCRYDX12VIEW__
-	#define __CCRYDX12VIEW__
 
-	#include "CCryDX12Resource.hpp"
+#include "CCryDX12Resource.hpp"
 
-	#include "DX12/Resource/Misc/CCryDX12Buffer.hpp"
+#include "DX12/Resource/Misc/CCryDX12Buffer.hpp"
 
-	#include "DX12/API/DX12View.hpp"
+#include "DX12/API/DX12View.hpp"
 
 // "view" must be ID3D11*View
 // This is potentialy dangerous, but easy & fast...
-	#define DX12_EXTRACT_ICRYDX12VIEW(view) \
-	  ((view) ? (static_cast<ICryDX12View*>(reinterpret_cast<CCryDX12RenderTargetView*>(view))) : NULL)
+#define DX12_EXTRACT_ICRYDX12VIEW(view) \
+	((view) ? (static_cast<ICryDX12View*>(reinterpret_cast<CCryDX12RenderTargetView*>(view))) : NULL)
 
-	#define DX12_EXTRACT_DX12VIEW(view) \
-	  ((view) ? &(static_cast<ICryDX12View*>(reinterpret_cast<CCryDX12RenderTargetView*>(view)))->GetDX12View() : NULL)
+#define DX12_EXTRACT_DX12VIEW(view) \
+	((view) ? &(static_cast<ICryDX12View*>(reinterpret_cast<CCryDX12RenderTargetView*>(view)))->GetDX12View() : NULL)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -72,19 +61,20 @@ public:
 	std::string GetResourceName()
 	{
 		ICryDX12Resource* ires = DX12_EXTRACT_ICRYDX12RESOURCE(m_pResource11.get());
-		CCryDX12Resource<ID3D11Resource>* cres = static_cast<CCryDX12Resource<ID3D11Resource>*>(ires);
+		CCryDX12Resource<ID3D11ResourceToImplement>* cres = static_cast<CCryDX12Resource<ID3D11ResourceToImplement>*>(ires);
 		return cres ? cres->GetName() : "-";
 	}
 
-	void SetBarrier(ID3D12Device* pDevice, ID3D12GraphicsCommandList* pCmdList, UINT newState)
+	template<class T>
+	void SetResourceState(T* pCmdList, D3D12_RESOURCE_STATES desiredState)
 	{
-		DX12_EXTRACT_ICRYDX12RESOURCE(m_pResource11.get())->SetBarrier(pDevice, pCmdList, newState);
+		pCmdList->SetResourceState(m_rDX12Resource, m_DX12View, desiredState);
 	}
 
 	#pragma region /* ID3D11View implementation */
 
-	virtual void STDMETHODCALLTYPE GetResource(
-	  _Out_ ID3D11Resource** ppResource)
+	VIRTUALGFX void STDMETHODCALLTYPE GetResource(
+	  _Out_ ID3D11Resource** ppResource) FINALGFX
 	{
 		if (m_pResource11)
 		{
@@ -114,5 +104,3 @@ protected:
 
 	NCryDX12::CResource& m_rDX12Resource;
 };
-
-#endif // __CCRYDX12VIEW__

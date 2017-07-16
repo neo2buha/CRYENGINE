@@ -1,11 +1,6 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
-#ifndef __entitynode_h__
-#define __entitynode_h__
-
-#if _MSC_VER > 1000
-//#pragma once
-#endif
+#pragma once
 
 #include <set>
 #include "AnimNode.h"
@@ -111,25 +106,23 @@ public:
 	virtual IAnimEntityNode* QueryEntityNodeInterface() override                          { return this; }
 
 protected:
-	virtual bool GetParamInfoFromType(const CAnimParamType& paramId, SParamInfo& info) const override;
+	virtual bool         GetParamInfoFromType(const CAnimParamType& paramId, SParamInfo& info) const override;
+	int                  GetEntityId() const { return m_EntityId; }
 
-	int          GetEntityId() const { return m_EntityId; }
-
-	void         ReleaseSounds();
-	void ApplyEventKey(class CEventTrack* track, int keyIndex, SEventKey& key);
-	void         ApplyAudioKey(char const* const sTriggerName, bool const bPlay = true);
-	Vec3         Adjust3DSoundOffset(bool bVoice, IEntity* pEntity, Vec3& oSoundPos) const;
-	void AnimateCharacterTrack(class CCharacterTrack* track, SAnimContext& animContext, int layer, int trackIndex, SAnimState& animState, IEntity* pEntity, ICharacterInstance* pCharacter);
-	bool         CheckTimeJumpingOrOtherChanges(const SAnimContext& animContext, int32 activeKeys[], int32 numActiveKeys, ICharacterInstance* pCharacter, int layer, int trackIndex, SAnimState& animState);
-	void UpdateAnimTimeJumped(int32 keyIndex, class CCharacterTrack * track, SAnimTime ectime, ICharacterInstance * pCharacter, int layer, bool bAnimEvents, int trackIndex, SAnimState & animState);
-	void UpdateAnimRegular(int32 numActiveKeys, int32 activeKeys[], class CCharacterTrack * track, SAnimTime ectime, ICharacterInstance * pCharacter, int layer, bool bAnimEvents);
-	void UpdateAnimBlendGap(int32 activeKeys[], class CCharacterTrack * track, SAnimTime ectime, ICharacterInstance * pCharacter, int layer);
-	void ApplyAnimKey(int32 keyIndex, class CCharacterTrack * track, SAnimTime ectime,
-											ICharacterInstance * pCharacter, int layer, int animIndex, bool bAnimEvents);
-	void StopExpressions();
-	void AnimateExpressionTrack(class CExprTrack* pTrack, SAnimContext& animContext);
-	void AnimateFacialSequence(class CFaceSequenceTrack* pTrack, SAnimContext& animContext);
-	void AnimateLookAt(class CLookAtTrack* pTrack, SAnimContext& animContext);
+	void                 ReleaseSounds();
+	void                 ApplyEventKey(class CEventTrack* track, int keyIndex, SEventKey& key);
+	void                 ApplyAudioTriggerKey(CryAudio::ControlId audioTriggerId, bool const bPlay = true);
+	Vec3                 Adjust3DSoundOffset(bool bVoice, IEntity* pEntity, Vec3& oSoundPos) const;
+	void                 AnimateCharacterTrack(class CCharacterTrack* track, SAnimContext& animContext, int layer, int trackIndex, SAnimState& animState, IEntity* pEntity, ICharacterInstance* pCharacter);
+	bool                 CheckTimeJumpingOrOtherChanges(const SAnimContext& animContext, int32 activeKeys[], int32 numActiveKeys, ICharacterInstance* pCharacter, int layer, int trackIndex, SAnimState& animState);
+	void                 UpdateAnimTimeJumped(int32 keyIndex, class CCharacterTrack * track, SAnimTime ectime, ICharacterInstance * pCharacter, int layer, bool bAnimEvents, int trackIndex, SAnimState & animState);
+	void                 UpdateAnimRegular(int32 numActiveKeys, int32 activeKeys[], class CCharacterTrack * track, SAnimTime ectime, ICharacterInstance * pCharacter, int layer, bool bAnimEvents);
+	void                 UpdateAnimBlendGap(int32 activeKeys[], class CCharacterTrack * track, SAnimTime ectime, ICharacterInstance * pCharacter, int layer);
+	void                 ApplyAnimKey(int32 keyIndex, class CCharacterTrack * track, SAnimTime ectime, ICharacterInstance * pCharacter, int layer, int animIndex, bool bAnimEvents);
+	void                 StopExpressions();
+	void                 AnimateExpressionTrack(class CExprTrack* pTrack, SAnimContext& animContext);
+	void                 AnimateFacialSequence(class CFaceSequenceTrack* pTrack, SAnimContext& animContext);
+	void                 AnimateLookAt(class CLookAtTrack* pTrack, SAnimContext& animContext);
 	bool                 AnimateScriptTableProperty(IAnimTrack* pTrack, SAnimContext& animContext, const char* name);
 
 	void                 ReleaseAllAnims();
@@ -215,9 +208,12 @@ private:
 	bool                    m_visible;
 	bool                    m_bInitialPhysicsStatus;
 
-	std::vector<SSoundInfo> m_soundInfo;
-	int                     m_lastAudioFileKey;
-	int                     m_lastdrsSignalKey;
+	std::vector<int>        m_audioSwitchTracks;
+	std::vector<float>      m_audioParameterTracks;
+	std::vector<SAudioInfo> m_audioTriggerTracks;
+	std::vector<SAudioInfo> m_audioFileTracks;
+
+	int                     m_lastDrsSignalKey;
 	int                     m_iCurMannequinKey;
 
 	TStringSet              m_setExpressions;
@@ -268,5 +264,3 @@ private:
 	uint32                                m_OnPropertyCalls;
 #endif
 };
-
-#endif // __entitynode_h__

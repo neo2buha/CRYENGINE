@@ -241,8 +241,8 @@ CWaterVolumeRenderNode::CWaterVolumeRenderNode()
 {
 	GetInstCount(GetRenderNodeType())++;
 
-	m_pWaterBodyIntoMat = GetMatMan()->LoadMaterial("EngineAssets/Materials/Fog/WaterFogVolumeInto", false);
-	m_pWaterBodyOutofMat = GetMatMan()->LoadMaterial("EngineAssets/Materials/Fog/WaterFogVolumeOutof", false);
+	m_pWaterBodyIntoMat = GetMatMan()->LoadMaterial("%ENGINE%/EngineAssets/Materials/Fog/WaterFogVolumeInto", false);
+	m_pWaterBodyOutofMat = GetMatMan()->LoadMaterial("%ENGINE%/EngineAssets/Materials/Fog/WaterFogVolumeOutof", false);
 	for (int i = 0; i < RT_COMMAND_BUF_COUNT; ++i)
 	{
 		m_pVolumeRE[i] = GetRenderer() ?
@@ -366,9 +366,11 @@ void CWaterVolumeRenderNode::CreateArea(uint64 volumeID, const Vec3* pVertices, 
 	const bool serializeWith3DEngine = keepSerializationParams && !IsAttachedToEntity();
 
 	assert(fabs(fogPlane.n.GetLengthSquared() - 1.0f) < 1e-4 && "CWaterVolumeRenderNode::CreateArea(...) -- Fog plane normal doesn't have unit length!");
-	assert(fogPlane.n.Dot(Vec3(0, 0, 1)) > 1e-4f && "CWaterVolumeRenderNode::CreateArea(...) -- Invalid fog plane specified!");
 	if (fogPlane.n.Dot(Vec3(0, 0, 1)) <= 1e-4f)
+	{
+		// CWaterVolumeRenderNode::CreateArea(...) -- Invalid fog plane specified!
 		return;
+	}
 
 	assert(numVertices >= 3);
 	if (numVertices < 3)
@@ -925,6 +927,8 @@ void CWaterVolumeRenderNode::Render_JobEntry(SRendParams rParam, SRenderingPassI
 	{
 		if ((insideWaterVolume || (!isFastpath && aboveWaterVolumeSurface)) && m_pVolumeRE[fillThreadID])
 		{
+			CRY_ASSERT(!(m_pVolumeRE[fillThreadID]->m_drawWaterSurface));
+
 			// fill in data for render object
 			if (!IsAttachedToEntity())
 			{
@@ -937,8 +941,11 @@ void CWaterVolumeRenderNode::Render_JobEntry(SRendParams rParam, SRenderingPassI
 			}
 			pROVol->m_fSort = 0;
 
+			auto pMaterial = m_wvParams[fillThreadID].m_viewerInsideVolume ? m_pWaterBodyOutofMat.get() : m_pWaterBodyIntoMat.get();
+			pROVol->m_pCurrMaterial = pMaterial;
+
 			// get shader item
-			SShaderItem& shaderItem(m_wvParams[fillThreadID].m_viewerInsideVolume ? m_pWaterBodyOutofMat->GetShaderItem(0) : m_pWaterBodyIntoMat->GetShaderItem(0));
+			SShaderItem& shaderItem(pMaterial->GetShaderItem(0));
 
 			// add to renderer
 			GetRenderer()->EF_AddEf(m_pVolumeRE[fillThreadID], shaderItem, pROVol, passInfo, EFSLIST_WATER_VOLUMES, aboveWaterVolumeSurface ? 0 : 1);
@@ -947,6 +954,8 @@ void CWaterVolumeRenderNode::Render_JobEntry(SRendParams rParam, SRenderingPassI
 
 	// submit surface
 	{
+		CRY_ASSERT(m_pSurfaceRE[fillThreadID]->m_drawWaterSurface);
+
 		// fill in data for render object
 		if (!IsAttachedToEntity())
 		{
@@ -958,6 +967,8 @@ void CWaterVolumeRenderNode::Render_JobEntry(SRendParams rParam, SRenderingPassI
 			pROSurf->m_ObjFlags |= FOB_TRANS_MASK;
 		}
 		pROSurf->m_fSort = 0;
+
+		pROSurf->m_pCurrMaterial = m_pMaterial;
 
 		// get shader item
 		SShaderItem& shaderItem(m_pMaterial->GetShaderItem(0));
@@ -1269,4 +1280,32 @@ void CWaterVolumeRenderNode::OffsetPosition(const Vec3& delta)
 		par_pos.pos = m_vOffset;
 		m_pPhysArea->SetParams(&par_pos);
 	}
+}
+
+void CWaterVolumeRenderNode::FillBBox(AABB& aabb)
+{
+	aabb = CWaterVolumeRenderNode::GetBBox();
+}
+
+EERType CWaterVolumeRenderNode::GetRenderNodeType()
+{
+	return eERType_WaterVolume;
+}
+
+float CWaterVolumeRenderNode::GetMaxViewDist()
+{
+	if (GetMinSpecFromRenderNodeFlags(m_dwRndFlags) == CONFIG_DETAIL_SPEC)
+		return max(GetCVars()->e_ViewDistMin, CWaterVolumeRenderNode::GetBBox().GetRadius() * GetCVars()->e_ViewDistRatioDetail * GetViewDistRatioNormilized());
+
+	return max(GetCVars()->e_ViewDistMin, CWaterVolumeRenderNode::GetBBox().GetRadius() * GetCVars()->e_ViewDistRatio * GetViewDistRatioNormilized());
+}
+
+Vec3 CWaterVolumeRenderNode::GetPos(bool bWorldOnly) const
+{
+	return m_center;
+}
+
+IMaterial* CWaterVolumeRenderNode::GetMaterial(Vec3* pHitPos) const
+{
+	return m_pMaterial;
 }

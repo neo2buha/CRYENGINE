@@ -26,9 +26,9 @@
 #include "DX12/Resource/View/CCryDX12ShaderResourceView.hpp"
 #include "DX12/Resource/View/CCryDX12UnorderedAccessView.hpp"
 
-CCryDX12Device* CCryDX12Device::Create(IDXGIAdapter* pAdapter, D3D_FEATURE_LEVEL* pFeatureLevel)
+CCryDX12Device* CCryDX12Device::Create(CCryDX12GIAdapter* pAdapter, D3D_FEATURE_LEVEL* pFeatureLevel)
 {
-	DX12_PTR(NCryDX12::CDevice) device = NCryDX12::CDevice::Create(static_cast<CCryDX12GIAdapter*>(pAdapter)->GetDXGIAdapter(), pFeatureLevel);
+	DX12_PTR(NCryDX12::CDevice) device = NCryDX12::CDevice::Create(pAdapter, pFeatureLevel);
 
 	if (!device)
 	{
@@ -46,8 +46,8 @@ CCryDX12Device::CCryDX12Device(NCryDX12::CDevice* device)
 	, m_pDevice(device)
 {
 	DX12_FUNC_LOG
-
-#ifdef CRY_USE_DX12_MULTIADAPTER
+		
+#ifdef DX12_LINKEDADAPTER
 	// TODO: CVar ...
 	if (CRenderer::CV_r_StereoEnableMgpu)
 	{
@@ -74,12 +74,8 @@ CCryDX12Device::CCryDX12Device(NCryDX12::CDevice* device)
 
 		m_pMainContext = CCryDX12DeviceContext::Create(this, 0, false);
 	}
-}
-
-CCryDX12Device::~CCryDX12Device()
-{
-	DX12_FUNC_LOG
-
+	//report the node count used
+	gRenDev->m_adapterInfo.nNodeCount = m_numNodes;
 }
 
 #pragma region /* ID3D11Device implementation */
@@ -677,7 +673,7 @@ HRESULT STDMETHODCALLTYPE CCryDX12Device::CreateTarget3D(
 
 HRESULT STDMETHODCALLTYPE CCryDX12Device::CreateNullResource(
   _In_ D3D11_RESOURCE_DIMENSION eType,
-  _Out_ ID3D11Resource** ppNullResource)
+  _Out_opt_ ID3D11Resource** ppNullResource)
 {
 	DX12_FUNC_LOG
 	switch (eType)
@@ -694,6 +690,9 @@ HRESULT STDMETHODCALLTYPE CCryDX12Device::CreateNullResource(
 	case D3D11_RESOURCE_DIMENSION_TEXTURE3D:
 		*ppNullResource = CCryDX12Texture3D::Create(this);
 		break;
+	default:
+		*ppNullResource = nullptr;
+		break;
 	}
 	return *ppNullResource ? S_OK : E_FAIL;
 }
@@ -707,7 +706,7 @@ HRESULT STDMETHODCALLTYPE CCryDX12Device::ReleaseNullResource(
 
 HRESULT STDMETHODCALLTYPE CCryDX12Device::CreateStagingResource(
   _In_ ID3D11Resource* pInputResource,
-  _Out_ ID3D11Resource** ppStagingResource,
+  _Out_opt_ ID3D11Resource** ppStagingResource,
   _In_ BOOL Upload)
 {
 	ICryDX12Resource* dx12Resource = DX12_EXTRACT_ICRYDX12RESOURCE(pInputResource);
@@ -740,12 +739,4 @@ HRESULT STDMETHODCALLTYPE CCryDX12Device::ReleaseStagingResource(
 
 	pStagingResource->Release();
 	return S_OK;
-}
-
-void CCryDX12Device::FlushAndWaitForGPU()
-{
-	// Submit pending command-lists in case there are left-overs, make sure it's flushed to and executed on the hardware
-	GetDeviceContext()->Flush();
-	GetDeviceContext()->GetCoreGraphicsCommandListPool().GetAsyncCommandQueue().Flush();
-	GetDeviceContext()->GetCoreGraphicsCommandListPool().WaitForFenceOnCPU();
 }

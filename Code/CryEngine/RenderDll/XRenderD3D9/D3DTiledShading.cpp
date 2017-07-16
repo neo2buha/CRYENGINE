@@ -11,13 +11,14 @@
 #include "D3DTiledShading.h"
 #include "DriverD3D.h"
 #include "D3DPostProcess.h"
-#include "D3DVolumetricFog.h"
 
 #if defined(FEATURE_SVO_GI)
 	#include "D3D_SVO.h"
 #endif
 
 #include "Common/RenderView.h"
+#include "GraphicsPipeline/ClipVolumes.h"
+#include "GraphicsPipeline/ShadowMask.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -31,33 +32,11 @@ const uint32 ShadowSampleCount = 16;
 // The following structs and constants have to match the shader code
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-const uint32 MaxNumTileLights = 255;
-const uint32 LightTileSizeX = 8;
-const uint32 LightTileSizeY = 8;
-const uint32 MaxNumClipVolumes = MAX_DEFERRED_CLIP_VOLUMES;
-
-struct STiledLightCullInfo
-{
-	uint32 volumeType;
-	uint32 PADDING0;
-	Vec2   depthBounds;
-	Vec4   posRad;
-	Vec4   volumeParams0;
-	Vec4   volumeParams1;
-	Vec4   volumeParams2;
-};  // 80 bytes
+const uint32 MaxNumClipVolumes = CClipVolumesStage::MaxDeferredClipVolumes;
 
 struct STiledClipVolumeInfo
 {
 	float data;
-};
-
-enum ETiledVolumeTypes
-{
-	tlVolumeSphere = 1,
-	tlVolumeCone   = 2,
-	tlVolumeOBB    = 3,
-	tlVolumeSun    = 4,
 };
 
 enum ETiledLightTypes
@@ -73,31 +52,29 @@ enum ETiledLightTypes
 	tlTypeSun              = 9,
 };
 
-// Sun area light parameters (same as in standard deferred shading)
-const float SunDistance       = 10000.0f;
-const float SunSourceDiameter = 94.0f;  // atan(AngDiameterSun) * 2 * SunDistance, where AngDiameterSun=0.54deg
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace
 {
-STiledLightCullInfo tileLightsCull[MaxNumTileLights];
-STiledLightShadeInfo tileLightsShade[MaxNumTileLights];
+STiledLightCullInfo* tileLightsCull;
+STiledLightShadeInfo* tileLightsShade;
 }
 
 CTiledShading::CTiledShading()
 {
 	// 16 byte alignment is important for performance on nVidia cards
-	STATIC_ASSERT(sizeof(STiledLightCullInfo) % 16 == 0, "STiledLightCullInfo should be 16 byte aligned for GPU performance");
-	STATIC_ASSERT(sizeof(STiledLightShadeInfo) % 16 == 0, "STiledLightShadeInfo should be 16 byte aligned for GPU performance");
+	static_assert(sizeof(STiledLightCullInfo) % 16 == 0, "STiledLightCullInfo should be 16 byte aligned for GPU performance");
+	static_assert(sizeof(STiledLightShadeInfo) % 16 == 0, "STiledLightShadeInfo should be 16 byte aligned for GPU performance");
+
+	tileLightsCull = reinterpret_cast<STiledLightCullInfo*>(CryModuleMemalign(sizeof(STiledLightCullInfo) * MaxNumTileLights, CDeviceBufferManager::GetBufferAlignmentForStreaming()));
+	tileLightsShade = reinterpret_cast<STiledLightShadeInfo*>(CryModuleMemalign(sizeof(STiledLightShadeInfo) * MaxNumTileLights, CDeviceBufferManager::GetBufferAlignmentForStreaming()));
 
 	m_dispatchSizeX = 0;
 	m_dispatchSizeY = 0;
 
-	m_nTexStateCompare = 0xFFFFFFFF;
-
 	m_numAtlasUpdates = 0;
+	m_numValidLights = 0;
 	m_numSkippedLights = 0;
 
 	m_arrShadowCastingLights.Reserve(16);
@@ -112,7 +89,7 @@ void CTiledShading::CreateResources()
 
 	if (m_dispatchSizeX == dispatchSizeX && m_dispatchSizeY == dispatchSizeY)
 	{
-		assert(m_lightCullInfoBuf.GetBuffer() && m_specularProbeAtlas.texArray);
+		assert(m_lightCullInfoBuf.GetDevBuffer() && m_specularProbeAtlas.texArray);
 		return;
 	}
 	else
@@ -123,77 +100,81 @@ void CTiledShading::CreateResources()
 	m_dispatchSizeX = dispatchSizeX;
 	m_dispatchSizeY = dispatchSizeY;
 
-	if (!m_lightCullInfoBuf.GetBuffer())
+	if (!m_lightCullInfoBuf.IsAvailable())
 	{
-		m_lightCullInfoBuf.Create(MaxNumTileLights, sizeof(STiledLightCullInfo), DXGI_FORMAT_UNKNOWN, DX11BUF_DYNAMIC | DX11BUF_STRUCTURED | DX11BUF_BIND_SRV, NULL);
+		m_lightCullInfoBuf.Create(MaxNumTileLights, sizeof(STiledLightCullInfo), DXGI_FORMAT_UNKNOWN, CDeviceObjectFactory::USAGE_CPU_WRITE | CDeviceObjectFactory::USAGE_STRUCTURED | CDeviceObjectFactory::BIND_SHADER_RESOURCE, NULL);
 	}
 
-	if (!m_LightShadeInfoBuf.GetBuffer())
+	if (!m_lightShadeInfoBuf.IsAvailable())
 	{
-		m_LightShadeInfoBuf.Create(MaxNumTileLights, sizeof(STiledLightShadeInfo), DXGI_FORMAT_UNKNOWN, DX11BUF_DYNAMIC | DX11BUF_STRUCTURED | DX11BUF_BIND_SRV, NULL);
+		m_lightShadeInfoBuf.Create(MaxNumTileLights, sizeof(STiledLightShadeInfo), DXGI_FORMAT_UNKNOWN, CDeviceObjectFactory::USAGE_CPU_WRITE | CDeviceObjectFactory::USAGE_STRUCTURED | CDeviceObjectFactory::BIND_SHADER_RESOURCE, NULL);
 	}
 
-	if (!m_tileLightIndexBuf.GetBuffer())
+	if (!m_tileOpaqueLightMaskBuf.IsAvailable())
 	{
-		PREFAST_SUPPRESS_WARNING(6326)
-		DXGI_FORMAT format = MaxNumTileLights < 256 ? DXGI_FORMAT_R8_UINT : DXGI_FORMAT_R16_UINT;
-		PREFAST_SUPPRESS_WARNING(6326)
-		uint32 stride = MaxNumTileLights < 256 ? sizeof(char) : sizeof(short);
-
-		m_tileLightIndexBuf.Create(dispatchSizeX * dispatchSizeY * MaxNumTileLights, stride, format, DX11BUF_BIND_SRV | DX11BUF_BIND_UAV, NULL);
+		m_tileOpaqueLightMaskBuf.Create(dispatchSizeX * dispatchSizeY * 8, 4, DXGI_FORMAT_R32_UINT, CDeviceObjectFactory::BIND_SHADER_RESOURCE | CDeviceObjectFactory::BIND_UNORDERED_ACCESS, NULL);
 	}
 
-	if (!m_clipVolumeInfoBuf.GetBuffer())
+	if (!m_tileTranspLightMaskBuf.IsAvailable())
 	{
-		m_clipVolumeInfoBuf.Create(MaxNumClipVolumes, sizeof(STiledClipVolumeInfo), DXGI_FORMAT_UNKNOWN, DX11BUF_DYNAMIC | DX11BUF_STRUCTURED | DX11BUF_BIND_SRV, NULL);
+		m_tileTranspLightMaskBuf.Create(dispatchSizeX * dispatchSizeY * 8, 4, DXGI_FORMAT_R32_UINT, CDeviceObjectFactory::BIND_SHADER_RESOURCE | CDeviceObjectFactory::BIND_UNORDERED_ACCESS, NULL);
 	}
+
+	if (!m_clipVolumeInfoBuf.IsAvailable())
+	{
+		m_clipVolumeInfoBuf.Create(MaxNumClipVolumes, sizeof(STiledClipVolumeInfo), DXGI_FORMAT_UNKNOWN, CDeviceObjectFactory::USAGE_CPU_WRITE | CDeviceObjectFactory::USAGE_STRUCTURED | CDeviceObjectFactory::BIND_SHADER_RESOURCE, NULL);
+	}
+
+#if CRY_RENDERER_OPENGLES || CRY_PLATFORM_ANDROID
+	ETEX_Format textureAtlasFormatSpecDiff = eTF_R16G16B16A16F;
+	ETEX_Format textureAtlasFormatSpot = eTF_EAC_R11;
+#else
+	ETEX_Format textureAtlasFormatSpecDiff = eTF_BC6UH;
+	ETEX_Format textureAtlasFormatSpot = eTF_BC4U;
+#endif
 
 	if (!m_specularProbeAtlas.texArray)
 	{
-		m_specularProbeAtlas.texArray = CTexture::CreateTextureArray("$TiledSpecProbeTexArr", eTT_Cube, SpecProbeSize, SpecProbeSize, AtlasArrayDim, IntegerLog2(SpecProbeSize) - 1, 0, eTF_BC6UH);
+		m_specularProbeAtlas.texArray = CTexture::GetOrCreateTextureArray("$TiledSpecProbeTexArr", SpecProbeSize, SpecProbeSize, AtlasArrayDim * 6, IntegerLog2(SpecProbeSize) - 1, eTT_CubeArray, FT_DONT_STREAM, textureAtlasFormatSpecDiff);
 		m_specularProbeAtlas.items.resize(AtlasArrayDim);
 
 		if (m_specularProbeAtlas.texArray->GetFlags() & FT_FAILED)
 			CryFatalError("Couldn't allocate specular probe texture atlas");
 
-#if CRY_PLATFORM_DURANGO
+#if DEVRES_USE_PINNING
 		// Perma-pin, as they need to be pinned each frame anyway, and doing it upfront avoids the cost of doing it each frame.
-		//m_specularProbeAtlas.texArray->GetDevTexture()->Pin();
+		m_specularProbeAtlas.texArray->GetDevTexture()->Pin();
 #endif
 	}
 
 	if (!m_diffuseProbeAtlas.texArray)
 	{
-		m_diffuseProbeAtlas.texArray = CTexture::CreateTextureArray("$TiledDiffuseProbeTexArr", eTT_Cube, DiffuseProbeSize, DiffuseProbeSize, AtlasArrayDim, 1, 0, eTF_BC6UH);
+		m_diffuseProbeAtlas.texArray = CTexture::GetOrCreateTextureArray("$TiledDiffuseProbeTexArr", DiffuseProbeSize, DiffuseProbeSize, AtlasArrayDim * 6, 1, eTT_CubeArray, FT_DONT_STREAM, textureAtlasFormatSpecDiff);
 		m_diffuseProbeAtlas.items.resize(AtlasArrayDim);
 
 		if (m_diffuseProbeAtlas.texArray->GetFlags() & FT_FAILED)
 			CryFatalError("Couldn't allocate diffuse probe texture atlas");
 
-#if CRY_PLATFORM_DURANGO
+#if DEVRES_USE_PINNING
 		// Perma-pin, as they need to be pinned each frame anyway, and doing it upfront avoids the cost of doing it each frame.
-		//m_diffuseProbeAtlas.texArray->GetDevTexture()->Pin();
+		m_diffuseProbeAtlas.texArray->GetDevTexture()->Pin();
 #endif
 	}
 
 	if (!m_spotTexAtlas.texArray)
 	{
 		// Note: BC4 has 4x4 as lowest mipmap
-		m_spotTexAtlas.texArray = CTexture::CreateTextureArray("$TiledSpotTexArr", eTT_2D, SpotTexSize, SpotTexSize, AtlasArrayDim, IntegerLog2(SpotTexSize) - 1, 0, eTF_BC4U);
+		m_spotTexAtlas.texArray = CTexture::GetOrCreateTextureArray("$TiledSpotTexArr", SpotTexSize, SpotTexSize, AtlasArrayDim * 1, IntegerLog2(SpotTexSize) - 1, eTT_2DArray, FT_DONT_STREAM, textureAtlasFormatSpot);
 		m_spotTexAtlas.items.resize(AtlasArrayDim);
 
 		if (m_spotTexAtlas.texArray->GetFlags() & FT_FAILED)
 			CryFatalError("Couldn't allocate spot texture atlas");
 
-#if CRY_PLATFORM_DURANGO
+#if DEVRES_USE_PINNING
 		// Perma-pin, as they need to be pinned each frame anyway, and doing it upfront avoids the cost of doing it each frame.
-		//m_spotTexAtlas.texArray->GetDevTexture()->Pin();
+		m_spotTexAtlas.texArray->GetDevTexture()->Pin();
 #endif
 	}
-
-	STexState ts1(FILTER_LINEAR, true);
-	ts1.SetComparisonFilter(true);
-	m_nTexStateCompare = CTexture::GetTexState(ts1);
 }
 
 void CTiledShading::DestroyResources(bool destroyResolutionIndependentResources)
@@ -202,8 +183,9 @@ void CTiledShading::DestroyResources(bool destroyResolutionIndependentResources)
 	m_dispatchSizeY = 0;
 
 	m_lightCullInfoBuf.Release();
-	m_LightShadeInfoBuf.Release();
-	m_tileLightIndexBuf.Release();
+	m_lightShadeInfoBuf.Release();
+	m_tileOpaqueLightMaskBuf.Release();
+	m_tileTranspLightMaskBuf.Release();
 	m_clipVolumeInfoBuf.Release();
 
 	if (destroyResolutionIndependentResources)
@@ -231,16 +213,16 @@ void CTiledShading::Clear()
 	m_numSkippedLights = 0;
 }
 
-int CTiledShading::InsertTexture(CTexture* texture, TextureAtlas& atlas, int arrayIndex)
+int CTiledShading::InsertTexture(CTexture* pTexInput, TextureAtlas& atlas, int arrayIndex)
 {
 	CD3D9Renderer* const __restrict rd = gcpRendD3D;
 	const int frameID = rd->GetFrameID(false);
 
-	if (texture == NULL)
+	if (pTexInput == NULL)
 		return -1;
 
 	// Make sure the texture is loaded already
-	if (texture->GetWidthNonVirtual() == 0 && texture->GetHeightNonVirtual() == 0)
+	if (pTexInput->GetWidthNonVirtual() == 0 && pTexInput->GetHeightNonVirtual() == 0)
 		return -1;
 
 	bool isEditor = gEnv->IsEditor();
@@ -248,9 +230,9 @@ int CTiledShading::InsertTexture(CTexture* texture, TextureAtlas& atlas, int arr
 	// Check if texture is already in atlas
 	for (uint32 i = 0, si = atlas.items.size(); i < si; ++i)
 	{
-		if (atlas.items[i].texture == texture)
+		if (atlas.items[i].texture == pTexInput)
 		{
-			bool textureUpToDate = !isEditor ? true : (texture->GetUpdateFrameID() == abs(atlas.items[i].updateFrameID) || texture->GetUpdateFrameID() == 0);
+			bool textureUpToDate = !isEditor ? true : (pTexInput->GetUpdateFrameID() == abs(atlas.items[i].updateFrameID) || pTexInput->GetUpdateFrameID() == 0);
 
 			if (textureUpToDate)
 			{
@@ -285,59 +267,98 @@ int CTiledShading::InsertTexture(CTexture* texture, TextureAtlas& atlas, int arr
 		arrayIndex = minIndex;
 	}
 
-	atlas.items[arrayIndex].texture = texture;
+	atlas.items[arrayIndex].texture = pTexInput;
 	atlas.items[arrayIndex].accessFrameID = frameID;
-	atlas.items[arrayIndex].updateFrameID = texture->GetUpdateFrameID();
+	atlas.items[arrayIndex].updateFrameID = pTexInput->GetUpdateFrameID();
 	atlas.items[arrayIndex].invalid = false;
 
 	// Check if texture is valid
-	if (!texture->IsLoaded() ||
-	    texture->GetWidthNonVirtual() < atlas.texArray->GetWidthNonVirtual() ||
-	    texture->GetWidthNonVirtual() != texture->GetHeightNonVirtual() ||
-	    texture->GetPixelFormat() != atlas.texArray->GetPixelFormat() ||
-	    (texture->IsStreamed() && texture->IsPartiallyLoaded()))
+	if (!pTexInput->IsLoaded() ||
+	    pTexInput->GetWidthNonVirtual() < atlas.texArray->GetWidthNonVirtual() ||
+	    pTexInput->GetWidthNonVirtual() != pTexInput->GetHeightNonVirtual() ||
+	    pTexInput->GetPixelFormat() != atlas.texArray->GetPixelFormat() ||
+	    (pTexInput->IsStreamed() && pTexInput->IsPartiallyLoaded()))
 	{
 		atlas.items[arrayIndex].invalid = true;
 
-		if (!texture->IsLoaded())
+		if (!pTexInput->IsLoaded())
 		{
-			iLog->LogError("TiledShading: Texture not found: %s", texture->GetName());
+			iLog->LogError("TiledShading: Texture not found: %s", pTexInput->GetName());
 		}
-		else if (texture->IsStreamed() && texture->IsPartiallyLoaded())
+		else if (pTexInput->IsStreamed() && pTexInput->IsPartiallyLoaded())
 		{
 			iLog->LogError("TiledShading: Texture not fully streamed so impossible to add: %s (W:%i H:%i F:%s)",
-			               texture->GetName(), texture->GetWidth(), texture->GetHeight(), texture->GetFormatName());
+			               pTexInput->GetName(), pTexInput->GetWidth(), pTexInput->GetHeight(), pTexInput->GetFormatName());
 		}
-		else if (texture->GetPixelFormat() != atlas.texArray->GetPixelFormat())
+		else if (pTexInput->GetPixelFormat() != atlas.texArray->GetPixelFormat())
 		{
 			iLog->LogError("TiledShading: Unsupported texture format: %s (W:%i H:%i F:%s), it has to be equal to the tile-atlas (F:%s), please change the texture's preset by re-exporting with CryTif",
-			               texture->GetName(), texture->GetWidth(), texture->GetHeight(), texture->GetFormatName(), atlas.texArray->GetFormatName());
+			               pTexInput->GetName(), pTexInput->GetWidth(), pTexInput->GetHeight(), pTexInput->GetFormatName(), atlas.texArray->GetFormatName());
 		}
 		else
 		{
 			iLog->LogError("TiledShading: Unsupported texture properties: %s (W:%i H:%i F:%s)",
-			               texture->GetName(), texture->GetWidth(), texture->GetHeight(), texture->GetFormatName());
+			               pTexInput->GetName(), pTexInput->GetWidth(), pTexInput->GetHeight(), pTexInput->GetFormatName());
 		}
 		return -1;
 	}
 
 	// Update atlas
-	uint32 numSrcMips = (uint32)texture->GetNumMipsNonVirtual();
+	uint32 numSrcMips = (uint32)pTexInput->GetNumMipsNonVirtual();
 	uint32 numDstMips = (uint32)atlas.texArray->GetNumMipsNonVirtual();
-	uint32 firstSrcMip = IntegerLog2((uint32)texture->GetWidthNonVirtual() / atlas.texArray->GetWidthNonVirtual());
-	uint32 numFaces = atlas.texArray->GetTexType() == eTT_Cube ? 6 : 1;
+	uint32 firstSrcMip = IntegerLog2((uint32)pTexInput->GetWidthNonVirtual() / atlas.texArray->GetWidthNonVirtual());
+	uint32 numFaces = atlas.texArray->GetTexType() == eTT_CubeArray ? 6 : 1;
 
+	CDeviceTexture* pTexInputDevTex = pTexInput->GetDevTexture();
 	CDeviceTexture* pTexArrayDevTex = atlas.texArray->GetDevTexture();
 
-	//ASSERT_DEVICE_TEXTURE_IS_FIXED(pTexArrayDevTex);
+	ASSERT_DEVICE_TEXTURE_IS_FIXED(pTexArrayDevTex);
 
-	for (uint32 i = 0; i < numDstMips; ++i)
+	UINT w = atlas.texArray->GetWidthNonVirtual();
+	UINT h = atlas.texArray->GetHeightNonVirtual();
+	UINT d = atlas.texArray->GetDepthNonVirtual();
+
+	if ((numDstMips == numSrcMips) && (firstSrcMip == 0) && 0 && "TODO: kill this branch, after taking a careful look for side-effects")
 	{
-		for (uint32 j = 0; j < numFaces; ++j)
+		// MipMaps are laid out consecutively in the sub-resource specification, which allows us to issue a batch-copy for N sub-resources
+		const UINT NumSubresources = numDstMips * numFaces;
+		const UINT SrcSubresource = D3D11CalcSubresource(0, 0, numSrcMips);
+		const UINT DstSubresource = D3D11CalcSubresource(0, arrayIndex * numFaces, numDstMips);
+
+		const SResourceRegionMapping mapping =
 		{
-			rd->GetDeviceContext().CopySubresourceRegion(
-			  pTexArrayDevTex->GetBaseTexture(), D3D11CalcSubresource(i, arrayIndex * numFaces + j, numDstMips), 0, 0, 0,
-			  texture->GetDevTexture()->GetBaseTexture(), D3D11CalcSubresource(i + firstSrcMip, j, numSrcMips), NULL);
+			{ 0, 0, 0, SrcSubresource  }, // src position
+			{ 0, 0, 0, DstSubresource  }, // dst position
+			{ w, h, d, NumSubresources }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			pTexInputDevTex,
+			pTexArrayDevTex,
+			mapping);
+	}
+	else
+	{
+		for (uint32 i = 0; i < numFaces; ++i)
+		{
+			// MipMaps are laid out consecutively in the sub-resource specification, which allows us to issue a batch-copy for N sub-resources
+			const UINT NumSubresources = numDstMips;
+			const UINT SrcSubresource = D3D11CalcSubresource(0 + firstSrcMip, i, numSrcMips);
+			const UINT DstSubresource = D3D11CalcSubresource(0, arrayIndex * numFaces + i, numDstMips);
+			
+			const SResourceRegionMapping mapping =
+			{
+				{ 0, 0, 0, SrcSubresource  }, // src position
+				{ 0, 0, 0, DstSubresource  }, // dst position
+				{ w, h, d, NumSubresources }, // size
+				D3D11_COPY_NO_OVERWRITE_REVERT
+			};
+
+			GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+				pTexInputDevTex,
+				pTexArrayDevTex,
+				mapping);
 		}
 	}
 
@@ -369,9 +390,9 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 {
 	CD3D9Renderer* const __restrict rd = gcpRendD3D;
 
-	auto& defLights = pRenderView->GetLightsArray(eDLT_DeferredLight);
-	auto& envProbes = pRenderView->GetLightsArray(eDLT_DeferredCubemap);
-	auto& ambientLights = pRenderView->GetLightsArray(eDLT_DeferredAmbientLight);
+	const auto& defLights = pRenderView->GetLightsArray(eDLT_DeferredLight);
+	const auto& envProbes = pRenderView->GetLightsArray(eDLT_DeferredCubemap);
+	const auto& ambientLights = pRenderView->GetLightsArray(eDLT_DeferredAmbientLight);
 
 	const float invCameraFar = 1.0f / rd->GetRCamera().fFar;
 
@@ -395,7 +416,7 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 	ZeroMemory(tileLightsCull, sizeof(STiledLightCullInfo) * MaxNumTileLights);
 	ZeroMemory(tileLightsShade, sizeof(STiledLightShadeInfo) * MaxNumTileLights);
 
-	RenderLightsArray* lightLists[3] = {
+	const RenderLightsArray* lightLists[3] = {
 		CRenderer::CV_r_DeferredShadingEnvProbes ? &envProbes : NULL,
 		CRenderer::CV_r_DeferredShadingAmbientLights ? &ambientLights : NULL,
 		CRenderer::CV_r_DeferredShadingLights ? &defLights : NULL
@@ -408,8 +429,8 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 
 		for (uint32 lightIdx = 0, lightListSize = lightLists[lightListIdx]->size(); lightIdx < lightListSize; ++lightIdx)
 		{
-			SRenderLight& renderLight = (*lightLists[lightListIdx])[lightIdx];
-			STiledLightCullInfo& lightCullInfo = tileLightsCull[numTileLights];
+			const SRenderLight& renderLight = (*lightLists[lightListIdx])[lightIdx];
+			STiledLightInfo& lightInfo = m_tileLights[numTileLights];
 			STiledLightShadeInfo& lightShadeInfo = tileLightsShade[numTileLights];
 
 			if (renderLight.m_Flags & (DLF_FAKE | DLF_VOLUMETRIC_FOG_ONLY))
@@ -428,12 +449,11 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 			bool areaLightRect = (renderLight.m_Flags & DLF_AREA_LIGHT) && renderLight.m_fAreaWidth && renderLight.m_fAreaHeight && renderLight.m_fLightFrustumAngle;
 			float volumeSize = (lightListIdx == 0) ? renderLight.m_ProbeExtents.len() : renderLight.m_fRadius;
 			Vec3 pos = renderLight.GetPosition();
-			Vec3 worldViewPos = rd->GetRCamera().vOrigin;
-			lightShadeInfo.posRad = Vec4(pos.x - worldViewPos.x, pos.y - worldViewPos.y, pos.z - worldViewPos.z, volumeSize);
+			lightInfo.posRad = Vec4(pos, volumeSize);
 			Vec4 posVS = Vec4(pos, 1) * matView;
-			lightCullInfo.posRad = Vec4(posVS.x, posVS.y, posVS.z, volumeSize);
+			lightInfo.depthBoundsVS = Vec2(posVS.z - volumeSize, posVS.z + volumeSize) * invCameraFar;
+			lightShadeInfo.posRad = Vec4(pos.x, pos.y, pos.z, volumeSize);
 			lightShadeInfo.attenuationParams = Vec2(areaLightRect ? (renderLight.m_fAreaWidth + renderLight.m_fAreaHeight) * 0.25f : renderLight.m_fAttenuationBulbSize, renderLight.m_fAreaHeight * 0.5f);
-			lightCullInfo.depthBounds = Vec2(posVS.z - volumeSize, posVS.z + volumeSize) * invCameraFar;
 			float itensityScale = rd->m_fAdaptedSceneScaleLBuffer;
 			lightShadeInfo.color = Vec4(renderLight.m_Color.r * itensityScale, renderLight.m_Color.g * itensityScale,
 			                            renderLight.m_Color.b * itensityScale, renderLight.m_SpecMult);
@@ -445,21 +465,18 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 			// Environment probes
 			if (lightListIdx == 0)
 			{
-				lightCullInfo.volumeType = tlVolumeOBB;
+				lightInfo.volumeType = tlVolumeOBB;
 				lightShadeInfo.lightType = tlTypeProbe;
 				lightShadeInfo.resIndex = 0xFFFFFFFF;
 				lightShadeInfo.attenuationParams = Vec2(renderLight.m_Color.a, max(renderLight.GetFalloffMax(), 0.001f));
 
 				AABB aabb = RotateAABB(AABB(-renderLight.m_ProbeExtents, renderLight.m_ProbeExtents), Matrix33(renderLight.m_ObjMatrix));
 				aabb = RotateAABB(aabb, Matrix33(matView));
-				lightCullInfo.depthBounds = Vec2(posVS.z + aabb.min.z, posVS.z + aabb.max.z) * invCameraFar;
+				lightInfo.depthBoundsVS = Vec2(posVS.z + aabb.min.z, posVS.z + aabb.max.z) * invCameraFar;
 
-				Vec4 u0 = Vec4(renderLight.m_ObjMatrix.GetColumn0().GetNormalized(), 0) * matView;
-				Vec4 u1 = Vec4(renderLight.m_ObjMatrix.GetColumn1().GetNormalized(), 0) * matView;
-				Vec4 u2 = Vec4(renderLight.m_ObjMatrix.GetColumn2().GetNormalized(), 0) * matView;
-				lightCullInfo.volumeParams0 = Vec4(u0.x, u0.y, u0.z, renderLight.m_ProbeExtents.x);
-				lightCullInfo.volumeParams1 = Vec4(u1.x, u1.y, u1.z, renderLight.m_ProbeExtents.y);
-				lightCullInfo.volumeParams2 = Vec4(u2.x, u2.y, u2.z, renderLight.m_ProbeExtents.z);
+				lightInfo.volumeParams0 = Vec4(renderLight.m_ObjMatrix.GetColumn0().GetNormalized(), renderLight.m_ProbeExtents.x);
+				lightInfo.volumeParams1 = Vec4(renderLight.m_ObjMatrix.GetColumn1().GetNormalized(), renderLight.m_ProbeExtents.y);
+				lightInfo.volumeParams2 = Vec4(renderLight.m_ObjMatrix.GetColumn2().GetNormalized(), renderLight.m_ProbeExtents.z);
 
 				lightShadeInfo.projectorMatrix.SetRow4(0, Vec4(renderLight.m_ObjMatrix.GetColumn0().GetNormalized() / renderLight.m_ProbeExtents.x, 0));
 				lightShadeInfo.projectorMatrix.SetRow4(1, Vec4(renderLight.m_ObjMatrix.GetColumn1().GetNormalized() / renderLight.m_ProbeExtents.y, 0));
@@ -495,7 +512,7 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 
 				const bool ambientLight = (lightListIdx == 1);
 
-				lightCullInfo.volumeType = tlVolumeSphere;
+				lightInfo.volumeType = tlVolumeSphere;
 				lightShadeInfo.lightType = ambientLight ? tlTypeAmbientPoint : tlTypeRegularPoint;
 
 				if (!ambientLight)
@@ -514,7 +531,7 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 				// Handle projectors
 				if (renderLight.m_Flags & DLF_PROJECT)
 				{
-					lightCullInfo.volumeType = tlVolumeCone;
+					lightInfo.volumeType = tlVolumeCone;
 					lightShadeInfo.lightType = ambientLight ? tlTypeAmbientProjector : tlTypeRegularProjector;
 					lightShadeInfo.resIndex = 0xFFFFFFFF;
 
@@ -530,25 +547,19 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 					Matrix34 objMat = renderLight.m_ObjMatrix;
 					objMat.m03 = objMat.m13 = objMat.m23 = 0;  // Remove translation
 					Vec3 lightDir = objMat * Vec3(-1, 0, 0);
-					lightCullInfo.volumeParams0 = Vec4(lightDir.x, lightDir.y, lightDir.z, 0) * matView;
-					lightCullInfo.volumeParams0.w = renderLight.m_fRadius * tanf(DEG2RAD(min(renderLight.m_fLightFrustumAngle + frustumAngleDelta, 89.9f))) * sqrt_2;
+					lightInfo.volumeParams0 = Vec4(lightDir, 0);
+					lightInfo.volumeParams0.w = renderLight.m_fRadius * tanf(DEG2RAD(min(renderLight.m_fLightFrustumAngle + frustumAngleDelta, 89.9f))) * sqrt_2;
+					lightInfo.volumeParams1.w = DEG2RAD(renderLight.m_fLightFrustumAngle);
 
-					Vec3 coneTip = Vec3(lightCullInfo.posRad.x, lightCullInfo.posRad.y, lightCullInfo.posRad.z);
-					Vec3 coneDir = Vec3(-lightCullInfo.volumeParams0.x, -lightCullInfo.volumeParams0.y, -lightCullInfo.volumeParams0.z);
-					AABB coneBounds = AABB::CreateAABBfromCone(Cone(coneTip, coneDir, renderLight.m_fRadius, lightCullInfo.volumeParams0.w));
-					lightCullInfo.depthBounds = Vec2(coneBounds.min.z, coneBounds.max.z) * invCameraFar;
+					Vec3 coneTipVS = Vec3(posVS);
+					Vec3 coneDirVS = Vec3(Vec4(-lightDir.x, -lightDir.y, -lightDir.z, 0) * matView);
+					AABB coneBounds = AABB::CreateAABBfromCone(Cone(coneTipVS, coneDirVS, renderLight.m_fRadius, lightInfo.volumeParams0.w));
+					lightInfo.depthBoundsVS.x = std::min(lightInfo.depthBoundsVS.x, coneBounds.min.z * invCameraFar);
+					lightInfo.depthBoundsVS.y = std::min(lightInfo.depthBoundsVS.y, coneBounds.max.z * invCameraFar);
 
 					Matrix44A projMatT;
 					CShadowUtils::GetProjectiveTexGen(&renderLight, 0, &projMatT);
-
-					// Translate into camera space
 					projMatT.Transpose();
-					const Vec4 vEye(rd->GetRCamera().vOrigin, 0.0f);
-					Vec4 vecTranslation(vEye.Dot((Vec4&)projMatT.m00), vEye.Dot((Vec4&)projMatT.m10), vEye.Dot((Vec4&)projMatT.m20), vEye.Dot((Vec4&)projMatT.m30));
-					projMatT.m03 += vecTranslation.x;
-					projMatT.m13 += vecTranslation.y;
-					projMatT.m23 += vecTranslation.z;
-					projMatT.m33 += vecTranslation.w;
 
 					lightShadeInfo.projectorMatrix = projMatT;
 				}
@@ -556,22 +567,19 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 				// Handle rectangular area lights
 				if (areaLightRect)
 				{
-					lightCullInfo.volumeType = tlVolumeOBB;
+					lightInfo.volumeType = tlVolumeOBB;
 					lightShadeInfo.lightType = ambientLight ? tlTypeAmbientArea : tlTypeRegularArea;
 
 					float expensionRadius = renderLight.m_fRadius * 1.08f;
 					Vec3 scale(expensionRadius, expensionRadius, expensionRadius);
 					Matrix34 areaLightMat = CShadowUtils::GetAreaLightMatrix(&renderLight, scale);
 
-					Vec4 u0 = Vec4(areaLightMat.GetColumn0().GetNormalized(), 0) * matView;
-					Vec4 u1 = Vec4(areaLightMat.GetColumn1().GetNormalized(), 0) * matView;
-					Vec4 u2 = Vec4(areaLightMat.GetColumn2().GetNormalized(), 0) * matView;
-					lightCullInfo.volumeParams0 = Vec4(u0.x, u0.y, u0.z, areaLightMat.GetColumn0().GetLength() * 0.5f);
-					lightCullInfo.volumeParams1 = Vec4(u1.x, u1.y, u1.z, areaLightMat.GetColumn1().GetLength() * 0.5f);
-					lightCullInfo.volumeParams2 = Vec4(u2.x, u2.y, u2.z, areaLightMat.GetColumn2().GetLength() * 0.5f);
+					lightInfo.volumeParams0 = Vec4(areaLightMat.GetColumn0().GetNormalized(), areaLightMat.GetColumn0().GetLength() * 0.5f);
+					lightInfo.volumeParams1 = Vec4(areaLightMat.GetColumn1().GetNormalized(), areaLightMat.GetColumn1().GetLength() * 0.5f);
+					lightInfo.volumeParams2 = Vec4(areaLightMat.GetColumn2().GetNormalized(), areaLightMat.GetColumn2().GetLength() * 0.5f);
 
 					float volumeSize = renderLight.m_fRadius + max(renderLight.m_fAreaWidth, renderLight.m_fAreaHeight);
-					lightCullInfo.depthBounds = Vec2(posVS.z - volumeSize, posVS.z + volumeSize) * invCameraFar;
+					lightInfo.depthBoundsVS = Vec2(posVS.z - volumeSize, posVS.z + volumeSize) * invCameraFar;
 
 					float areaFov = renderLight.m_fLightFrustumAngle * 2.0f;
 					if (renderLight.m_Flags & DLF_CASTSHADOW_MAPS)
@@ -616,26 +624,16 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 							rd->ConfigShadowTexgen(0, &firstFrustum, side);
 							Matrix44A shadowMat = rd->m_TempMatrices[0][0];
 
-							// Translate into camera space
-							const Vec4 vEye(rd->GetRCamera().vOrigin, 0.0f);
-							Vec4 vecTranslation(vEye.Dot((Vec4&)shadowMat.m00), vEye.Dot((Vec4&)shadowMat.m10), vEye.Dot((Vec4&)shadowMat.m20), vEye.Dot((Vec4&)shadowMat.m30));
-							shadowMat.m03 += vecTranslation.x;
-							shadowMat.m13 += vecTranslation.y;
-							shadowMat.m23 += vecTranslation.z;
-							shadowMat.m33 += vecTranslation.w;
-
 							// Pre-multiply by inverse frustum far plane distance
 							(Vec4&)shadowMat.m20 *= rd->m_cEF.m_TempVecs[2].x;
 
-							Vec3 cubeDir = cubeDirs[side];
-							Vec4 spotParamsVS = Vec4(cubeDir.x, cubeDir.y, cubeDir.z, 0) * matView;
-
+							Vec4 spotParams = Vec4(cubeDirs[side].x, cubeDirs[side].y, cubeDirs[side].z, 0);
 							// slightly enlarge the frustum to prevent culling errors
-							spotParamsVS.w = renderLight.m_fRadius * tanf(DEG2RAD(45.0f + 14.5f)) * sqrt_2;
+							spotParams.w = renderLight.m_fRadius * tanf(DEG2RAD(45.0f + 14.5f)) * sqrt_2;
 
-							Vec3 coneTip = Vec3(lightCullInfo.posRad.x, lightCullInfo.posRad.y, lightCullInfo.posRad.z);
-							Vec3 coneDir = Vec3(-spotParamsVS.x, -spotParamsVS.y, -spotParamsVS.z);
-							AABB coneBounds = AABB::CreateAABBfromCone(Cone(coneTip, coneDir, renderLight.m_fRadius, spotParamsVS.w));
+							Vec3 coneTipVS = Vec3(posVS);
+							Vec3 coneDirVS = Vec3(Vec4(-spotParams.x, -spotParams.y, -spotParams.z, 0) * matView);
+							AABB coneBounds = AABB::CreateAABBfromCone(Cone(coneTipVS, coneDirVS, renderLight.m_fRadius, spotParams.w));
 							Vec2 depthBoundsVS = Vec2(coneBounds.min.z, coneBounds.max.z) * invCameraFar;
 							Vec2 sideShadowParams = (firstFrustum.nShadowGenMask & (1 << side)) ? shadowParams : Vec2(ZERO);
 
@@ -643,34 +641,30 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 							{
 								lightShadeInfo.shadowParams = sideShadowParams;
 								lightShadeInfo.shadowMatrix = shadowMat;
-								lightShadeInfo.shadowChannelIndex = Vec4(
-								  renderLight.m_ShadowChanMask % 4 == 0,
-								  renderLight.m_ShadowChanMask % 4 == 1,
-								  renderLight.m_ShadowChanMask % 4 == 2,
-								  renderLight.m_ShadowChanMask % 4 == 3
-								  );
 								lightShadeInfo.shadowMaskIndex = renderLight.m_ShadowMaskIndex;
 
 								if (numSides > 1)
 								{
-									lightCullInfo.volumeType = tlVolumeCone;
+									lightInfo.volumeType = tlVolumeCone;
+									lightInfo.volumeParams0 = spotParams;
+									lightInfo.volumeParams1.w = DEG2RAD(45.0f);
+									lightInfo.depthBoundsVS = depthBoundsVS;
 									lightShadeInfo.lightType = tlTypeRegularPointFace;
 									lightShadeInfo.resIndex = side;
-									lightCullInfo.volumeParams0 = spotParamsVS;
-									lightCullInfo.depthBounds = depthBoundsVS;
 								}
 							}
 							else
 							{
 								// Split point light
 								++numTileLights;
-								tileLightsCull[numTileLights] = lightCullInfo;
+								m_tileLights[numTileLights] = lightInfo;
+								m_tileLights[numTileLights].volumeParams0 = spotParams;
+								m_tileLights[numTileLights].volumeParams1.w = DEG2RAD(45.0f);
+								m_tileLights[numTileLights].depthBoundsVS = depthBoundsVS;
 								tileLightsShade[numTileLights] = lightShadeInfo;
 								tileLightsShade[numTileLights].shadowParams = sideShadowParams;
 								tileLightsShade[numTileLights].shadowMatrix = shadowMat;
 								tileLightsShade[numTileLights].resIndex = side;
-								tileLightsCull[numTileLights].volumeParams0 = spotParamsVS;
-								tileLightsCull[numTileLights].depthBounds = depthBoundsVS;
 							}
 						}
 					}
@@ -697,18 +691,17 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 	{
 		if (numTileLights < MaxNumTileLights)
 		{
-			STiledLightCullInfo& lightCullInfo = tileLightsCull[numTileLights];
+			STiledLightInfo& lightInfo = m_tileLights[numTileLights];
 			STiledLightShadeInfo& lightShadeInfo = tileLightsShade[numTileLights];
 
-			lightCullInfo.volumeType = tlVolumeSun;
-			lightCullInfo.depthBounds = Vec2(-100000, 100000);
-			lightCullInfo.posRad = Vec4(0, 0, 0, 100000);
+			lightInfo.volumeType = tlVolumeSun;
+			lightInfo.posRad = Vec4(0, 0, 0, 100000);
+			lightInfo.depthBoundsVS = Vec2(-100000, 100000);
 
 			lightShadeInfo.lightType = tlTypeSun;
-			lightShadeInfo.attenuationParams = Vec2(SunSourceDiameter, SunSourceDiameter);
+			lightShadeInfo.attenuationParams = Vec2(TiledShading_SunSourceDiameter, TiledShading_SunSourceDiameter);
 			lightShadeInfo.shadowParams = Vec2(1, 0);
 			lightShadeInfo.shadowMaskIndex = 0;
-			lightShadeInfo.shadowChannelIndex = Vec4(1, 0, 0, 0);
 			lightShadeInfo.stencilID0 = lightShadeInfo.stencilID1 = 0;
 
 			Vec3 sunColor;
@@ -724,72 +717,80 @@ void CTiledShading::PrepareLightList(CRenderView* pRenderView)
 		}
 	}
 
+	m_numValidLights = numTileLights;
 #ifndef _RELEASE
 	rd->m_RP.m_PS[rd->m_RP.m_nProcessThreadID].m_NumTiledShadingSkippedLights = m_numSkippedLights;
 #endif
 
-	// Update light buffer
-	m_lightCullInfoBuf.UpdateBufferContent(tileLightsCull, sizeof(STiledLightCullInfo) * MaxNumTileLights);
-	m_LightShadeInfoBuf.UpdateBufferContent(tileLightsShade, sizeof(STiledLightShadeInfo) * MaxNumTileLights);
-
-	rd->GetVolumetricFog().PrepareLightList(pRenderView, lightLists[0], lightLists[1], lightLists[2], firstShadowLight, curShadowPoolLight);
-}
-
-void CTiledShading::PrepareShadowCastersList(CRenderView* pRenderView)
-{
-	uint32 firstShadowLight = CDeferredShading::Instance().m_nFirstCandidateShadowPoolLight;
-	uint32 curShadowPoolLight = CDeferredShading::Instance().m_nCurrentShadowPoolLight;
-
-	m_arrShadowCastingLights.SetUse(0);
-
-	for (int lightIdx = firstShadowLight; lightIdx < curShadowPoolLight; ++lightIdx)
+	// Prepare cull info
+	for (uint32 i = 0; i < numTileLights; i++)
 	{
-		const SRenderLight& light = pRenderView->GetLight(eDLT_DeferredLight, lightIdx);
-		if (light.m_Flags & DLF_CASTSHADOW_MAPS)
-			m_arrShadowCastingLights.Add(lightIdx);
+		STiledLightInfo& lightInfo = m_tileLights[i];
+		STiledLightCullInfo& lightCullInfo = tileLightsCull[i];
+
+		lightCullInfo.volumeType = lightInfo.volumeType;
+		lightCullInfo.posRad = Vec4(Vec3(Vec4(Vec3(lightInfo.posRad), 1) * matView), lightInfo.posRad.w);
+		lightCullInfo.depthBounds = lightInfo.depthBoundsVS;
+		
+		if (lightInfo.volumeType == tlVolumeSun)
+		{
+			lightCullInfo.posRad = lightInfo.posRad;
+		}
+		else if (lightInfo.volumeType == tlVolumeOBB)
+		{
+			lightCullInfo.volumeParams0 = Vec4(Vec3(Vec4(Vec3(lightInfo.volumeParams0), 0) * matView), lightInfo.volumeParams0.w);
+			lightCullInfo.volumeParams1 = Vec4(Vec3(Vec4(Vec3(lightInfo.volumeParams1), 0) * matView), lightInfo.volumeParams1.w);
+			lightCullInfo.volumeParams2 = Vec4(Vec3(Vec4(Vec3(lightInfo.volumeParams2), 0) * matView), lightInfo.volumeParams2.w);
+		}
+		else if (lightInfo.volumeType == tlVolumeCone)
+		{
+			lightCullInfo.volumeParams0 = Vec4(Vec3(Vec4(Vec3(lightInfo.volumeParams0), 0) * matView), lightInfo.volumeParams0.w);
+			lightCullInfo.volumeParams1.w = lightInfo.volumeParams1.w;
+		}
 	}
+
+	// NOTE: Update full light buffer, because there are "num-threads" checks for Zero-struct size needs to be aligned to that (0,64,128,192,255 are the only possible ones for 64 threat-group size)
+	const size_t tileLightsCullUploadSize = CDeviceBufferManager::AlignBufferSizeForStreaming(sizeof(STiledLightCullInfo) * std::min(MaxNumTileLights, Align(numTileLights, 64) + 64));
+	const size_t tileLightsShadeUploadSize = CDeviceBufferManager::AlignBufferSizeForStreaming(sizeof(STiledLightShadeInfo) * std::min(MaxNumTileLights, Align(numTileLights, 64) + 64));
+
+	m_lightCullInfoBuf.UpdateBufferContent(tileLightsCull, tileLightsCullUploadSize);
+	m_lightShadeInfoBuf.UpdateBufferContent(tileLightsShade, tileLightsShadeUploadSize);
 }
 
 void CTiledShading::PrepareClipVolumeList(Vec4* clipVolumeParams)
 {
-	STiledClipVolumeInfo clipVolumeInfo[MaxNumClipVolumes];
+	// NOTE: Get aligned stack-space (pointer and size aligned to manager's alignment requirement)
+	CryStackAllocWithSizeVector(STiledClipVolumeInfo, MaxNumClipVolumes, clipVolumeInfo, CDeviceBufferManager::AlignBufferSizeForStreaming);
+
 	for (uint32 volumeIndex = 0; volumeIndex < MaxNumClipVolumes; ++volumeIndex)
 		clipVolumeInfo[volumeIndex].data = clipVolumeParams[volumeIndex].w;
 
-	m_clipVolumeInfoBuf.UpdateBufferContent(clipVolumeInfo, sizeof(STiledClipVolumeInfo) * MaxNumClipVolumes);
+	m_clipVolumeInfoBuf.UpdateBufferContent(clipVolumeInfo, clipVolumeInfoSize);
 }
 
 void CTiledShading::Render(CRenderView* pRenderView, Vec4* clipVolumeParams)
 {
 	CD3D9Renderer* const __restrict rd = gcpRendD3D;
 
-	if (!CTexture::s_ptexHDRTarget)  // Sketch mode
-		return;
-
 	// Temporary hack until tiled shading has proper MSAA support
-	if (CRenderer::CV_r_DeferredShadingTiled == 2 && CRenderer::CV_r_msaa)
+	if (CRenderer::CV_r_DeferredShadingTiled >= 2 && CRenderer::CV_r_msaa)
 		CRenderer::CV_r_DeferredShadingTiled = 1;
 
 	auto& defLights = pRenderView->GetLightsArray(eDLT_DeferredLight);
 	auto& envProbes = pRenderView->GetLightsArray(eDLT_DeferredCubemap);
 	auto& ambientLights = pRenderView->GetLightsArray(eDLT_DeferredAmbientLight);
 
-	// Generate shadow mask. Note that in tiled forward only mode the shadow mask is generated in CDeferredShading::DeferredShadingPass()
-	if (CRenderer::CV_r_DeferredShadingTiled > 1)
-	{
-		PROFILE_LABEL_SCOPE("SHADOWMASK");
-
-		PrepareShadowCastersList(pRenderView);
-		rd->FX_DeferredShadowMaskGen(pRenderView, m_arrShadowCastingLights);
-
-		rd->FX_SetActiveRenderTargets();
-	}
-
 	PROFILE_LABEL_SCOPE("TILED_SHADING");
 
 	PrepareClipVolumeList(clipVolumeParams);
 
 	PrepareLightList(pRenderView);
+
+	if (rd->m_nGraphicsPipeline > 0)
+	{
+		rd->GetGraphicsPipeline().RenderTiledShading();
+		return;
+	}
 
 	// Make sure HDR target is not bound as RT any more
 	rd->FX_PushRenderTarget(0, CTexture::s_ptexSceneSpecularAccMap, NULL);
@@ -799,10 +800,8 @@ void CTiledShading::Render(CRenderView* pRenderView, Vec4* clipVolumeParams)
 
 	if (CRenderer::CV_r_DeferredShadingTiled > 1)   // Tiled deferred
 		rd->m_RP.m_FlagsShader_RT |= g_HWSR_MaskBit[HWSR_SAMPLE0];
-	if (CRenderer::CV_r_DeferredShadingTiled == 4)  // Light coverage visualization
+	if (CRenderer::CV_r_DeferredShadingTiledDebug == 2)  // Light coverage visualization
 		rd->m_RP.m_FlagsShader_RT |= g_HWSR_MaskBit[HWSR_SAMPLE2];
-	if (CRenderer::CV_r_ssdoColorBleeding)
-		rd->m_RP.m_FlagsShader_RT |= g_HWSR_MaskBit[HWSR_SAMPLE1];
 	if (CRenderer::CV_r_SSReflections)
 		rd->m_RP.m_FlagsShader_RT |= g_HWSR_MaskBit[HWSR_SAMPLE3];
 	if (CRenderer::CV_r_DeferredShadingSSS)
@@ -844,20 +843,20 @@ void CTiledShading::Render(CRenderView* pRenderView, Vec4* clipVolumeParams)
 	uint32 dispatchSizeX = nScreenWidth / LightTileSizeX + (nScreenWidth % LightTileSizeX > 0 ? 1 : 0);
 	uint32 dispatchSizeY = nScreenHeight / LightTileSizeY + (nScreenHeight % LightTileSizeY > 0 ? 1 : 0);
 
-	const bool shaderAvailable = SD3DPostEffectsUtils::ShBeginPass(CShaderMan::s_shDeferredShading, techTiledShading, FEF_DONTSETSTATES);
+	const bool shaderAvailable = SD3DPostEffectsUtils::ShBeginPass(CShaderMan::s_shDeferredShading, techTiledShading, FEF_DONTSETTEXTURES | FEF_DONTSETSTATES);
 	if (shaderAvailable)  // Temporary workaround for PS4 shader cache issue
 	{
 		D3DShaderResource* pTiledBaseRes[8] = {
-			m_LightShadeInfoBuf.GetSRV(),
-			m_specularProbeAtlas.texArray->GetShaderResourceView(),
-			m_diffuseProbeAtlas.texArray->GetShaderResourceView(),
-			m_spotTexAtlas.texArray->GetShaderResourceView(),
-			CTexture::s_ptexRT_ShadowPool->GetShaderResourceView(),
-			CTexture::s_ptexShadowJitterMap->GetShaderResourceView(),
-			m_lightCullInfoBuf.GetSRV(),
-			m_clipVolumeInfoBuf.GetSRV(),
+			m_lightShadeInfoBuf.             GetDevBuffer ()->LookupSRV(EDefaultResourceViews::Default),
+			m_specularProbeAtlas.texArray->  GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			m_diffuseProbeAtlas.texArray->   GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			m_spotTexAtlas.texArray->        GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CTexture::s_ptexRT_ShadowPool->  GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CTexture::s_ptexShadowJitterMap->GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			m_lightCullInfoBuf.              GetDevBuffer ()->LookupSRV(EDefaultResourceViews::Default),
+			m_clipVolumeInfoBuf.             GetDevBuffer ()->LookupSRV(EDefaultResourceViews::Default),
 		};
-		rd->m_DevMan.BindSRV(CDeviceManager::TYPE_CS, pTiledBaseRes, 16, 8);
+		rd->m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_CS, pTiledBaseRes, 16, 8);
 
 		CTexture* texClipVolumeIndex = CTexture::s_ptexVelocity;
 		CTexture* pTexCaustics = m_bApplyCaustics ? CTexture::s_ptexSceneTargetR11G11B10F[1] : CTexture::s_ptexBlack;
@@ -874,21 +873,28 @@ void CTiledShading::Render(CRenderView* pRenderView, Vec4* clipVolumeParams)
 #endif
 
 		D3DShaderResource* pDeferredShadingRes[13] = {
-			CTexture::s_ptexZTarget->GetShaderResourceView(),
-			CTexture::s_ptexSceneNormalsMap->GetShaderResourceView(),
-			CTexture::s_ptexSceneSpecular->GetShaderResourceView(),
-			CTexture::s_ptexSceneDiffuse->GetShaderResourceView(),
-			CTexture::s_ptexShadowMask->GetShaderResourceView(),
-			CTexture::s_ptexSceneNormalsBent->GetShaderResourceView(),
-			CTexture::s_ptexHDRTargetScaledTmp[0]->GetShaderResourceView(),
-			CTexture::s_ptexEnvironmentBRDF->GetShaderResourceView(),
-			texClipVolumeIndex->GetShaderResourceView(),
-			CTexture::s_ptexAOColorBleed->GetShaderResourceView(),
-			ptexGiDiff->GetShaderResourceView(),
-			ptexGiSpec->GetShaderResourceView(),
-			pTexCaustics->GetShaderResourceView(),
+			CTexture::s_ptexZTarget->                                         GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CTexture::s_ptexSceneNormalsMap->                                 GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CTexture::s_ptexSceneSpecular->                                   GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CTexture::s_ptexSceneDiffuse->                                    GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CTexture::s_ptexShadowMask->                                      GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CTexture::s_ptexSceneNormalsBent->                                GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CTexture::s_ptexHDRTargetScaledTmp[0]->                           GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CTexture::s_ptexEnvironmentBRDF->                                 GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			texClipVolumeIndex->                                              GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			CRenderer::CV_r_ssdoColorBleeding ? CTexture::s_ptexAOColorBleed->GetDevTexture()->LookupSRV(EDefaultResourceViews::Default)
+			                                  : CTexture::s_ptexBlack->       GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			ptexGiDiff->                                                      GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			ptexGiSpec->                                                      GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+			pTexCaustics->                                                    GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
 		};
-		rd->m_DevMan.BindSRV(CDeviceManager::TYPE_CS, pDeferredShadingRes, 0, 13);
+		rd->m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_CS, pDeferredShadingRes, 0, 13);
+
+		// Samplers
+		D3DSamplerState* pSamplers[1] = {
+			(D3DSamplerState*)CDeviceObjectFactory::LookupSamplerState(EDefaultSamplerStates::TrilinearClamp).second,
+		};
+		rd->m_DevMan.BindSampler(CSubmissionQueue_DX11::TYPE_CS, pSamplers, 0, 1);
 
 		static CCryNameR paramProj("ProjParams");
 		Vec4 vParamProj(rd->m_ProjMatrix.m00, rd->m_ProjMatrix.m11, rd->m_ProjMatrix.m20, rd->m_ProjMatrix.m21);
@@ -900,25 +906,9 @@ void CTiledShading::Render(CRenderView* pRenderView, Vec4* clipVolumeParams)
 		Vec4 vParamScreenSize(fScreenWidth, fScreenHeight, 1.0f / fScreenWidth, 1.0f / fScreenHeight);
 		CShaderMan::s_shDeferredShading->FXSetCSFloat(paramScreenSize, &vParamScreenSize, 1);
 
-		Vec3 worldViewPos = rd->GetRCamera().vOrigin;
-		static CCryNameR paramWorldViewPos("WorldViewPos");
-		Vec4 vParamWorldViewPos(worldViewPos.x, worldViewPos.y, worldViewPos.z, 0);
-		CShaderMan::s_shDeferredShading->FXSetCSFloat(paramWorldViewPos, &vParamWorldViewPos, 1);
-
-		SD3DPostEffectsUtils::UpdateFrustumCorners();
-		static CCryNameR paramFrustumTL("FrustumTL");
-		Vec4 vParamFrustumTL(SD3DPostEffectsUtils::m_vLT.x, SD3DPostEffectsUtils::m_vLT.y, SD3DPostEffectsUtils::m_vLT.z, 0);
-		CShaderMan::s_shDeferredShading->FXSetCSFloat(paramFrustumTL, &vParamFrustumTL, 1);
-		static CCryNameR paramFrustumTR("FrustumTR");
-		Vec4 vParamFrustumTR(SD3DPostEffectsUtils::m_vRT.x, SD3DPostEffectsUtils::m_vRT.y, SD3DPostEffectsUtils::m_vRT.z, 0);
-		CShaderMan::s_shDeferredShading->FXSetCSFloat(paramFrustumTR, &vParamFrustumTR, 1);
-		static CCryNameR paramFrustumBL("FrustumBL");
-		Vec4 vParamFrustumBL(SD3DPostEffectsUtils::m_vLB.x, SD3DPostEffectsUtils::m_vLB.y, SD3DPostEffectsUtils::m_vLB.z, 0);
-		CShaderMan::s_shDeferredShading->FXSetCSFloat(paramFrustumBL, &vParamFrustumBL, 1);
-
 		Vec3 sunDir = gEnv->p3DEngine->GetSunDirNormalized();
 		static CCryNameR paramSunDir("SunDir");
-		Vec4 vParamSunDir(sunDir.x, sunDir.y, sunDir.z, SunDistance);
+		Vec4 vParamSunDir(sunDir.x, sunDir.y, sunDir.z, TiledShading_SunDistance);
 		CShaderMan::s_shDeferredShading->FXSetCSFloat(paramSunDir, &vParamSunDir, 1);
 
 		Vec3 sunColor;
@@ -942,40 +932,67 @@ void CTiledShading::Render(CRenderView* pRenderView, Vec4* clipVolumeParams)
 		rd->FX_Commit();
 
 		D3DUAV* pUAV[3] = {
-			m_tileLightIndexBuf.GetUAV(),
-			CTexture::s_ptexHDRTarget->GetDeviceUAV(),
-			CTexture::s_ptexSceneTargetR11G11B10F[0]->GetDeviceUAV(),
+			m_tileTranspLightMaskBuf.                 GetDevBuffer ()->LookupUAV(EDefaultResourceViews::UnorderedAccess),
+			CTexture::s_ptexHDRTarget->               GetDevTexture()->LookupUAV(EDefaultResourceViews::UnorderedAccess),
+			CTexture::s_ptexSceneTargetR11G11B10F[0]->GetDevTexture()->LookupUAV(EDefaultResourceViews::UnorderedAccess),
 		};
+#ifdef RENDERER_ENABLE_LEGACY_PIPELINE
 		rd->GetDeviceContext().CSSetUnorderedAccessViews(0, 3, pUAV, NULL);
 
 		rd->m_DevMan.Dispatch(dispatchSizeX, dispatchSizeY, 1);
+#endif
 		SD3DPostEffectsUtils::ShEndPass();
 	}
 
 	D3DUAV* pUAVNull[3] = { NULL };
+#ifdef RENDERER_ENABLE_LEGACY_PIPELINE
 	rd->GetDeviceContext().CSSetUnorderedAccessViews(0, 3, pUAVNull, NULL);
+#endif
 
 	D3DShaderResource* pSRVNull[13] = { NULL };
-	rd->m_DevMan.BindSRV(CDeviceManager::TYPE_CS, pSRVNull, 0, 13);
-	rd->m_DevMan.BindSRV(CDeviceManager::TYPE_CS, pSRVNull, 16, 8);
+	rd->m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_CS, pSRVNull, 0, 13);
+	rd->m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_CS, pSRVNull, 16, 8);
+
+	D3DSamplerState* pNullSamplers[1] = { NULL };
+	rd->m_DevMan.BindSampler(CSubmissionQueue_DX11::TYPE_CS, pNullSamplers, 0, 1);
 
 	rd->FX_PopRenderTarget(0);
 
 	rd->m_RP.m_FlagsShader_RT = nPrevRTFlags;
 
 	// Output debug information
-	if (CRenderer::CV_r_DeferredShadingTiled == 3)
+	if (CRenderer::CV_r_DeferredShadingTiledDebug == 1)
 	{
-		rd->Draw2dLabel(20, 60, 2.0f, Col_Blue, false, "Tiled Shading Debug");
-		rd->Draw2dLabel(20, 95, 1.7f, m_numSkippedLights > 0 ? Col_Red : Col_Blue, false, "Skipped Lights: %i", m_numSkippedLights);
-		rd->Draw2dLabel(20, 120, 1.7f, Col_Blue, false, "Atlas Updates: %i", m_numAtlasUpdates);
+		IRenderAuxText::Draw2dLabel(20, 60, 2.0f, Col_Blue, false, "Tiled Shading Debug");
+		IRenderAuxText::Draw2dLabel(20, 95, 1.7f, m_numSkippedLights > 0 ? Col_Red : Col_Blue, false, "Skipped Lights: %i", m_numSkippedLights);
+		IRenderAuxText::Draw2dLabel(20, 120, 1.7f, Col_Blue, false, "Atlas Updates: %i", m_numAtlasUpdates);
 	}
 
 	m_bApplyCaustics = false;  // Reset flag
 }
 
-void CTiledShading::BindForwardShadingResources(CShader*, CDeviceManager::SHADER_TYPE shaderType)
+const CTiledShading::SGPUResources CTiledShading::GetTiledShadingResources()
 {
+<<<<<<< HEAD
+=======
+	CTiledShading::SGPUResources resources;
+
+	resources.lightCullInfoBuf = &m_lightCullInfoBuf;
+	resources.lightShadeInfoBuf = &m_lightShadeInfoBuf;
+	resources.tileOpaqueLightMaskBuf = &m_tileOpaqueLightMaskBuf;
+	resources.tileTranspLightMaskBuf = &m_tileTranspLightMaskBuf;
+	resources.clipVolumeInfoBuf = &m_clipVolumeInfoBuf;
+	
+	resources.specularProbeAtlas = CRenderer::CV_r_DeferredShadingTiled > 0 ? m_specularProbeAtlas.texArray : CTexture::s_ptexBlack;
+	resources.diffuseProbeAtlas = CRenderer::CV_r_DeferredShadingTiled > 0 ? m_diffuseProbeAtlas.texArray : CTexture::s_ptexBlack;
+	resources.spotTexAtlas = CRenderer::CV_r_DeferredShadingTiled > 0 ? m_spotTexAtlas.texArray : CTexture::s_ptexBlack;
+
+	return resources;
+}
+
+void CTiledShading::BindForwardShadingResources(CShader*, CSubmissionQueue_DX11::SHADER_TYPE shaderType)
+{
+>>>>>>> upstream/stabilisation
 	CD3D9Renderer* const __restrict rd = gcpRendD3D;
 
 	CTexture* ptexGiDiff = CTexture::s_ptexBlack;
@@ -997,14 +1014,22 @@ void CTiledShading::BindForwardShadingResources(CShader*, CDeviceManager::SHADER
 
 	if (!CRenderer::CV_r_DeferredShadingTiled)
 	{
+<<<<<<< HEAD
 		rd->m_DevMan.BindSRV(shaderType, ptexGiDiff->GetShaderResourceView(), 24);
 		rd->m_DevMan.BindSRV(shaderType, ptexGiSpec->GetShaderResourceView(), 25);
 		rd->m_DevMan.BindSRV(shaderType, ptexRsmCol->GetShaderResourceView(), 26);
 		rd->m_DevMan.BindSRV(shaderType, ptexRsmNor->GetShaderResourceView(), 27);
+=======
+		rd->m_DevMan.BindSRV(shaderType, ptexGiDiff->GetDevTexture()->LookupSRV(EDefaultResourceViews::Default), 24);
+		rd->m_DevMan.BindSRV(shaderType, ptexGiSpec->GetDevTexture()->LookupSRV(EDefaultResourceViews::Default), 25);
+		rd->m_DevMan.BindSRV(shaderType, ptexRsmCol->GetDevTexture()->LookupSRV(EDefaultResourceViews::Default), 26);
+		rd->m_DevMan.BindSRV(shaderType, ptexRsmNor->GetDevTexture()->LookupSRV(EDefaultResourceViews::Default), 27);
+>>>>>>> upstream/stabilisation
 
 		return;
 	}
 
+<<<<<<< HEAD
 	D3DShaderResource* pTiledBaseRes[12] = {
 		m_LightShadeInfoBuf.GetSRV(),
 		m_specularProbeAtlas.texArray->GetShaderResourceView(),
@@ -1018,24 +1043,37 @@ void CTiledShading::BindForwardShadingResources(CShader*, CDeviceManager::SHADER
 		ptexGiSpec->GetShaderResourceView(),
 		ptexRsmCol->GetShaderResourceView(),
 		ptexRsmNor->GetShaderResourceView(),
+=======
+	D3DShaderResource* pTiledBaseRes[10] = {
+		m_tileTranspLightMaskBuf.        GetDevBuffer() ->LookupSRV(EDefaultResourceViews::Default),
+		m_lightShadeInfoBuf.             GetDevBuffer() ->LookupSRV(EDefaultResourceViews::Default),
+		m_clipVolumeInfoBuf.             GetDevBuffer() ->LookupSRV(EDefaultResourceViews::Default),
+		m_specularProbeAtlas.texArray->  GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+		m_diffuseProbeAtlas.texArray->   GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+		m_spotTexAtlas.texArray->        GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+		CTexture::s_ptexRT_ShadowPool->  GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+		CTexture::s_ptexShadowJitterMap->GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+		ptexGiDiff->                     GetDevTexture()->LookupSRV(EDefaultResourceViews::Default),
+		ptexGiSpec->                     GetDevTexture()->LookupSRV(EDefaultResourceViews::Default)
+>>>>>>> upstream/stabilisation
 	};
-	rd->m_DevMan.BindSRV(shaderType, pTiledBaseRes, 16, 12);
+	rd->m_DevMan.BindSRV(shaderType, pTiledBaseRes, 17, 10);
 
 	D3DSamplerState* pSamplers[1] = {
-		(D3DSamplerState*)CTexture::s_TexStates[m_nTexStateCompare].m_pDeviceState,
+		(D3DSamplerState*)CDeviceObjectFactory::LookupSamplerState(EDefaultSamplerStates::LinearCompare).second,
 	};
 	rd->m_DevMan.BindSampler(shaderType, pSamplers, 14, 1);
 }
 
-void CTiledShading::UnbindForwardShadingResources(CDeviceManager::SHADER_TYPE shaderType)
+void CTiledShading::UnbindForwardShadingResources(CSubmissionQueue_DX11::SHADER_TYPE shaderType)
 {
 	if (!CRenderer::CV_r_DeferredShadingTiled)
 		return;
 
 	CD3D9Renderer* const __restrict rd = gcpRendD3D;
 
-	D3DShaderResource* pNullViews[12] = { NULL };
-	rd->m_DevMan.BindSRV(shaderType, pNullViews, 16, 12);
+	D3DShaderResource* pNullViews[10] = { NULL };
+	rd->m_DevMan.BindSRV(shaderType, pNullViews, 17, 10);
 
 #ifndef _RELEASE
 	// Verify that the sampler states did not get overwritten
@@ -1048,9 +1086,44 @@ void CTiledShading::UnbindForwardShadingResources(CDeviceManager::SHADER_TYPE sh
 
 	D3DSamplerState* pNullSamplers[1] = { NULL };
 	rd->m_DevMan.BindSampler(shaderType, pNullSamplers, 14, 1);
+
+	// reset sampler state cache because we accessed states directly
+	if(shaderType == CSubmissionQueue_DX11::TYPE_VS)
+		CTexture::s_TexStateIDs[eHWSC_Vertex][14] = EDefaultSamplerStates::Unspecified;
+	else if (shaderType == CSubmissionQueue_DX11::TYPE_PS)
+		CTexture::s_TexStateIDs[eHWSC_Pixel][14] = EDefaultSamplerStates::Unspecified;
+	else if (shaderType == CSubmissionQueue_DX11::TYPE_GS)
+		CTexture::s_TexStateIDs[eHWSC_Geometry][14] = EDefaultSamplerStates::Unspecified;
+	else if (shaderType == CSubmissionQueue_DX11::TYPE_DS)
+		CTexture::s_TexStateIDs[eHWSC_Domain][14] = EDefaultSamplerStates::Unspecified;
+	else if (shaderType == CSubmissionQueue_DX11::TYPE_HS)
+		CTexture::s_TexStateIDs[eHWSC_Hull][14] = EDefaultSamplerStates::Unspecified;
+	else if (shaderType == CSubmissionQueue_DX11::TYPE_CS)
+		CTexture::s_TexStateIDs[eHWSC_Compute][14] = EDefaultSamplerStates::Unspecified;
+}
+
+struct STiledLightCullInfo* CTiledShading::GetTiledLightCullInfo()
+{
+	return &tileLightsCull[0];
 }
 
 struct STiledLightShadeInfo* CTiledShading::GetTiledLightShadeInfo()
 {
 	return &tileLightsShade[0];
+}
+
+uint32 CTiledShading::GetLightShadeIndexBySpecularTextureId(int textureId) const
+{
+	CTexture* pTexture = CTexture::GetByID(textureId);
+	auto begin = tileLightsShade;
+	auto end = tileLightsShade + m_numValidLights;
+	auto it = std::find_if(begin, end, [this, pTexture](const STiledLightShadeInfo& light)
+	{
+		if (light.lightType != tlTypeProbe)
+			return false;
+		return m_specularProbeAtlas.items[light.resIndex].texture == pTexture;
+	});
+	if (it == end)
+		return -1;
+	return uint32(it - begin);
 }

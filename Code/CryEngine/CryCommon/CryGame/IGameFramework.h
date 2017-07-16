@@ -11,13 +11,13 @@
    -------------------------------------------------------------------------
    History:
    - 20:7:2004   10:34 : Created by Marco Koegler
-   - 3:8:2004		11:29 : Taken-over by Márcio Martins
+   - 3:8:2004		11:29 : Taken-over by MÃ¡rcio Martins
 
 *************************************************************************/
 
 #pragma once
 
-#include <CryEntitySystem/IComponent.h>
+#include <CryEntitySystem/IEntityComponent.h>
 #include <CryGame/IGameStartup.h> // <> required for Interfuscator
 #include <CryGame/IGameFrameworkExtension.h>
 #include <CryMath/Cry_Color.h>
@@ -70,13 +70,13 @@ struct IGameVolumes;
 
 //! Game object extensions need more information than the generic interface can provide.
 struct IGameObjectExtension;
-DECLARE_COMPONENT_POINTERS(IGameObjectExtension);
+
 
 struct IGameObjectExtensionCreatorBase
 {
 	// <interfuscator:shuffle>
 	virtual ~IGameObjectExtensionCreatorBase(){}
-	virtual IGameObjectExtensionPtr Create() = 0;
+	virtual IGameObjectExtension* Create(IEntity *pEntity) = 0;
 	virtual void                    GetGameObjectExtensionRMIData(void** ppRMI, size_t* nCount) = 0;
 	// </interfuscator:shuffle>
 
@@ -90,11 +90,11 @@ struct IGameObjectExtensionCreatorBase
   template<class T>                                                                     \
   struct C ## name ## Creator : public I ## name ## Creator                             \
   {                                                                                     \
-    IGameObjectExtensionPtr Create()                                                    \
+    IGameObjectExtension* Create(IEntity *pEntity) override                             \
     {                                                                                   \
-      return ComponentCreate_DeleteWithRelease<T>();                                    \
+      return pEntity->GetOrCreateComponentClass<T>();                                   \
     }                                                                                   \
-    void GetGameObjectExtensionRMIData(void** ppRMI, size_t * nCount)                   \
+    void GetGameObjectExtensionRMIData(void** ppRMI, size_t * nCount) override          \
     {                                                                                   \
       T::GetGameObjectExtensionRMIData(ppRMI, nCount);                                  \
     }                                                                                   \
@@ -151,6 +151,12 @@ struct IMannequin;
 struct IScriptTable;
 struct ITimeDemoRecorder;
 
+struct SEntitySchedulingProfiles
+{
+	uint32 normal;
+	uint32 owned;
+};
+
 class ISharedParamsManager;
 
 struct INeuralNet;
@@ -177,8 +183,7 @@ enum EGameStartFlags
 	eGSF_RequireKeyboardMouse  = 0x4000,
 
 	eGSF_HostMigrated          = 0x8000,
-	eGSF_NonBlockingConnect    = 0x10000,
-	eGSF_InitClientActor       = 0x20000,
+	eGSF_NonBlockingConnect    = 0x10000
 };
 
 enum ESaveGameReason
@@ -382,6 +387,8 @@ struct IPersistantDebug
 	virtual void ClearStaticTag(EntityId entityId, const char* staticId) = 0;
 	virtual void ClearTagContext(const char* tagContext) = 0;
 	virtual void ClearTagContext(const char* tagContext, EntityId entityId) = 0;
+	virtual void Update(float frameTime) = 0;
+	virtual void PostUpdate(float frameTime) = 0;
 	virtual void Reset() = 0;
 	// </interfuscator:shuffle>
 };
@@ -390,15 +397,11 @@ struct IPersistantDebug
 enum EEntityEventPriority
 {
 	EEntityEventPriority_GameObject = 0,
-	EEntityEventPriority_StartAnimProc,
-	EEntityEventPriority_AnimatedCharacter,
-	EEntityEventPriority_Vehicle,       //!< Vehicles can potentially create move request too!
-	EEntityEventPriority_Actor,         //!< Actor must always be higher than AnimatedCharacter.
 	EEntityEventPriority_PrepareAnimatedCharacterForUpdate,
-
-	EEntityEventPriority_Last,
-
-	EEntityEventPriority_Client = 100   //!< Special variable for the client to tag onto priorities when needed.
+	EEntityEventPriority_Actor,         //!< Actor must always be higher than AnimatedCharacter.
+	EEntityEventPriority_Vehicle,       //!< Vehicles can potentially create move request too!
+	EEntityEventPriority_AnimatedCharacter,
+	EEntityEventPriority_StartAnimProc
 };
 
 //! When you add stuff here, you must also update in CCryAction::Init.
@@ -413,7 +416,6 @@ enum EGameFrameworkEvent
 	eGFE_OnBreakable2d,
 	eGFE_OnBecomeVisible,
 	eGFE_PreShatter,
-	eGFE_BecomeLocalPlayer,
 	eGFE_DisablePhysics,
 	eGFE_EnablePhysics,
 	eGFE_ScriptEvent,
@@ -520,6 +522,9 @@ struct IGameFramework
 	typedef uint32                   TimerID;
 	typedef Functor2<void*, TimerID> TimerCallback;
 
+	//! Type to represent saved game names, keeping the string on the stack if possible.
+	typedef CryStackStringT<char, 256> TSaveGameName;
+
 	// <interfuscator:shuffle>
 	virtual ~IGameFramework(){}
 
@@ -528,31 +533,28 @@ struct IGameFramework
 	//! \return New instance of the game framework.
 	typedef IGameFramework*(* TEntryFunction)();
 
-	//! Initialize CRYENGINE with every system needed for a general action game.
-	//! Independently of the success of this method, Shutdown must be called.
+	//! Initializes the engine and starts the main engine loop
+	//! Only returns after the engine loop has been terminated!
+	//! The game framework is automatically shut down before returning
 	//! \param startupParams Pointer to SSystemInitParams structure containing system initialization setup!
 	//! \return 0 if something went wrong with initialization, non-zero otherwise.
-	virtual bool Init(SSystemInitParams& startupParams) = 0;
+	virtual bool StartEngine(SSystemInitParams& startupParams) = 0;
+
+	virtual void ShutdownEngine() = 0;
+
+	//! Manually starts update of the engine, aka starts a new frame
+	//! This is automatically handled in the game loop inside StartEngine
+	//! Currently this is used by the Editor since it manages its own update loop.
+	//! \param[in] haveFocus true if the game has the input focus.
+	//! \param[in] updateFlags - Flags specifying how to update.
+	//! \return 0 if something went wrong with initialization, non-zero otherwise.
+	virtual int ManualFrameUpdate(bool bHaveFocus, unsigned int updateFlags) = 0;
 
 	//! Used to notify the framework that we're switching between single and multi player.
 	virtual void InitGameType(bool multiplayer, bool fromInit) = 0;
 
-	//! Complete initialization of game framework with things that can only be done after all entities have been registered.
-	virtual bool CompleteInit() = 0;
-
-	//! Shuts down CryENGINE and any other subsystem created during initialization.
-	virtual void Shutdown() = 0;
-
-	//! Updates CRYENGINE before starting a game frame.
-	//! \param[in] haveFocus true if the game has the input focus.
-	//! \param[in] updateFlags - Flags specifying how to update.
-	//! \return 0 if something went wrong with initialization, non-zero otherwise.
-	virtual bool PreUpdate(bool haveFocus, unsigned int updateFlags) = 0;
-
-	//! Updates CRYENGINE after a game frame.
-	//! \param[in] haveFocus true if the game has the input focus.
-	//! \param[in] updateFlags Flags specifying how to update.
-	virtual void PostUpdate(bool haveFocus, unsigned int updateFlags) = 0;
+	//! Calls Physics update before starting a game frame
+	virtual void PrePhysicsUpdate() = 0;
 
 	//! Resets the current game
 	virtual void Reset(bool clients) = 0;
@@ -568,12 +570,6 @@ struct IGameFramework
 
 	//! Are we completely into game mode?
 	virtual bool IsGameStarted() = 0;
-
-	//! Check if the game is allowed to start the actual gameplay.
-	virtual bool IsLevelPrecachingDone() const = 0;
-
-	//! Inform game that it is allowed to start the gameplay.
-	virtual void SetLevelPrecachingDone(bool bValue) = 0;
 
 	//! \return Pointer to the ISystem interface.
 	virtual ISystem* GetISystem() = 0;
@@ -680,6 +676,9 @@ struct IGameFramework
 	//! Get pointer to Shared Parameters manager interface class.
 	virtual ISharedParamsManager* GetISharedParamsManager() = 0;
 
+	// Get game implementation, if any
+	virtual IGame* GetIGame() = 0;
+
 	//! Initialises a game context.
 	//! \param pGameStartParams Parameters for configuring the game.
 	//! \return true if successful, false otherwise.
@@ -753,9 +752,6 @@ struct IGameFramework
 	//! Returns the INetChannel associated with the client (or NULL)
 	virtual INetChannel* GetClientChannel() const = 0;
 
-	//! Wrapper for INetContext::DelegateAuthority()
-	virtual void DelegateAuthority(EntityId entityId, uint16 channelId) = 0;
-
 	//! Returns the (synched) time of the server (so use this for timed events, such as MP round times)
 	virtual CTimeValue GetServerTime() = 0;
 
@@ -770,6 +766,12 @@ struct IGameFramework
 	//! Retrieve a pointer to the INetChannel associated with the specified Game Server Channel Id.
 	//! \return Pointer to INetChannel associated with the specified Game Server Channel Id.
 	virtual INetChannel* GetNetChannel(uint16 channelId) = 0;
+
+	// HACK: CNetEntity calls this when binding a player's entity to the network.
+	virtual void SetServerChannelPlayerId(uint16 channelId, EntityId id) = 0;
+
+	// TODO: Move profiles into CNetEntity and get rid of this.
+	virtual const SEntitySchedulingProfiles* GetEntitySchedulerProfiles(IEntity* pEnt) = 0;
 
 	//! Retrieve an IGameObject from an entity id
 	//! \return Pointer to IGameObject of the entity if it exists (or NULL otherwise)
@@ -795,6 +797,10 @@ struct IGameFramework
 
 	//! Load a game from disk (calls StartGameContext...)
 	virtual ELoadGameResult LoadGame(const char* path, bool quick = false, bool ignoreDelay = false) = 0;
+
+	virtual TSaveGameName CreateSaveGameName() = 0;
+
+	virtual void ScheduleEndLevel(const char* nextLevel) = 0;
 
 	//! Schedules the level load for the next level
 	virtual void ScheduleEndLevelNow(const char* nextLevel) = 0;
@@ -937,6 +943,11 @@ struct IGameFramework
 		return cryinterface_cast<ExtensionInterface>(QueryExtensionInterfaceById(interfaceId)).get();
 	}
 
+	virtual void AddNetworkedClientListener(INetworkedClientListener& listener) = 0;
+	virtual void RemoveNetworkedClientListener(INetworkedClientListener& listener) = 0;
+
+	virtual void DoInvokeRMI(_smart_ptr<IRMIMessageBody> pBody, unsigned where, int channel, const bool isGameObjectRmi) = 0;
+
 protected:
 	//! Retrieves an extension interface by interface id.
 	//! Internal, client uses 'QueryExtension<ExtensionInterface>()
@@ -949,8 +960,6 @@ protected:
 ILINE bool IsDemoPlayback()
 {
 	ISystem* pSystem = GetISystem();
-	IGame* pGame = gEnv->pGame;
-	IGameFramework* pFramework = pGame->GetIGameFramework();
-	INetContext* pNetContext = pFramework->GetNetContext();
+	INetContext* pNetContext = gEnv->pGameFramework->GetNetContext();
 	return pNetContext ? pNetContext->IsDemoPlayback() : false;
 }

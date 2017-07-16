@@ -47,17 +47,7 @@ void CCharInstance::Render(const struct SRendParams& RendParams, const QuatTS& O
 
 	assert(RendParams.pMatrix);
 
-	Vec3 position;
-	position = RendParams.pMatrix->GetTranslation();
-	if (m_SkeletonAnim.m_AnimationDrivenMotion == 0)
-		position += Offset.t;
-
-	Matrix33 orientation;
-	orientation = Matrix33(*RendParams.pMatrix);
-	//if (m_SkeletonPose.m_physics.m_bPhysicsRelinquished)
-	//	orientation = Matrix33(m_location.q);
-
-	Matrix34 RenderMat34(orientation, position);
+	Matrix34 RenderMat34 = *RendParams.pMatrix * Matrix34(Offset);
 
 	//f32 axisX = RenderMat34.GetColumn0().GetLength();
 	//f32 axisY = RenderMat34.GetColumn1().GetLength();
@@ -72,7 +62,11 @@ void CCharInstance::Render(const struct SRendParams& RendParams, const QuatTS& O
 	g_pAuxGeom->SetRenderFlags(e_Def3DPublicRenderflags);
 
 	if (!passInfo.IsShadowPass())
+	{
 		m_nAnimationLOD = RendParams.lodValue.LodA();
+		if (m_nAnimationLOD == -1)
+			m_nAnimationLOD = RendParams.lodValue.LodB();
+	}
 
 	//	float fColor[4] = {1,0,1,1};
 	//	g_pAuxGeom->Draw2dLabel( 1,g_YLine, 1.2f, fColor, false,"fDistance: %f m_nAnimationLOD: %d   m_nRenderLOD: %d   numLODs: %d  m_pDefaultSkeleton->m_nBaseLOD: %d  Model: %s",RendParams.fDistance,m_nAnimationLOD,m_nRenderLOD,numLODs,m_pDefaultSkeleton->m_nBaseLOD,m_pDefaultSkeleton->GetFilePath().c_str() );
@@ -101,23 +95,34 @@ void CCharInstance::Render(const struct SRendParams& RendParams, const QuatTS& O
 
 	//------------------------------------------------------------------------
 
+	SRendParams attachmentRendParams(RendParams);
+	{
+		uint64 uAdditionalObjFlags = 0;
+		if (m_rpFlags & CS_FLAG_DRAW_NEAR)
+			uAdditionalObjFlags |= FOB_NEAREST;
+
+		attachmentRendParams.pMaterial = NULL;    // this is required to avoid the attachments using the parent character material (this is the material that overrides the default material in the attachment)
+		attachmentRendParams.dwFObjFlags |= uAdditionalObjFlags;
+	}
+
+	const f32 fFOV = g_pIRenderer->GetCamera().GetFov();
+	const f32 fZoomFactor = 0.0f + 1.0f * (RAD2DEG(fFOV) / 60.f);
+	const f32 attachmentCullingRation = (gEnv->bMultiplayer) ? Console::GetInst().ca_AttachmentCullingRationMP : Console::GetInst().ca_AttachmentCullingRation;
+	const f32 fZoomDistanceSq = sqr(RendParams.fDistance * fZoomFactor / attachmentCullingRation);
+
+	m_AttachmentManager.DrawMergedAttachments(attachmentRendParams, RenderMat34, passInfo, fZoomFactor, fZoomDistanceSq);
+	
 	if (m_pDefaultSkeleton->m_ObjectType == CGA)
 	{
-		Matrix34 mRendMat34 = RenderMat34 * Matrix34(Offset);
-		RenderCGA(RendParams, mRendMat34, passInfo);
+		RenderCGA(RendParams, RenderMat34, passInfo);
 	}
 	else
 	{
-		pe_params_flags pf;
-		IPhysicalEntity* pCharPhys = m_SkeletonPose.GetCharacterPhysics();
-		if (pCharPhys && pCharPhys->GetType() == PE_ARTICULATED && pCharPhys->GetParams(&pf) && pf.flags & aef_recorded_physics)
-			RenderMat34 = RenderMat34 * Matrix34(Offset);
 		RenderCHR(RendParams, RenderMat34, passInfo);
 	}
 
 	// draw weapon and binded objects
-	m_AttachmentManager.DrawAttachments(RendParams, RenderMat34, passInfo);
-
+	m_AttachmentManager.DrawAttachments(attachmentRendParams, RenderMat34, passInfo, fZoomFactor, fZoomDistanceSq);
 }
 
 void CCharInstance::RenderCGA(const struct SRendParams& RendParams, const Matrix34& RenderMat34, const SRenderingPassInfo& passInfo)
@@ -151,7 +156,6 @@ void CCharInstance::RenderCGA(const struct SRendParams& RendParams, const Matrix
 				// apply additional depth sort offset, if set
 				const Vec3 depthSortOffset = (orthoTm34 * Matrix34(poseData.GetJointAbsolute(i))).TransformVector(m_SkeletonPose.m_arrCGAJoints[i].m_CGAObjectInstance->GetDepthSortOffset());
 				// TODO: ^ Dot me against the camera's forward vector. Is orthoTm34 already operating in the camera-space?
-				// nodeRP.fCustomSortOffset = ???;
 
 				// apply custom joint material, if set
 				nodeRP.pMaterial = m_SkeletonPose.m_arrCGAJoints[i].m_pMaterial ? m_SkeletonPose.m_arrCGAJoints[i].m_pMaterial.get() : pMaterial;
@@ -192,9 +196,37 @@ void CCharInstance::RenderCHR(const SRendParams& RendParams, const Matrix34& rRe
 	if (!pObj)
 		return;
 
+	//#TODO Extracted from RenderProxy needed for WrinkleMap, should be implemented during character instance rendering
+	/*
+	{
+		// Make a local copy of render params as some of the parameters will be modified.
+		SRendParams rParams(inRenderParams);
+
+		if (m_Callbacks.size() > 0)
+		{
+			// if we have callbacks be sure the shader params are properly initialized
+			IShaderPublicParams* pParams = GetShaderPublicParams(true);
+
+			// get the current active material
+			IMaterial* pMaterial = m_pEntity->GetMaterial();
+			if (pMaterial == NULL)
+				pMaterial = GetSlotMaterial(0);
+
+			TCallbackVector::iterator itEnd = m_Callbacks.end();
+			for (TCallbackVector::iterator it = m_Callbacks.begin(); it != itEnd; ++it)
+			{
+				(*it)->SetupShaderParams(pParams, pMaterial);
+			}
+		}
+
+		if (m_pShaderPublicParams)
+			m_pShaderPublicParams->AssignToRenderParams(rParams);
+	}
+	*/
+
 	pObj->m_pRenderNode = RendParams.pRenderNode;
-	pObj->m_fSort = RendParams.fCustomSortOffset;
 	pObj->m_ObjFlags |= FOB_TRANS_MASK;
+	pObj->m_editorSelectionID = RendParams.nEditorSelectionID;
 
 	//check if it should be drawn close to the player
 	// For nearest geometry (weapons/arms) - make sure its rendered really at beginning (before water passes)
@@ -244,7 +276,7 @@ void CCharInstance::RenderCHR(const SRendParams& RendParams, const Matrix34& rRe
 	else if (RendParams.nCustomFlags & COB_POST_3D_RENDER)
 	{
 		memcpy(&pD->m_fTempVars[5], &RendParams.fCustomData[0], sizeof(float) * 4);
-		pObj->m_fAlpha = 1.0f; // Use the alpha in the post effect instead of here
+		pObj->m_fAlpha = 1.0f;     // Use the alpha in the post effect instead of here
 		pD->m_fTempVars[9] = RendParams.fAlpha;
 	}
 	pObj->m_DissolveRef = RendParams.nDissolveRef;
@@ -269,50 +301,49 @@ void CCharInstance::RenderCHR(const SRendParams& RendParams, const Matrix34& rRe
 
 	if (!m_bHideMaster)
 	{
-		//	AddCurrentRenderData (pObj, RendParams);
-		m_pDefaultSkeleton->m_ModelMesh.m_stream.nFrameId = passInfo.GetMainFrameID();
-
 		if (Console::GetInst().ca_DrawSkeleton)
 			m_SkeletonPose.DrawSkeleton(rRenderMat34);
 		if (Console::GetInst().ca_DrawBBox)
 			m_SkeletonPose.DrawBBox(rRenderMat34);
 
-		IRenderMesh* pIRenderMesh = m_pDefaultSkeleton->m_ModelMesh.m_pIRenderMesh;
-		if (pIRenderMesh)
+		if (CModelMesh* pModelMesh = m_pDefaultSkeleton->GetModelMesh())
 		{
-			// MichaelS - use the instance's material if there is one, and if no override material has
-			// already been specified.
-			IMaterial* pMaterial = RendParams.pMaterial;
-			if (pMaterial == 0)
-				pMaterial = this->GetIMaterial_Instance();
-			if (pMaterial == 0)
-				pMaterial = m_pDefaultSkeleton->GetIMaterial();
-			pObj->m_pCurrMaterial = pMaterial;
-#ifndef _RELEASE
-			CModelMesh* pModelMesh = m_pDefaultSkeleton->GetModelMesh();
-			static ICVar* p_e_debug_draw = gEnv->pConsole->GetCVar("e_DebugDraw");
-			if (p_e_debug_draw && p_e_debug_draw->GetIVal() != 0)
-				pModelMesh->DrawDebugInfo(this->m_pDefaultSkeleton, 0, rRenderMat34, p_e_debug_draw->GetIVal(), pMaterial, pObj, RendParams, passInfo.IsGeneralPass(), (IRenderNode*)RendParams.pRenderNode, m_SkeletonPose.GetAABB());
-#endif
-			//	float fColor[4] = {1,0,1,1};
-			//	extern f32 g_YLine;
-			//	g_pAuxGeom->Draw2dLabel( 1,g_YLine, 1.3f, fColor, false,"m_nRenderLOD: %d  %d",RendParams.nLodLevel, pObj->m_nLod  ); g_YLine+=0x10;
-			if (Console::GetInst().ca_DrawBaseMesh)
-			{
-				pIRenderMesh->Render(pObj, passInfo);
-			}
+			pModelMesh->m_stream.nFrameId = passInfo.GetMainFrameID();
 
-			if (Console::GetInst().ca_DrawDecalsBBoxes)
+			if (IRenderMesh* pIRenderMesh = pModelMesh->m_pIRenderMesh)
 			{
-				Matrix34 wsRenderMat34(rRenderMat34);
-				// Convert "Camera Space" to "World Space"
-				if (pObj->m_ObjFlags & FOB_NEAREST)
-					wsRenderMat34.AddTranslation(gEnv->pRenderer->GetCamera().GetPosition());
-				g_pAuxGeom->SetRenderFlags(e_Def3DPublicRenderflags);
+				// MichaelS - use the instance's material if there is one, and if no override material has
+				// already been specified.
+				IMaterial* pMaterial = RendParams.pMaterial;
+				if (pMaterial == 0)
+					pMaterial = this->GetIMaterial_Instance();
+				if (pMaterial == 0)
+					pMaterial = m_pDefaultSkeleton->GetIMaterial();
+				pObj->m_pCurrMaterial = pMaterial;
+#ifndef _RELEASE
+				static ICVar* p_e_debug_draw = gEnv->pConsole->GetCVar("e_DebugDraw");
+				if (p_e_debug_draw && p_e_debug_draw->GetIVal() != 0)
+					pModelMesh->DrawDebugInfo(this->m_pDefaultSkeleton, 0, rRenderMat34, p_e_debug_draw->GetIVal(), pMaterial, pObj, RendParams, passInfo.IsGeneralPass(), (IRenderNode*)RendParams.pRenderNode, m_SkeletonPose.GetAABB());
+#endif
+				//	float fColor[4] = {1,0,1,1};
+				//	extern f32 g_YLine;
+				//	g_pAuxGeom->Draw2dLabel( 1,g_YLine, 1.3f, fColor, false,"m_nRenderLOD: %d  %d",RendParams.nLodLevel, pObj->m_nLod  ); g_YLine+=0x10;
+				if (Console::GetInst().ca_DrawBaseMesh)
+				{
+					pIRenderMesh->Render(pObj, passInfo);
+				}
+
+				if (Console::GetInst().ca_DrawDecalsBBoxes)
+				{
+					Matrix34 wsRenderMat34(rRenderMat34);
+					// Convert "Camera Space" to "World Space"
+					if (pObj->m_ObjFlags & FOB_NEAREST)
+						wsRenderMat34.AddTranslation(gEnv->pRenderer->GetCamera().GetPosition());
+					g_pAuxGeom->SetRenderFlags(e_Def3DPublicRenderflags);
+				}
 			}
 		}
 	}
-
 }
 
 //-----------------------------------------------------------------------------------
@@ -332,8 +363,7 @@ SSkinningData* CCharInstance::GetSkinningData()
 	DEFINE_PROFILER_FUNCTION();
 
 	CAttachmentManager* pAttachmentManager = static_cast<CAttachmentManager*>(GetIAttachmentManager());
-	uint32 skinningQuatCount = GetSkinningTransformationCount();
-	uint32 nNumBones = skinningQuatCount + pAttachmentManager->GetExtraBonesCount();
+	uint32 numSkinningBones = GetSkinningTransformationCount() + pAttachmentManager->GetExtraBonesCount();
 
 	bool bNeedJobSyncVar = true;
 
@@ -348,7 +378,8 @@ SSkinningData* CCharInstance::GetSkinningData()
 		return arrSkinningRendererData[nList].pSkinningData;
 	}
 
-	SSkinningData* pSkinningData = gEnv->pRenderer->EF_CreateSkinningData(nNumBones, bNeedJobSyncVar);
+	SSkinningData* pSkinningData = gEnv->pRenderer->EF_CreateSkinningData(numSkinningBones, bNeedJobSyncVar);
+	pSkinningData->pCustomTag = this;
 	arrSkinningRendererData[nList].pSkinningData = pSkinningData;
 	arrSkinningRendererData[nList].nFrameID = nFrameID;
 
@@ -365,10 +396,11 @@ SSkinningData* CCharInstance::GetSkinningData()
 	}
 	else
 	{
-		// if we don't have motion blur data, use the some as for the current frame
+		// if we don't have motion blur data, use the same as for the current frame
 		pSkinningData->pPreviousSkinningRenderData = pSkinningData;
 	}
 
 	BeginSkinningTransformationsComputation(pSkinningData);
+	pSkinningData->pRenderMesh = GetRenderMesh();
 	return pSkinningData;
 }

@@ -8,7 +8,7 @@ Description: Checkpoint Save/Load system for Game04
 
 -------------------------------------------------------------------------
 History:
-- 10:07:2008 : Created By Jan Müller
+- 10:07:2008 : Created By Jan MÃ¼ller
 - 05:02:2009 : Renamed to CheckpointGame for game-specific usage
 
 *************************************************************************/
@@ -176,7 +176,7 @@ void CCheckpointGame::ReadPlayerInventory(XmlNodeRef parentNode)
 	pPlayer->GetInventory()->FullSerialize(ser);
 
 	// Make sure all the inventory data changes are applied
-	gEnv->pGame->GetIGameFramework()->GetIItemSystem()->SetActorItem(pPlayer, pPlayer->GetCurrentItemId(), false);
+	gEnv->pGameFramework->GetIItemSystem()->SetActorItem(pPlayer, pPlayer->GetCurrentItemId(), false);
 
 	pSerializer->Release();
 }

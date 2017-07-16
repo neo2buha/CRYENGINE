@@ -15,6 +15,12 @@
 #include "Command_Commands.h"
 #include "Command_Buffer.h"
 
+bool IsSkinFile(const string& fileName)
+{
+	const char* fileExt = PathUtil::GetExt(fileName.c_str());
+	return cry_strcmp(fileExt, CRY_SKIN_FILE_EXT) == 0;
+}
+
 uint32 CAttachmentManager::LoadAttachmentList(const char* pathname)
 {
 
@@ -52,7 +58,7 @@ uint32 CAttachmentManager::ParseXMLAttachmentList(CharacterAttachment* parrAttac
 		XmlNodeRef nodeAttach = nodeAttachements->getChild(i);
 		const char* AttachTag = nodeAttach->getTag();
 		if (strcmp(AttachTag, "Attachment"))
-			continue; //invalid
+			continue;                                                     //invalid
 
 		stack_string Type = nodeAttach->getAttr("Type");
 		if (Type == "CA_BONE")
@@ -68,10 +74,10 @@ uint32 CAttachmentManager::ParseXMLAttachmentList(CharacterAttachment* parrAttac
 		if (Type == "CA_VCLOTH")
 			attach.m_Type = CA_VCLOTH;
 		if (attach.m_Type == 0xDeadBeef)
-			continue; //invalid
+			continue;                                                     //invalid
 
 		string AName = nodeAttach->getAttr("AName");
-		CryStringUtils::UnifyFilePath(AName);
+		PathUtil::UnifyFilePath(AName);
 		attach.m_strAttachmentName = AName;
 
 		nodeAttach->getAttr("Rotation", attach.m_AbsoluteDefault.q);
@@ -82,8 +88,8 @@ uint32 CAttachmentManager::ParseXMLAttachmentList(CharacterAttachment* parrAttac
 
 		attach.m_strJointName = nodeAttach->getAttr("BoneName");
 		attach.m_strBindingPath = nodeAttach->getAttr("Binding");
-		CryStringUtils::UnifyFilePath(attach.m_strBindingPath);
-		attach.m_strSimBindingPath = nodeAttach->getAttr("SimBinding");   //only used for the cloth simulation mesh
+		PathUtil::UnifyFilePath(attach.m_strBindingPath);
+		attach.m_strSimBindingPath = nodeAttach->getAttr("simBinding");   //only used for the cloth simulation mesh
 
 		nodeAttach->getAttr("ProxyParams", attach.m_ProxyParams);
 		nodeAttach->getAttr("ProxyPurpose", attach.m_ProxyPurpose);
@@ -179,7 +185,7 @@ uint32 CAttachmentManager::ParseXMLAttachmentList(CharacterAttachment* parrAttac
 			nodeAttach->getAttr("SA_ScaleZN", attach.ap.m_vSphereScale.y);
 			nodeAttach->getAttr("SA_DiskRotX", attach.ap.m_vDiskRotation.x);
 			nodeAttach->getAttr("SA_DiskRotZ", attach.ap.m_vDiskRotation.y);
-			nodeAttach->getAttr("SA_HRotation", attach.ap.m_vDiskRotation.x);  //just for backwards compatibility
+			nodeAttach->getAttr("SA_HRotation", attach.ap.m_vDiskRotation.x);   //just for backwards compatibility
 
 			nodeAttach->getAttr("SA_Redirect", attach.ap.m_useRedirect);
 
@@ -244,7 +250,7 @@ uint32 CAttachmentManager::ParseXMLAttachmentList(CharacterAttachment* parrAttac
 			stack_string propType = nodeAttach->getAttr("PhysPropType");
 
 			int32 nRopeOrGrid = !strcmp(propType, "Rope") ? 0 : (!strcmp(propType, "Cloth") ? 1 : -1);
-			DynArray<SJointProperty> jp = CDefaultSkeleton::GetPhysInfoProperties_ROPE(attach.m_AttPhysInfo[0], nRopeOrGrid); //just write the names into jp
+			DynArray<SJointProperty> jp = CDefaultSkeleton::GetPhysInfoProperties_ROPE(attach.m_AttPhysInfo[0], nRopeOrGrid);             //just write the names into jp
 
 			for (int nLod = 0; nLod < 2; nLod++)
 			{
@@ -260,7 +266,7 @@ uint32 CAttachmentManager::ParseXMLAttachmentList(CharacterAttachment* parrAttac
 						lodUsed |= nodeAttach->getAttr(buf, jp[idx].bval);
 				}
 				if (lodUsed)
-					CDefaultSkeleton::ParsePhysInfoProperties_ROPE(attach.m_AttPhysInfo[nLod], jp);  //just init m_PhysInfo from jp
+					CDefaultSkeleton::ParsePhysInfoProperties_ROPE(attach.m_AttPhysInfo[nLod], jp);                                         //just init m_PhysInfo from jp
 			}
 		}
 
@@ -270,33 +276,70 @@ uint32 CAttachmentManager::ParseXMLAttachmentList(CharacterAttachment* parrAttac
 
 		if (attach.m_Type == CA_VCLOTH)
 		{
-			nodeAttach->getAttr("hide", attach.clothParams.hide);
-			//nodeAttach->getAttr( "debug", attach.clothParams.debug );
-			nodeAttach->getAttr("thickness", attach.clothParams.thickness);
-			nodeAttach->getAttr("collsionDamping", attach.clothParams.collisionDamping);
-			//nodeAttach->getAttr( "SA_Mass", attach.clothParams.dragDamping );
+			// Animation Control
+			nodeAttach->getAttr("forceSkinning", attach.clothParams.forceSkinning);
+			nodeAttach->getAttr("forceSkinningFpsThreshold", attach.clothParams.forceSkinningFpsThreshold);
+			nodeAttach->getAttr("forceSkinningTranslateThreshold", attach.clothParams.forceSkinningTranslateThreshold);
+			nodeAttach->getAttr("checkAnimationRewind", attach.clothParams.checkAnimationRewind);
+			nodeAttach->getAttr("disableSimulationAtDistance", attach.clothParams.disableSimulationAtDistance);
+			nodeAttach->getAttr("disableSimulationTimeRange", attach.clothParams.disableSimulationTimeRange);
+
+			// Simulation and Collision
+			nodeAttach->getAttr("timeStep", attach.clothParams.timeStep);
+			nodeAttach->getAttr("timeStepMax", attach.clothParams.timeStepsMax);
+			nodeAttach->getAttr("numIterations", attach.clothParams.numIterations);
+			nodeAttach->getAttr("collideEveryNthStep", attach.clothParams.collideEveryNthStep);
+			nodeAttach->getAttr("collisionMultipleShiftFactor", attach.clothParams.collisionMultipleShiftFactor);
+			nodeAttach->getAttr("gravityFactor", attach.clothParams.gravityFactor);
+
+			// Stiffness and Elasticity
 			nodeAttach->getAttr("stretchStiffness", attach.clothParams.stretchStiffness);
 			nodeAttach->getAttr("shearStiffness", attach.clothParams.shearStiffness);
 			nodeAttach->getAttr("bendStiffness", attach.clothParams.bendStiffness);
-			nodeAttach->getAttr("numIterations", attach.clothParams.numIterations);
-			nodeAttach->getAttr("timeStep", attach.clothParams.timeStep);
+			nodeAttach->getAttr("bendStiffnessByTrianglesAngle", attach.clothParams.bendStiffnessByTrianglesAngle);
+			nodeAttach->getAttr("pullStiffness", attach.clothParams.pullStiffness);
+
+			// Friction and Damping
+			nodeAttach->getAttr("Friction", attach.clothParams.friction);
 			nodeAttach->getAttr("rigidDamping", attach.clothParams.rigidDamping);
+			nodeAttach->getAttr("springDamping", attach.clothParams.springDamping);
+			nodeAttach->getAttr("springDampingPerSubstep", attach.clothParams.springDampingPerSubstep);
+			nodeAttach->getAttr("collisionDampingTangential", attach.clothParams.collisionDampingTangential);
+
+			// Long Range Attachments
+			nodeAttach->getAttr("longRangeAttachments", attach.clothParams.longRangeAttachments);
+			nodeAttach->getAttr("longRangeAttachmentsAllowedExtension", attach.clothParams.longRangeAttachmentsAllowedExtension);
+			nodeAttach->getAttr("longRangeAttachmentsMaximumShiftFactor", attach.clothParams.longRangeAttachmentsMaximumShiftFactor);
+			nodeAttach->getAttr("longRangeAttachmentsShiftCollisionFactor", attach.clothParams.longRangeAttachmentsShiftCollisionFactor);
+
+			// Test Reset Damping
+			nodeAttach->getAttr("resetDampingFactor", attach.clothParams.resetDampingFactor);
+			nodeAttach->getAttr("resetDampingRange", attach.clothParams.resetDampingRange);
+
+			// Additional
 			nodeAttach->getAttr("translationBlend", attach.clothParams.translationBlend);
 			nodeAttach->getAttr("rotationBlend", attach.clothParams.rotationBlend);
-			nodeAttach->getAttr("friction", attach.clothParams.friction);
-			nodeAttach->getAttr("pullStiffness", attach.clothParams.pullStiffness);
-			nodeAttach->getAttr("SA_Mass", attach.clothParams.tolerance);
-			nodeAttach->getAttr("maxBlendWeight", attach.clothParams.maxBlendWeight);
+			nodeAttach->getAttr("externalBlend", attach.clothParams.externalBlend);
 			nodeAttach->getAttr("maxAnimDistance", attach.clothParams.maxAnimDistance);
-			//nodeAttach->getAttr( "SA_Mass", attach.clothParams.windBlend );
-			//nodeAttach->getAttr( "SA_Mass", attach.clothParams.collDampingRange );
-			nodeAttach->getAttr("stiffnessGradient", attach.clothParams.stiffnessGradient);
-			nodeAttach->getAttr("halfStretchIterations", attach.clothParams.halfStretchIterations);
+			nodeAttach->getAttr("filterLaplace", attach.clothParams.filterLaplace);
+
+			// Debug
 			nodeAttach->getAttr("isMainCharacter", attach.clothParams.isMainCharacter);
-			attach.clothParams.simMeshName = nodeAttach->getAttr("simMeshName");
 			attach.clothParams.renderMeshName = nodeAttach->getAttr("renderMeshName");
-			attach.clothParams.simBinding = nodeAttach->getAttr("SimBinding");
-			attach.clothParams.renderBinding = nodeAttach->getAttr("Binding");
+			//attach.clothParams.renderBinding = nodeAttach->getAttr( "Binding");
+			attach.clothParams.renderBinding = attach.m_strBindingPath;
+			attach.clothParams.simMeshName = nodeAttach->getAttr("simMeshName");
+			//attach.clothParams.simBinding = nodeAttach->getAttr( "simBinding");
+			attach.clothParams.simBinding = attach.m_strSimBindingPath;
+			attach.clothParams.material = nodeAttach->getAttr("Material");
+			nodeAttach->getAttr("debugDrawVerticesRadius", attach.clothParams.debugDrawVerticesRadius);
+			nodeAttach->getAttr("debugDrawCloth", attach.clothParams.debugDrawCloth);
+			nodeAttach->getAttr("debugDrawLRA", attach.clothParams.debugDrawLRA);
+			nodeAttach->getAttr("debugPrint", attach.clothParams.debugPrint);
+			// overwrite debug settings
+			attach.clothParams.debugPrint = 0;
+
+			nodeAttach->getAttr("hide", attach.clothParams.hide);
 		}
 
 		if (attach.m_Type == CA_PROW)
@@ -443,8 +486,10 @@ void CAttachmentManager::InitAttachmentList(const CharacterAttachment* parrAttac
 
 			//this should have its own type; its not really an attachment
 			for (int nLod = 0; nLod < 2; nLod++)
+			{
 				if (*(alias_cast<const int*>(attach.m_AttPhysInfo[nLod].spring_angle)) == 0x12345678)
 					pICharacter->m_SkeletonPose.m_physics.SetJointPhysInfo(pAttachment->GetJointID(), attach.m_AttPhysInfo[nLod], nLod);
+			}
 		}
 
 		//-----------------------------------------------------------------------------------
@@ -529,7 +574,9 @@ void CAttachmentManager::InitAttachmentList(const CharacterAttachment* parrAttac
 							if (attach.m_pMaterial)
 							{
 								for (uint32 nLOD = 0; nLOD < g_nMaxGeomLodLevels; nLOD++)
+								{
 									pIAttachmentObject->SetReplacementMaterial(attach.m_pMaterial, nLOD);
+								}
 							}
 							for (uint32 nLOD = 0; nLOD < g_nMaxGeomLodLevels; nLOD++)
 							{
@@ -634,7 +681,9 @@ void CAttachmentManager::InitAttachmentList(const CharacterAttachment* parrAttac
 							if (attach.m_pMaterial)
 							{
 								for (uint32 nLOD = 0; nLOD < g_nMaxGeomLodLevels; nLOD++)
+								{
 									pIAttachmentObject->SetReplacementMaterial(attach.m_pMaterial, nLOD);
+								}
 							}
 							for (uint32 nLOD = 0; nLOD < g_nMaxGeomLodLevels; nLOD++)
 							{
@@ -848,6 +897,91 @@ IAttachment* CAttachmentManager::CreateAttachment(const char* szAttName, uint32 
 	return 0;
 };
 
+IAttachment* CAttachmentManager::CreateVClothAttachment(const SVClothAttachmentParams& params)
+{
+	CAttachmentVCLOTH* pAttachmentVCloth = static_cast<CAttachmentVCLOTH*>(CreateAttachment(params.attachmentName.c_str(), CA_VCLOTH));
+	if (!pAttachmentVCloth)
+		return nullptr;
+
+	const bool log = (params.skinLoadingFlags & CA_DisableLogWarnings) != 0;
+	const char* renderMeshSkin = params.vclothParams.renderBinding.c_str();
+	const char* simMeshSkin = params.vclothParams.simBinding.c_str();
+	const char* pathName = GetSkelInstance()->GetFilePath();
+
+	const bool isRenderMeshSkinFile = IsSkinFile(renderMeshSkin);
+	if (!isRenderMeshSkinFile && log)
+		g_pILog->LogError("CryAnimation[VCloth]: a rendermesh (%s) for vertex-cloth must be a SKIN-file. You can't use this file: %s", renderMeshSkin, pathName);
+
+	const bool isSimMeshSkinFile = IsSkinFile(simMeshSkin);
+	if (!isSimMeshSkinFile && log)
+		g_pILog->LogError("CryAnimation[VCloth]: a simulation-mesh (%s) must be a SKIN-file. You can't use this file: %s", simMeshSkin, pathName);
+
+	if (isRenderMeshSkinFile && isSimMeshSkinFile)
+	{
+		ISkin* pModelSKIN = g_pCharacterManager->LoadModelSKIN(params.vclothParams.renderBinding.c_str(), params.skinLoadingFlags);
+		if (!pModelSKIN && log)
+		{
+			g_pILog->LogError("CryAnimation[VCloth]: skin-attachment not created: CDF: %s  SKIN: %s", pathName, renderMeshSkin);
+		}
+
+		ISkin* pModelSimSKIN = g_pCharacterManager->LoadModelSKIN(params.vclothParams.simBinding.c_str(), params.skinLoadingFlags);
+		if (!pModelSimSKIN && log)
+		{
+			g_pILog->LogError("CryAnimation[VCloth]: skin-attachment not created: CDF: %s  SKIN: %s", pathName, simMeshSkin);
+		}
+
+		if (pModelSKIN && pModelSimSKIN)
+		{
+			CSKINAttachment* pSkinInstance = new CSKINAttachment();
+			pSkinInstance->m_pIAttachmentSkin = pAttachmentVCloth;
+			IAttachmentObject* pAttachmentObject = static_cast<IAttachmentObject*>(pSkinInstance);
+			if (pAttachmentVCloth->Immediate_AddBinding(pAttachmentObject, pModelSKIN, params.skinLoadingFlags))
+			{
+				pAttachmentVCloth->SetFlags(params.flags | FLAGS_ATTACH_SW_SKINNING);
+				pAttachmentVCloth->HideAttachment(params.flags & FLAGS_ATTACH_HIDE_ATTACHMENT);
+
+				if (pAttachmentObject)
+				{
+					
+					if (!params.vclothParams.material.empty())
+					{
+						if (IMaterial* pMaterial = g_pISystem->GetI3DEngine()->GetMaterialManager()->LoadMaterial(params.vclothParams.material.c_str(), false))
+						{
+							for (uint32 nLOD = 0; nLOD < g_nMaxGeomLodLevels; ++nLOD)
+							{
+								pAttachmentObject->SetReplacementMaterial(pMaterial, nLOD);
+							}
+						}
+					}
+					
+					for (uint32 nLOD = 0; nLOD < g_nMaxGeomLodLevels; ++nLOD)
+					{
+						if (!params.vclothParams.materialLods[nLOD].empty())
+						{
+							if (IMaterial* pMaterial = params.vclothParams.material.empty() ? nullptr : g_pISystem->GetI3DEngine()->GetMaterialManager()->LoadMaterial(params.vclothParams.material.c_str(), false))
+							{
+								pAttachmentObject->SetReplacementMaterial(pMaterial, nLOD);
+							}
+						}
+					}
+
+					if (const CModelMesh* pModelMesh = static_cast<CSkin*>(pModelSKIN)->GetModelMesh(0))
+					{
+						pAttachmentVCloth->m_vertexAnimation.CreateFrameStates(pModelMesh->m_softwareMesh.GetVertexFrames(), *(m_pSkelInstance->m_pDefaultSkeleton.get()));
+					}
+				}
+				pAttachmentVCloth->AddSimBinding(*pModelSimSKIN, params.skinLoadingFlags);
+				pAttachmentVCloth->AddClothParams(params.vclothParams);
+				pAttachmentVCloth->ComputeClothCacheKey();
+
+				m_pSkelInstance->SetHasVertexAnimation(true);
+			}
+		}
+	}
+
+	return pAttachmentVCloth;
+}
+
 ICharacterInstance* CAttachmentManager::GetSkelInstance() const
 {
 	return m_pSkelInstance;
@@ -856,29 +990,28 @@ ICharacterInstance* CAttachmentManager::GetSkelInstance() const
 float CAttachmentManager::GetExtent(EGeomForm eForm)
 {
 	CGeomExtent& extent = m_Extents.Make(eForm);
-	if (!extent)
-	{
-		// Add attachments.
-		extent.ReserveParts(m_arrAttachments.size());
 
-		// Add attachments.
-		for (const auto& pa : m_arrAttachments)
+	// Add attachments.
+	extent.Clear();
+	extent.ReserveParts(m_arrAttachments.size());
+
+	// Add attachments.
+	for (const auto& pa : m_arrAttachments)
+	{
+		float fExt = 0.f;
+		if (pa)
 		{
-			float fExt = 0.f;
-			if (pa)
+			if (IAttachmentObject* pAttachmentObject = pa->GetIAttachmentObject())
 			{
-				if (IAttachmentObject* pAttachmentObject = pa->GetIAttachmentObject())
-				{
-					if (ICharacterInstance* pSkinInstance = pAttachmentObject->GetICharacterInstance())
-						fExt = pSkinInstance->GetExtent(eForm);
-					else if (IStatObj* pStatObj = pAttachmentObject->GetIStatObj())
-						fExt = pStatObj->GetExtent(eForm);
-					else if (IAttachmentSkin* pSkin = pAttachmentObject->GetIAttachmentSkin())
-						fExt = pSkin->GetExtent(eForm);
-				}
+				if (ICharacterInstance* pSkinInstance = pAttachmentObject->GetICharacterInstance())
+					fExt = pSkinInstance->GetExtent(eForm);
+				else if (IStatObj* pStatObj = pAttachmentObject->GetIStatObj())
+					fExt = pStatObj->GetExtent(eForm);
+				else if (IAttachmentSkin* pSkin = pAttachmentObject->GetIAttachmentSkin())
+					fExt = pSkin->GetExtent(eForm);
 			}
-			extent.AddPart(fExt);
 		}
+		extent.AddPart(fExt);
 	}
 
 	return extent.TotalExtent();
@@ -917,7 +1050,7 @@ void CAttachmentManager::PhysicalizeAttachment(int idx, IPhysicalEntity* pent, i
 	PhysicalizeAttachment(idx, nLod, pent, m_pSkelInstance->m_SkeletonPose.m_physics.GetOffset());
 }
 
-const int idbit = ilog2(((FLAGS_ATTACH_ID_MASK ^ FLAGS_ATTACH_ID_MASK - 1) + 1) >> 1); // bit shift for FLAG_ATTACH_ID_MASK
+const int idbit = ilog2(((FLAGS_ATTACH_ID_MASK ^ FLAGS_ATTACH_ID_MASK - 1) + 1) >> 1);           // bit shift for FLAG_ATTACH_ID_MASK
 
 void CAttachmentManager::PhysicalizeAttachment(int idx, int nLod, IPhysicalEntity* pent, const Vec3& offset)
 {
@@ -964,7 +1097,7 @@ void CAttachmentManager::PhysicalizeAttachment(int idx, int nLod, IPhysicalEntit
 	int id = (pIAttachment->GetFlags() & FLAGS_ATTACH_ID_MASK) >> idbit;
 	if (!id)
 	{
-		id = ilog2(((m_physAttachIds ^ m_physAttachIds + 1) + 1) >> 1); // least significant 0 bit index
+		id = ilog2(((m_physAttachIds ^ m_physAttachIds + 1) + 1) >> 1);               // least significant 0 bit index
 		m_physAttachIds |= 1 << id;
 		pIAttachment->SetFlags(pIAttachment->GetFlags() | id << idbit);
 	}
@@ -1026,7 +1159,8 @@ int CAttachmentManager::UpdatePhysicalizedAttachment(int idx, IPhysicalEntity* p
 		int id = (pIAttachment->GetFlags() & FLAGS_ATTACH_ID_MASK) >> idbit;
 		pp.partid = m_pSkelInstance->m_pDefaultSkeleton->GetJointCount() + id;
 		pp.pMtx3x4 = &mtx;
-		pp.bRecalcBBox = !m_pSkelInstance || !m_pSkelInstance->m_SkeletonPose.m_physics.GetModelJointPointer(idx)->m_PhysInfo.pPhysGeom;
+		const CDefaultSkeleton::SJoint* pJoint = m_pSkelInstance->m_SkeletonPose.m_physics.GetModelJointPointer(iJoint);
+		pp.bRecalcBBox = !pJoint->m_PhysInfo.pPhysGeom;
 		pent->SetParams(&pp);
 	}
 	return changed;
@@ -1167,8 +1301,10 @@ IAttachment* CAttachmentManager::GetInterfaceByPhysId(int id) const
 	if ((id -= m_pSkelInstance->m_pDefaultSkeleton->GetJointCount()) < 0)
 		return 0;
 	for (int i = GetAttachmentCount() - 1; i >= 0; i--)
+	{
 		if ((m_arrAttachments[i]->GetFlags() & FLAGS_ATTACH_ID_MASK) >> idbit == id)
 			return GetInterfaceByIndex(i);
+	}
 	return 0;
 }
 
@@ -1193,7 +1329,9 @@ bool CAttachmentManager::NeedsHierarchicalUpdate()
 		ISkeletonAnim* pISkeletonAnim = pICharacterInstance->GetISkeletonAnim();
 		uint32 numAnims = 0;
 		for (uint32 l = 0; l < numVIRTUALLAYERS; l++)
+		{
 			numAnims += pISkeletonAnim->GetNumAnimsInFIFO(l);
+		}
 		if (numAnims)
 			return 1;
 	}
@@ -1210,22 +1348,20 @@ void CAttachmentManager::UpdateAllRemapTables()
 	{
 		IAttachment* pIAttachment = m_arrAttachments[r];
 		CAttachmentBONE* pCAttachmentBone = (CAttachmentBONE*)pIAttachment;
-		pCAttachmentBone->m_nJointID = -1; //request re-projection
+		pCAttachmentBone->m_nJointID = -1;   //request re-projection
 		pCAttachmentBone->m_Simulation.m_arrChildren.resize(0);
 	}
 	uint32 x = FLAGS_ATTACH_PROJECTED ^ -1;
 	for (uint32 i = m_sortedRanges[0].begin; i < m_sortedRanges[eRange_SkinMesh].end; i++)
+	{
 		m_arrAttachments[i]->SetFlags(m_arrAttachments[i]->GetFlags() & x);
+	}
 	for (uint32 i = m_sortedRanges[eRange_SkinMesh].begin; i < m_sortedRanges[eRange_SkinMesh].end; i++)
 	{
 		IAttachment* pIAttachment = m_arrAttachments[i];
 		CAttachmentSKIN* pCAttachmentSkin = (CAttachmentSKIN*)pIAttachment;
 		pCAttachmentSkin->UpdateRemapTable();
 	}
-
-#ifdef EDITOR_PCDEBUGCODE
-	Verification();
-#endif
 }
 
 void CAttachmentManager::VerifyProxyLinks()
@@ -1245,7 +1381,9 @@ void CAttachmentManager::VerifyProxyLinks()
 
 			string arrProxyNames[100];
 			for (uint32 p = 0; p < numUsedProxies; p++)
+			{
 				arrProxyNames[p] = pCAttachmentBone->m_Simulation.m_arrProxyNames[p].c_str();
+			}
 
 			pCAttachmentBone->m_Simulation.m_arrProxyNames.resize(0);
 			pCAttachmentBone->m_Simulation.m_arrProxyIndex.resize(0);
@@ -1274,7 +1412,9 @@ void CAttachmentManager::VerifyProxyLinks()
 
 			string arrProxyNames[100];
 			for (uint32 p = 0; p < numUsedProxies; p++)
+			{
 				arrProxyNames[p] = pCAttachmentFace->m_Simulation.m_arrProxyNames[p].c_str();
+			}
 
 			pCAttachmentFace->m_Simulation.m_arrProxyNames.resize(0);
 			pCAttachmentFace->m_Simulation.m_arrProxyIndex.resize(0);
@@ -1375,9 +1515,6 @@ void CAttachmentManager::CreateCommands(Command::CBuffer& buffer)
 {
 	if (m_TypeSortingRequired)
 		SortByType();
-#ifdef EDITOR_PCDEBUGCODE
-	Verification();
-#endif
 
 	buffer.CreateCommand<Command::PrepareAllRedirectedTransformations>();
 
@@ -1404,9 +1541,6 @@ int CAttachmentManager::GenerateAttachedInstanceContexts()
 {
 	if (m_TypeSortingRequired)
 		SortByType();
-#ifdef EDITOR_PCDEBUGCODE
-	Verification();
-#endif
 
 	auto& sc = g_pCharacterManager->GetContextSyncQueue();
 
@@ -1446,9 +1580,6 @@ void CAttachmentManager::UpdateLocationsExceptExecute(Skeleton::CPoseData& rPose
 {
 	if (m_TypeSortingRequired)
 		SortByType();
-#ifdef EDITOR_PCDEBUGCODE
-	Verification();
-#endif
 
 	for (uint32 i = m_sortedRanges[eRange_BoneEmpty].begin; i < m_sortedRanges[eRange_BoneEmpty].end; i++)
 	{
@@ -1485,9 +1616,6 @@ void CAttachmentManager::UpdateLocationsExecute(Skeleton::CPoseData& rPoseData)
 {
 	if (m_TypeSortingRequired)
 		SortByType();
-#ifdef EDITOR_PCDEBUGCODE
-	Verification();
-#endif
 
 	for (uint32 i = m_sortedRanges[eRange_BoneExecute].begin; i < m_sortedRanges[eRange_BoneExecute].end; i++)
 	{
@@ -1508,9 +1636,6 @@ void CAttachmentManager::UpdateLocationsExecuteUnsafe(Skeleton::CPoseData& rPose
 {
 	if (m_TypeSortingRequired)
 		SortByType();
-#ifdef EDITOR_PCDEBUGCODE
-	Verification();
-#endif
 
 	for (uint32 i = m_sortedRanges[eRange_BoneExecuteUnsafe].begin; i < m_sortedRanges[eRange_BoneExecuteUnsafe].end; i++)
 	{
@@ -1532,9 +1657,13 @@ uint32 CAttachmentManager::RemoveAllAttachments()
 {
 	uint32 counter = GetAttachmentCount();
 	for (uint32 i = 0; i < counter; i++)
+	{
 		m_arrAttachments[i]->ClearBinding(CA_SkipSkelRecreation);
+	}
 	for (uint32 i = counter; i > 0; i--)
+	{
 		RemoveAttachmentByIndex(i - 1);
+	}
 	return 1;
 }
 
@@ -1593,31 +1722,22 @@ void VisualizeEmptySocket(const Matrix34& WorldMat34, const QuatT& rAttModelRela
 }
 #endif
 
-void CAttachmentManager::DrawAttachments(const SRendParams& rRendParams, const Matrix34& rWorldMat34, const SRenderingPassInfo& passInfo)
+void CAttachmentManager::DrawAttachments(SRendParams& rParams, const Matrix34& rWorldMat34, const SRenderingPassInfo& passInfo, const f32 fZoomFactor, const f32 fZoomDistanceSq)
 {
-#ifdef DEFINE_PROFILER_FUNCTION
 	DEFINE_PROFILER_FUNCTION();
-#endif
+
 	const uint32 numAttachments = m_arrAttachments.size();
 	if (numAttachments == 0)
 		return;
 
 	if (m_TypeSortingRequired)
 		SortByType();
-#ifdef EDITOR_PCDEBUGCODE
-	Verification();
-#endif
 
 #if !defined(_RELEASE)
 	g_pAuxGeom->SetRenderFlags(e_Def3DPublicRenderflags);
 	if (Console::GetInst().ca_DrawAttachments == 0)
 		return;
 #endif
-
-	f32 fFOV = g_pIRenderer->GetCamera().GetFov();
-	f32 fZoomFactor = 0.0f + 1.0f * (RAD2DEG(fFOV) / 60.f);
-	f32 attachmentCullingRation = (gEnv->bMultiplayer) ? Console::GetInst().ca_AttachmentCullingRationMP : Console::GetInst().ca_AttachmentCullingRation;
-	f32 fZoomDistanceSq = sqr(rRendParams.fDistance * fZoomFactor / attachmentCullingRation);
 
 	uint32 InRecursion = passInfo.IsRecursivePass();
 	const bool InShadow = passInfo.IsShadowPass();
@@ -1635,67 +1755,66 @@ void CAttachmentManager::DrawAttachments(const SRendParams& rRendParams, const M
 	else
 		uHideFlags |= FLAGS_ATTACH_HIDE_MAIN_PASS;
 
-	const uint32 uLastAttachmentIndex = numAttachments - 1;
-	uint64 uAdditionalObjFlags = 0;
-	if (m_pSkelInstance->m_rpFlags & CS_FLAG_DRAW_NEAR)
-		uAdditionalObjFlags |= FOB_NEAREST;
+	const bool bDrawMergedAttachments = Console::GetInst().ca_DrawAttachmentsMergedForShadows != 0;
 
-	SRendParams rParams(rRendParams);
-	rParams.pMaterial = NULL;   // this is required to avoid the attachments using the parent character material (this is the material that overrides the default material in the attachment)
-	rParams.dwFObjFlags |= uAdditionalObjFlags;
-	if (m_numRedirectionWithAttachment)
 	{
-		for (uint32 i = 0; i < m_sortedRanges[eRange_BoneRedirect].end; i++)
+		LOADING_TIME_PROFILE_SECTION_NAMED("BoneAttachments");
+		if (m_numRedirectionWithAttachment)
+		{
+			for (uint32 i = 0; i < m_sortedRanges[eRange_BoneRedirect].end; i++)
+			{
+				IAttachment* pIAttachment = m_arrAttachments[i];
+				CAttachmentBONE* pCAttachmentBone = (CAttachmentBONE*)pIAttachment;
+				IAttachmentObject* pIAttachmentObject = pCAttachmentBone->m_pIAttachmentObject;
+				if (pIAttachmentObject == 0)
+					continue;              //most likely all of them are 0
+				if (pCAttachmentBone->m_AttFlags & uHideFlags)
+					continue;
+				if (pCAttachmentBone->m_nJointID < 0)
+					continue;              //No success! Maybe next time
+				Matrix34 FinalMat34 = rWorldMat34 * Matrix34(pCAttachmentBone->m_AttModelRelative * pCAttachmentBone->m_addTransformation);
+				rParams.pMatrix = &FinalMat34;
+				pIAttachmentObject->RenderAttachment(rParams, passInfo);
+			}
+		}
+
+		for (uint32 i = m_sortedRanges[eRange_BoneStatic].begin; i < m_sortedRanges[eRange_BoneExecuteUnsafe].end; i++)
 		{
 			IAttachment* pIAttachment = m_arrAttachments[i];
 			CAttachmentBONE* pCAttachmentBone = (CAttachmentBONE*)pIAttachment;
-			IAttachmentObject* pIAttachmentObject = pCAttachmentBone->m_pIAttachmentObject;
-			if (pIAttachmentObject == 0)
-				continue; //most likely all of them are 0
 			if (pCAttachmentBone->m_AttFlags & uHideFlags)
 				continue;
 			if (pCAttachmentBone->m_nJointID < 0)
-				continue; //No success! Maybe next time
+				continue;                //No success! Maybe next time
+			if (bDrawMergedAttachments && (pIAttachment->GetFlags() & FLAGS_ATTACH_MERGED_FOR_SHADOWS) && (passInfo.IsShadowPass()))
+				continue;
+			if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && (pCAttachmentBone->m_AttFlags & FLAGS_ATTACH_VISIBLE) == 0)
+				continue;
 			Matrix34 FinalMat34 = rWorldMat34 * Matrix34(pCAttachmentBone->m_AttModelRelative * pCAttachmentBone->m_addTransformation);
 			rParams.pMatrix = &FinalMat34;
-			pIAttachmentObject->RenderAttachment(rParams, passInfo);
+			pCAttachmentBone->m_pIAttachmentObject->RenderAttachment(rParams, passInfo);
 		}
 	}
-	const bool bDrawMergedAttachments = Console::GetInst().ca_DrawAttachmentsMergedForShadows != 0;
 
-	for (uint32 i = m_sortedRanges[eRange_BoneStatic].begin; i < m_sortedRanges[eRange_BoneExecuteUnsafe].end; i++)
 	{
-		IAttachment* pIAttachment = m_arrAttachments[i];
-		CAttachmentBONE* pCAttachmentBone = (CAttachmentBONE*)pIAttachment;
-		if (pCAttachmentBone->m_AttFlags & uHideFlags)
-			continue;
-		if (pCAttachmentBone->m_nJointID < 0)
-			continue; //No success! Maybe next time
-		if (bDrawMergedAttachments && (pIAttachment->GetFlags() & FLAGS_ATTACH_MERGED_FOR_SHADOWS) && (passInfo.IsShadowPass()))
-			continue;
-		if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && (pCAttachmentBone->m_AttFlags & FLAGS_ATTACH_VISIBLE) == 0)
-			continue;
-		Matrix34 FinalMat34 = rWorldMat34 * Matrix34(pCAttachmentBone->m_AttModelRelative * pCAttachmentBone->m_addTransformation);
-		rParams.pMatrix = &FinalMat34;
-		pCAttachmentBone->m_pIAttachmentObject->RenderAttachment(rParams, passInfo);
+		LOADING_TIME_PROFILE_SECTION_NAMED("FaceAttachments");
+		for (uint32 i = m_sortedRanges[eRange_FaceStatic].begin; i < m_sortedRanges[eRange_FaceExecute].end; i++)
+		{
+			IAttachment* pIAttachment = m_arrAttachments[i];
+			CAttachmentFACE* pCAttachmentFace = (CAttachmentFACE*)pIAttachment;
+			if (pCAttachmentFace->m_AttFlags & uHideFlags)
+				continue;
+			if ((pCAttachmentFace->m_AttFlags & FLAGS_ATTACH_PROJECTED) == 0)
+				continue;                //no success! maybe next time
+			if (bDrawMergedAttachments && (pIAttachment->GetFlags() & FLAGS_ATTACH_MERGED_FOR_SHADOWS) && (passInfo.IsShadowPass()))
+				continue;
+			if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && (pCAttachmentFace->m_AttFlags & FLAGS_ATTACH_VISIBLE) == 0)
+				continue;                //Distance culling. Object is too small for rendering
+			Matrix34 FinalMat34 = rWorldMat34 * Matrix34(pCAttachmentFace->m_AttModelRelative * pCAttachmentFace->m_addTransformation);
+			rParams.pMatrix = &FinalMat34;
+			pCAttachmentFace->m_pIAttachmentObject->RenderAttachment(rParams, passInfo);
+		}
 	}
-	for (uint32 i = m_sortedRanges[eRange_FaceStatic].begin; i < m_sortedRanges[eRange_FaceExecute].end; i++)
-	{
-		IAttachment* pIAttachment = m_arrAttachments[i];
-		CAttachmentFACE* pCAttachmentFace = (CAttachmentFACE*)pIAttachment;
-		if (pCAttachmentFace->m_AttFlags & uHideFlags)
-			continue;
-		if ((pCAttachmentFace->m_AttFlags & FLAGS_ATTACH_PROJECTED) == 0)
-			continue; //no success! maybe next time
-		if (bDrawMergedAttachments && (pIAttachment->GetFlags() & FLAGS_ATTACH_MERGED_FOR_SHADOWS) && (passInfo.IsShadowPass()))
-			continue;
-		if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && (pCAttachmentFace->m_AttFlags & FLAGS_ATTACH_VISIBLE) == 0)
-			continue; //Distance culling. Object is too small for rendering
-		Matrix34 FinalMat34 = rWorldMat34 * Matrix34(pCAttachmentFace->m_AttModelRelative * pCAttachmentFace->m_addTransformation);
-		rParams.pMatrix = &FinalMat34;
-		pCAttachmentFace->m_pIAttachmentObject->RenderAttachment(rParams, passInfo);
-	}
-
 #if !defined(_RELEASE)
 	// for debugdrawing - drawOffset prevents attachments from overdrawing each other, drawScale helps scaling depending on attachment count
 	// used for Skin and Cloth Attachments for now
@@ -1711,87 +1830,73 @@ void CAttachmentManager::DrawAttachments(const SRendParams& rRendParams, const M
 		debugDrawScale = min(debugDrawScale, 1.5f);
 	}
 #endif
-
-	for (uint32 i = m_sortedRanges[eRange_SkinMesh].begin; i < m_sortedRanges[eRange_SkinMesh].end; i++)
 	{
-		IAttachment* pIAttachment = m_arrAttachments[i];
-		CAttachmentSKIN* pCAttachmentSkin = (CAttachmentSKIN*)pIAttachment;
-		if (pCAttachmentSkin->m_AttFlags & uHideFlags)
-			continue;
-		if (bDrawMergedAttachments && (pIAttachment->GetFlags() & FLAGS_ATTACH_MERGED_FOR_SHADOWS) && passInfo.IsShadowPass())
-			continue;
-		if (pCAttachmentSkin->m_pIAttachmentObject == 0)
-			continue;
-		uint32 nDrawModel = m_pSkelInstance->m_rpFlags & CS_FLAG_DRAW_MODEL;
-		if (nDrawModel == 0)
-			continue;
-		const f32 fRadiusSqr = m_pSkelInstance->m_SkeletonPose.GetAABB().GetRadiusSqr();
-		if (fRadiusSqr == 0.0f)
-			continue;     //if radius is zero, then the object is most probably not visible and we can continue
-		if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && fZoomDistanceSq > fRadiusSqr)
-			continue;  //too small to render. cancel the update
-		pCAttachmentSkin->DrawAttachment(rParams, passInfo, rWorldMat34, fZoomFactor);
-
-#if !defined(_RELEASE)
-		// pMaterial is set to NULL above, but restored in DrawAttachment with correct material
-		if (p_e_debug_draw->GetIVal() == 20)
+		LOADING_TIME_PROFILE_SECTION_NAMED("SkinAttachments");
+		for (uint32 i = m_sortedRanges[eRange_SkinMesh].begin; i < m_sortedRanges[eRange_SkinMesh].end; i++)
 		{
-			Vec3 drawLoc = rWorldMat34.GetTranslation();
-			drawLoc.z += drawOffset;
-			drawOffset += DebugDrawAttachment(pCAttachmentSkin, pCAttachmentSkin->GetISkin(), drawLoc, rParams.pMaterial, debugDrawScale);
-		}
-#endif
-	}
-
-	if (bDrawMergedAttachments && passInfo.IsShadowPass())
-	{
-		if (m_attachmentMergingRequired)
-			MergeCharacterAttachments();
-
-		for (uint32 i = 0; i < m_mergedAttachments.size(); i++)
-		{
-			CAttachmentMerged* pCAttachmentMerged = static_cast<CAttachmentMerged*>(m_mergedAttachments[i].get());
+			IAttachment* pIAttachment = m_arrAttachments[i];
+			CAttachmentSKIN* pCAttachmentSkin = (CAttachmentSKIN*)pIAttachment;
+			if (pCAttachmentSkin->m_AttFlags & uHideFlags)
+				continue;
+			if (bDrawMergedAttachments && (pIAttachment->GetFlags() & FLAGS_ATTACH_MERGED_FOR_SHADOWS) && passInfo.IsShadowPass())
+				continue;
+			if (pCAttachmentSkin->m_pIAttachmentObject == 0)
+				continue;
+			uint32 nDrawModel = m_pSkelInstance->m_rpFlags & CS_FLAG_DRAW_MODEL;
+			if (nDrawModel == 0)
+				continue;
 			const f32 fRadiusSqr = m_pSkelInstance->m_SkeletonPose.GetAABB().GetRadiusSqr();
 			if (fRadiusSqr == 0.0f)
-				continue;     //if radius is zero, then the object is most probably not visible and we can continue
+				continue;  //if radius is zero, then the object is most probably not visible and we can continue
 			if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && fZoomDistanceSq > fRadiusSqr)
 				continue;  //too small to render. cancel the update
-			pCAttachmentMerged->DrawAttachment(rParams, passInfo, rWorldMat34, fZoomFactor);
-		}
-	}
-
-	for (uint32 i = m_sortedRanges[eRange_VertexClothOrPendulumRow].begin; i < m_sortedRanges[eRange_VertexClothOrPendulumRow].end; i++)
-	{
-		IAttachment* pIAttachment = m_arrAttachments[i];
-		if (pIAttachment->GetType() != CA_VCLOTH)
-			continue;
-		CAttachmentVCLOTH* pCAttachmentVCloth = (CAttachmentVCLOTH*)pIAttachment;
-		if (pCAttachmentVCloth->m_AttFlags & uHideFlags)
-			continue;
-		if (pCAttachmentVCloth->m_pIAttachmentObject == 0)
-			continue;
-		uint32 nDrawModel = m_pSkelInstance->m_rpFlags & CS_FLAG_DRAW_MODEL;
-		if (nDrawModel == 0)
-			continue;
-		const f32 fRadiusSqr = m_pSkelInstance->m_SkeletonPose.GetAABB().GetRadiusSqr();
-		if (fRadiusSqr == 0.0f)
-			continue;     //if radius is zero, then the object is most probably not visible and we can continue
-		if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && fZoomDistanceSq > fRadiusSqr)
-			continue;  //too small to render. cancel the update
-
-		pCAttachmentVCloth->InitializeCloth();
-		pCAttachmentVCloth->DrawAttachment(rParams, passInfo, rWorldMat34, fZoomFactor);
+			pCAttachmentSkin->DrawAttachment(rParams, passInfo, rWorldMat34, fZoomFactor);
 
 #if !defined(_RELEASE)
-		if (p_e_debug_draw->GetIVal() == 20)
-		{
-			Vec3 drawLoc = rWorldMat34.GetTranslation();
-			drawLoc.z += drawOffset;
-			drawOffset += DebugDrawAttachment(pCAttachmentVCloth, pCAttachmentVCloth->GetISkin(), drawLoc, rParams.pMaterial, debugDrawScale);
-		}
+			// pMaterial is set to NULL above, but restored in DrawAttachment with correct material
+			if (p_e_debug_draw->GetIVal() == 20)
+			{
+				Vec3 drawLoc = rWorldMat34.GetTranslation();
+				drawLoc.z += drawOffset;
+				drawOffset += DebugDrawAttachment(pCAttachmentSkin, pCAttachmentSkin->GetISkin(), drawLoc, rParams.pMaterial, debugDrawScale);
+			}
 #endif
+		}
 	}
+	{
+		LOADING_TIME_PROFILE_SECTION_NAMED("VertexClothAttachments");
+		for (uint32 i = m_sortedRanges[eRange_VertexClothOrPendulumRow].begin; i < m_sortedRanges[eRange_VertexClothOrPendulumRow].end; i++)
+		{
+			IAttachment* pIAttachment = m_arrAttachments[i];
+			if (pIAttachment->GetType() != CA_VCLOTH)
+				continue;
+			CAttachmentVCLOTH* pCAttachmentVCloth = (CAttachmentVCLOTH*)pIAttachment;
+			if (pCAttachmentVCloth->m_AttFlags & uHideFlags)
+				continue;
+			if (pCAttachmentVCloth->m_pIAttachmentObject == 0)
+				continue;
+			uint32 nDrawModel = m_pSkelInstance->m_rpFlags & CS_FLAG_DRAW_MODEL;
+			if (nDrawModel == 0)
+				continue;
+			const f32 fRadiusSqr = m_pSkelInstance->m_SkeletonPose.GetAABB().GetRadiusSqr();
+			if (fRadiusSqr == 0.0f)
+				continue;   //if radius is zero, then the object is most probably not visible and we can continue
+			if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && fZoomDistanceSq > fRadiusSqr)
+				continue;   //too small to render. cancel the update
 
+			pCAttachmentVCloth->InitializeCloth();
+			pCAttachmentVCloth->DrawAttachment(rParams, passInfo, rWorldMat34, fZoomFactor);
+
+#if !defined(_RELEASE)
+			if (p_e_debug_draw->GetIVal() == 20)
+			{
+				Vec3 drawLoc = rWorldMat34.GetTranslation();
+				drawLoc.z += drawOffset;
+				drawOffset += DebugDrawAttachment(pCAttachmentVCloth, pCAttachmentVCloth->GetISkin(), drawLoc, rParams.pMaterial, debugDrawScale);
+			}
+#endif
+		}
+	}
 #if !defined(_RELEASE)
 	if (Console::GetInst().ca_DrawEmptyAttachments)
 	{
@@ -1802,7 +1907,7 @@ void CAttachmentManager::DrawAttachments(const SRendParams& rRendParams, const M
 			if (pCAttachmentBone->m_AttFlags & uHideFlags)
 				continue;
 			if (pCAttachmentBone->m_nJointID < 0)
-				return; //no success! maybe next time
+				return;                                               //no success! maybe next time
 			VisualizeEmptySocket(rWorldMat34, QuatT(pCAttachmentBone->m_AttModelRelative.q, pCAttachmentBone->m_AttModelRelative.t), RGBA8(0xff, 0x00, 0x1f, 0xff));
 		}
 		for (uint32 i = m_sortedRanges[eRange_FaceEmpty].begin; i < m_sortedRanges[eRange_FaceEmpty].end; i++)
@@ -1812,7 +1917,7 @@ void CAttachmentManager::DrawAttachments(const SRendParams& rRendParams, const M
 			if (pCAttachmentFace->m_AttFlags & uHideFlags)
 				continue;
 			if ((pCAttachmentFace->m_AttFlags & FLAGS_ATTACH_PROJECTED) == 0)
-				return; //no success! maybe next time
+				return;                                               //no success! maybe next time
 			VisualizeEmptySocket(rWorldMat34, pCAttachmentFace->m_AttModelRelative, RGBA8(0x1f, 0x00, 0xff, 0xff));
 		}
 	}
@@ -1827,13 +1932,13 @@ void CAttachmentManager::DrawAttachments(const SRendParams& rRendParams, const M
 			if (pCAttachmentBone->m_AttFlags & uHideFlags)
 				continue;
 			if (pCAttachmentBone->m_nJointID < 0)
-				continue; //no success! maybe next time
+				continue;                                             //no success! maybe next time
 			if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && (pCAttachmentBone->m_AttFlags & FLAGS_ATTACH_VISIBLE) == 0)
-				continue; //Distance culling. Object is too small for rendering
+				continue;                                             //Distance culling. Object is too small for rendering
 			Matrix34 FinalMat34 = rWorldMat34 * Matrix34(pCAttachmentBone->m_AttModelRelative);
 			Vec3 obbPos = FinalMat34.GetTranslation();
 			if (rParams.dwFObjFlags & FOB_NEAREST)
-				obbPos += gEnv->pRenderer->GetCamera().GetPosition(); // Convert to world space
+				obbPos += gEnv->pRenderer->GetCamera().GetPosition();   // Convert to world space
 			AABB caabb = pCAttachmentBone->m_pIAttachmentObject->GetAABB();
 			OBB obb2 = OBB::CreateOBBfromAABB(Matrix33(FinalMat34), caabb);
 			g_pAuxGeom->DrawOBB(obb2, obbPos, 0, RGBA8(0xff, 0x00, 0x1f, 0xff), eBBD_Extremes_Color_Encoded);
@@ -1845,13 +1950,13 @@ void CAttachmentManager::DrawAttachments(const SRendParams& rRendParams, const M
 			if (pCAttachmentFace->m_AttFlags & uHideFlags)
 				continue;
 			if ((pCAttachmentFace->m_AttFlags & FLAGS_ATTACH_PROJECTED) == 0)
-				continue; //no success! maybe next time
+				continue;                                             //no success! maybe next time
 			if ((pCAttachmentFace->m_AttFlags & FLAGS_ATTACH_VISIBLE) == 0)
-				continue; //Distance culling. Object is too small for rendering
+				continue;                                             //Distance culling. Object is too small for rendering
 			Matrix34 FinalMat34 = rWorldMat34 * Matrix34(pCAttachmentFace->m_AttModelRelative);
 			Vec3 obbPos = FinalMat34.GetTranslation();
 			if (rParams.dwFObjFlags & FOB_NEAREST)
-				obbPos += gEnv->pRenderer->GetCamera().GetPosition(); // Convert to world space
+				obbPos += gEnv->pRenderer->GetCamera().GetPosition();   // Convert to world space
 			AABB caabb = pCAttachmentFace->m_pIAttachmentObject->GetAABB();
 			OBB obb2 = OBB::CreateOBBfromAABB(Matrix33(FinalMat34), caabb);
 			g_pAuxGeom->DrawOBB(obb2, obbPos, 0, RGBA8(0x1f, 0x00, 0xff, 0xff), eBBD_Extremes_Color_Encoded);
@@ -1859,6 +1964,30 @@ void CAttachmentManager::DrawAttachments(const SRendParams& rRendParams, const M
 	}
 #endif
 
+}
+
+void CAttachmentManager::DrawMergedAttachments(SRendParams& rParams, const Matrix34& rWorldMat34, const SRenderingPassInfo& passInfo, const f32 fZoomFactor, const f32 fZoomDistanceSq)
+{
+	const bool bDrawMergedAttachments = Console::GetInst().ca_DrawAttachmentsMergedForShadows != 0;
+	if (bDrawMergedAttachments)
+	{
+		if (m_attachmentMergingRequired)
+			MergeCharacterAttachments();
+
+		if (passInfo.IsShadowPass())
+		{
+			for (uint32 i = 0; i < m_mergedAttachments.size(); i++)
+			{
+				CAttachmentMerged* pCAttachmentMerged = static_cast<CAttachmentMerged*>(m_mergedAttachments[i].get());
+				const f32 fRadiusSqr = m_pSkelInstance->m_SkeletonPose.GetAABB().GetRadiusSqr();
+				if (fRadiusSqr == 0.0f)
+					continue; //if radius is zero, then the object is most probably not visible and we can continue
+				if (!(rParams.nCustomFlags & COB_POST_3D_RENDER) && fZoomDistanceSq > fRadiusSqr)
+					continue; //too small to render. cancel the update
+				pCAttachmentMerged->DrawAttachment(rParams, passInfo, rWorldMat34, fZoomFactor);
+			}
+		}
+	}
 }
 
 //------------------------------------------------------------------------------------
@@ -2018,6 +2147,7 @@ void CAttachmentManager::GetMemoryUsage(ICrySizer* pSizer) const
 
 void CAttachmentManager::SortByType()
 {
+	LOADING_TIME_PROFILE_SECTION;
 	m_TypeSortingRequired = 0;
 	CDefaultSkeleton& rDefaultSkeleton = *m_pSkelInstance->m_pDefaultSkeleton;
 	memset(m_sortedRanges, 0, sizeof(m_sortedRanges));
@@ -2177,7 +2307,9 @@ void CAttachmentManager::SortByType()
 	if (n != numAttachments)
 		CryFatalError("CryAnimation: sorting error: %s", m_pSkelInstance->GetFilePath());
 	for (uint32 i = 0; i < numAttachments; i++)
+	{
 		parr[i] = parr2[i];
+	}
 	if (m_sortedRanges[eRange_BoneRedirect].end)
 	{
 		STACK_ARRAY(uint8, parrflags, m_sortedRanges[eRange_BoneRedirect].end);
@@ -2213,24 +2345,32 @@ void CAttachmentManager::SortByType()
 				continue;
 			bool arrChildren[MAX_JOINT_AMOUNT];
 			for (uint32 i = 0; i < MAX_JOINT_AMOUNT; i++)
+			{
 				arrChildren[i] = 0;
+			}
 			pb->m_Simulation.m_arrChildren.resize(0);
 			pb->m_Simulation.m_arrChildren.reserve(16);
 			uint32 numJoints = rDefaultSkeleton.GetJointCount();
 			for (uint32 i = parentid + 1; i < numJoints; i++)
+			{
 				if (rDefaultSkeleton.GetJointParentIDByID(i) == parentid)
 					arrChildren[i] = 1;
+			}
 			for (uint32 pid = 0; pid < MAX_JOINT_AMOUNT; pid++)
 			{
 				if (arrChildren[pid] == 0)
 					continue;
 				for (uint32 i = pid + 1; i < numJoints; i++)
+				{
 					if (rDefaultSkeleton.GetJointParentIDByID(i) == pid)
 						arrChildren[i] = 1;
+				}
 			}
 			for (uint32 i = 0; i < MAX_JOINT_AMOUNT; i++)
+			{
 				if (arrChildren[i])
 					pb->m_Simulation.m_arrChildren.push_back(i);
+			}
 		}
 	}
 
@@ -2246,7 +2386,7 @@ void CAttachmentManager::SortByType()
 		const char* psrc = pb->m_strRowJointName.c_str();
 		const char* pstr = CryStringUtils::stristr(psrc, "_x00_");
 		if (pstr == 0)
-			continue; // invalid name
+			continue;                                                                                                // invalid name
 		char pJointName[256];
 		cry_strcpy(pJointName, psrc);
 		JointIdType jindices[MAX_JOINT_AMOUNT];
@@ -2266,7 +2406,7 @@ void CAttachmentManager::SortByType()
 			pb->m_rowparams.m_arrParticles[r].m_childID = JointIdType(-1);
 			JointIdType parentid = jindices[r];
 			if (parentid == JointIdType(-1))
-				continue; // invalid
+				continue;                                                                                              // invalid
 			for (uint32 i = parentid + 1; i < numJoints; i++)
 			{
 				if (rDefaultSkeleton.GetJointParentIDByID(i) == parentid)
@@ -2278,10 +2418,10 @@ void CAttachmentManager::SortByType()
 		}
 		for (uint32 i = 0; i < numParticles; i++)
 		{
-			pb->m_rowparams.m_arrParticles[i].m_vDistance.y = 0.07f; // use 7cm by default
+			pb->m_rowparams.m_arrParticles[i].m_vDistance.y = 0.07f;                                                   // use 7cm by default
 			if (pb->m_rowparams.m_arrParticles[i].m_childID != JointIdType(-1))
 				pb->m_rowparams.m_arrParticles[i].m_vDistance.y =
-				  rDefaultSkeleton.GetDefaultRelJointByID(pb->m_rowparams.m_arrParticles[i].m_childID).t.GetLength();   // set the vertical distance
+				  rDefaultSkeleton.GetDefaultRelJointByID(pb->m_rowparams.m_arrParticles[i].m_childID).t.GetLength();    // set the vertical distance
 		}
 		for (uint32 i = 0; i < numParticles; i++)
 		{
@@ -2295,7 +2435,7 @@ void CAttachmentManager::SortByType()
 			Vec3 j1 = rDefaultSkeleton.GetDefaultAbsJointByID(id1).q.GetColumn0() *
 			          pb->m_rowparams.m_arrParticles[i1].m_vDistance.y +
 			          rDefaultSkeleton.GetDefaultAbsJointByID(id1).t;
-			pb->m_rowparams.m_arrParticles[i0].m_vDistance.x = (j0 - j1).GetLength(); // set the horizontal distance
+			pb->m_rowparams.m_arrParticles[i0].m_vDistance.x = (j0 - j1).GetLength();                                    // set the horizontal distance
 			pb->m_rowparams.m_arrParticles[i].m_jointID = id0;
 		}
 	}
@@ -2505,7 +2645,7 @@ float CAttachmentManager::DebugDrawAttachment(IAttachment* pAttachment, ISkin* p
 		return 0.0f;
 
 	const int nTexMemUsage = pSkin->GetIRenderMesh(0)->GetTextureMemoryUsage(pMaterial);
-	ICVar* p_texBudget = gEnv->pConsole->GetCVar("ca_AttachmentTextureMemoryBudget"); // the closer to this limit, the more red we draw it for clarity
+	ICVar* p_texBudget = gEnv->pConsole->GetCVar("ca_AttachmentTextureMemoryBudget");         // the closer to this limit, the more red we draw it for clarity
 	const float fTextMemBudget = p_texBudget ? p_texBudget->GetIVal() * 1024 * 1024 : 1.0f;
 	const float white = max(1.0f - (nTexMemUsage / fTextMemBudget), 0.0f);
 
@@ -2515,7 +2655,7 @@ float CAttachmentManager::DebugDrawAttachment(IAttachment* pAttachment, ISkin* p
 	static float scalar = 60.0f;
 	float drawOffset = (drawScale * (fDist / scalar));
 
-	gEnv->pRenderer->DrawLabelEx(drawLoc, drawScale, color, true, true, "%s (%d kb)", pAttachment->GetName(), nTexMemUsage / 1024);
+	IRenderAuxText::DrawLabelExF(drawLoc, drawScale, color, true, true, "%s (%d kb)", pAttachment->GetName(), nTexMemUsage / 1024);
 
 	return drawOffset;
 }

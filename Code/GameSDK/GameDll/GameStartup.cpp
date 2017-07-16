@@ -26,10 +26,6 @@
 #if ENABLE_AUTO_TESTER 
 static CAutoTester s_autoTesterSingleton;
 #endif
- 
-#if defined(ENABLE_STATS_AGENT)
-#include "StatsAgent.h"
-#endif
 
 #ifdef __LINK_GCOV__
 extern "C" void __gcov_flush(void);
@@ -429,37 +425,13 @@ CGameStartup* CGameStartup::Create()
 }
 
 CGameStartup::CGameStartup()
-	:	m_pMod(NULL),
-		m_modRef(&m_pMod),
+	:	m_pGame(nullptr),
+		m_GameRef(&m_pGame),
 		m_quit(false),
-		m_reqModUnload(false),
-		m_modDll(0), 
-		m_frameworkDll(NULL),
-		m_pFramework(NULL),
+		m_pFramework(nullptr),
 		m_fullScreenCVarSetup(false),
 		m_nVOIPWasActive(-1)
-{
-	CGameStartupStatic::g_pGameStartup = this;
-}
-
-CGameStartup::~CGameStartup()
-{
-	if (m_pMod)
-	{
-		m_pMod->Shutdown();
-		m_pMod = 0;
-	}
-
-	if (m_modDll)
-	{
-		CryFreeLibrary(m_modDll);
-		m_modDll = 0;
-	}
-
-	CGameStartupStatic::g_pGameStartup = NULL;
-
-	ShutdownFramework();
-}
+{}
 
 #define EngineStartProfiler(x)
 #define InitTerminationCheck(x)
@@ -475,312 +447,107 @@ IGameRef CGameStartup::Init(SSystemInitParams &startupParams)
 {
 	MEMSTAT_CONTEXT(EMemStatContextTypes::MSC_Other, 0, "Game startup initialisation");
 
+	IGameRef pOut = Reset(startupParams.pSystem);
+	CRY_ASSERT(gEnv && GetISystem());
+
+	m_pFramework = gEnv->pGameFramework;
+
 #if defined(CVARS_WHITELIST)
 	startupParams.pCVarsWhitelist = &g_CVarsWhiteList;
 #endif // defined(CVARS_WHITELIST)
 	startupParams.pGameStartup = this;
 
-	if (!InitFramework(startupParams))
-	{
-		return 0;
-	}
-
 	InlineInitializationProcessing("CGameStartup::Init");
 
-  LOADING_TIME_PROFILE_SECTION(m_pFramework->GetISystem());
+  LOADING_TIME_PROFILE_SECTION(GetISystem());
 
 	// Load thread config
-	gEnv->pThreadManager->GetThreadConfigManager()->LoadConfig("config/game.thread_config");
+	gEnv->pThreadManager->GetThreadConfigManager()->LoadConfig("%engine%/config/game.thread_config");
 
-	ISystem* pSystem = m_pFramework->GetISystem();
-	startupParams.pSystem = pSystem;
-
-	const ICmdLineArg* pSvBind = gEnv->pSystem->GetICmdLine()->FindArg(eCLAT_Pre, "sv_bind"); 
-	IConsole* pConsole = pSystem->GetIConsole();
+	const ICmdLineArg* pSvBind = GetISystem()->GetICmdLine()->FindArg(eCLAT_Pre, "sv_bind");
+	IConsole* pConsole = GetISystem()->GetIConsole();
 	if ((pSvBind != NULL) && (pConsole != NULL))
 	{
 		string command = pSvBind->GetName() + string(" ") + pSvBind->GetValue();
 		pConsole->ExecuteString(command.c_str(), true, false);
 	}
 
-#if defined(ENABLE_STATS_AGENT)
-	const ICmdLineArg *pPipeArg = pSystem->GetICmdLine()->FindArg(eCLAT_Pre,"lt_pipename");
-	CStatsAgent::CreatePipe( pPipeArg );
-#endif
-
-	REGISTER_COMMAND("g_loadMod", CGameStartupStatic::RequestLoadMod,VF_NULL,"");
-	REGISTER_COMMAND("g_unloadMod", CGameStartupStatic::RequestUnloadMod, VF_NULL, "");
-
 	// load the appropriate game/mod
 #if !defined(_RELEASE)
-	const ICmdLineArg *pModArg = pSystem->GetICmdLine()->FindArg(eCLAT_Pre,"MOD");
+	const ICmdLineArg *pModArg = GetISystem()->GetICmdLine()->FindArg(eCLAT_Pre,"MOD");
 #else
 	const ICmdLineArg *pModArg = NULL;
 #endif // !defined(_RELEASE)
 
-	InlineInitializationProcessing("CGameStartup::Init LoadLocalizationData");
-
-	IGameRef pOut;
-	if (pModArg && (*pModArg->GetValue() != 0) && (pSystem->IsMODValid(pModArg->GetValue())))
-	{
-		const char* pModName = pModArg->GetValue();
-		assert(pModName);
-
-		pOut = Reset(pModName);
-	}
-	else
-	{
-		pOut = Reset(GAME_NAME);
-	}
-
-	if (!m_pFramework->CompleteInit())
-	{
-		pOut->Shutdown();
-		return 0;
-	}
-
-	InlineInitializationProcessing("CGameStartup::Init FrameworkCompleteInit");
-
-	// should be after init game (should be executed even if there is no game)
-	if(startupParams.bExecuteCommandLine)
-		pSystem->ExecuteCommandLine();
-
-	pSystem->GetISystemEventDispatcher()->RegisterListener(this);
+	GetISystem()->GetISystemEventDispatcher()->RegisterListener(this, "CGameStartup");
 
 	// Creates and starts the realtime update system listener.
-	if (pSystem->IsDevMode())
+	if (GetISystem()->IsDevMode())
 	{
 		CGameRealtimeRemoteUpdateListener::GetGameRealtimeRemoteUpdateListener().Enable(true);
 	}
 
-
 	GCOV_FLUSH;
 
-	if (ISystem *pSystem = gEnv ? GetISystem() : NULL)
-	{
-		pSystem->RegisterErrorObserver(&m_errorObsever);
-		pSystem->RegisterWindowMessageHandler(this);
-	}
-	else
-	{
-		CryLogAlways("failed to find ISystem to register error observer");
-		assert(0);
-	}
+	GetISystem()->RegisterErrorObserver(&m_errorObsever);
+	GetISystem()->RegisterWindowMessageHandler(this);
 
-	
 	InlineInitializationProcessing("CGameStartup::Init End");
 
-#if defined(CRY_UNIT_TESTING)
-	// Register All unit tests of this module.
-#if defined(_LIB)
-	if(gEnv->pSystem)
-	{
-		CryUnitTest::Test *pTest = CryUnitTest::Test::m_pFirst; 
-		for (; pTest != 0; pTest = pTest->m_pNext)
-		{
-			CryUnitTest::IUnitTestManager *pTestManager = gEnv->pSystem->GetITestSystem()->GetIUnitTestManager();
-			if (pTestManager)
-			{
-				pTest->m_unitTestInfo.module = "StaticBinary";
-				pTestManager->CreateTest( pTest->m_unitTestInfo );
-			}
-		}
-	}
-#endif
+	CryRegisterFlowNodes();
 
-	// run unit tests
-	CryUnitTest::IUnitTestManager *pTestManager =  (gEnv && gEnv->pSystem) ? gEnv->pSystem->GetITestSystem()->GetIUnitTestManager() : NULL;
-	if (pTestManager)
-	{
-		const ICmdLineArg* pSkipUnitTest = gEnv->pSystem->GetICmdLine()->FindArg(eCLAT_Pre, "skip_unit_tests"); 
-		if(pSkipUnitTest == NULL)
-		{
-			const ICmdLineArg* pUseUnitTestExcelReporter = gEnv->pSystem->GetICmdLine()->FindArg(eCLAT_Pre, "use_unit_test_excel_reporter"); 
-			if(pUseUnitTestExcelReporter)
-			{
-				gEnv->pSystem->GetITestSystem()->GetIUnitTestManager()->RunAllTests(CryUnitTest::ExcelReporter);
-			}
-			else // default is the minimal reporter
-			{
-				gEnv->pSystem->GetITestSystem()->GetIUnitTestManager()->RunAllTests(CryUnitTest::MinimalReporter);
-			}
-		}
-	}
-#endif // CRY_UNIT_TESTING
-	
 	assert(gEnv);
 	PREFAST_ASSUME(gEnv);
 	
-	GetISystem()->GetISystemEventDispatcher()->OnSystemEvent(ESYSTEM_EVENT_RANDOM_SEED, (UINT_PTR)gEnv->pTimer->GetAsyncTime().GetMicroSecondsAsInt64(), 0);
 	return pOut;
 }
 
-IGameRef CGameStartup::Reset(const char *pModName)
+IGameRef CGameStartup::Reset(ISystem* pSystem)
 {
-	LOADING_TIME_PROFILE_SECTION;
-	if (m_pMod)
+	if (m_pGame)
 	{
-		m_pMod->Shutdown();
-
-		if (m_modDll)
-		{
-			CryFreeLibrary(m_modDll);
-			m_modDll = 0;
-		}
+		m_pGame->Shutdown();
 	}
 
-	m_modDll = 0;
-	string modPath;
-	
-	if (stricmp(pModName, GAME_NAME) != 0)
+	ModuleInitISystem(pSystem, "CryGame");
+	const int wordSizeCGame = (sizeof(CGame) + sizeof(int) - 1) / sizeof(int); // Round up to next word
+	static int pGameBuffer[wordSizeCGame];
+	m_pGame = new ((void*)pGameBuffer) CGame();
+
+	if (m_pGame->Init())
 	{
-		modPath.append("Mods\\");
-		modPath.append(pModName);
-		modPath.append("\\");
-
-		string filename;
-		filename.append("..\\");
-		filename.append(modPath);
-		
-#if CRY_PLATFORM_WINDOWS && CRY_PLATFORM_64BIT
-		filename.append("Bin64\\");
-#else
-		filename.append("Bin32\\");
-#endif
-		
-		filename.append(pModName);
-		filename.append(".dll");
-
-#if !defined(_LIB) && !CRY_PLATFORM_LINUX && !CRY_PLATFORM_ANDROID
-		m_modDll = CryLoadLibrary(filename.c_str());
-#endif
+		return m_GameRef;
 	}
 
-	if (!m_modDll)
-	{
-		ModuleInitISystem(m_pFramework->GetISystem(),"CryGame");
-		const int wordSizeCGame = (sizeof(CGame) + sizeof(int) - 1) / sizeof(int); // Round up to next word
-		static int pGameBuffer[wordSizeCGame]; 
-		m_pMod = new ((void*)pGameBuffer) CGame();
-	}
-	else
-	{
-		IGame::TEntryFunction CreateGame = (IGame::TEntryFunction)CryGetProcAddress(m_modDll, "CreateGame");
-		if (!CreateGame)
-			return 0;
-
-		m_pMod = CreateGame(m_pFramework);
-	}
-
-	if (m_pMod && m_pMod->Init(m_pFramework))
-	{
-		return m_modRef;
-	}
-
-	return 0;
+	return nullptr;
 }
 
 void CGameStartup::Shutdown()
 {
+	CryUnregisterFlowNodes();
+
 #if CRY_PLATFORM_WINDOWS
 	AllowAccessibilityShortcutKeys(true);
 #endif
 
-#if defined(ENABLE_STATS_AGENT)
-	CStatsAgent::ClosePipe();
+	GetISystem()->UnregisterErrorObserver(&m_errorObsever);
+	GetISystem()->UnregisterWindowMessageHandler(this);
+
+	if (m_pGame)
+	{
+		m_pGame->Shutdown();
+		m_pGame = nullptr;
+	}
+
+#ifndef _LIB
+	ICryFactoryRegistryImpl* pCryFactoryImpl = static_cast<ICryFactoryRegistryImpl*>(GetISystem()->GetCryFactoryRegistry());
+	pCryFactoryImpl->UnregisterFactories(g_pHeadToRegFactories);
 #endif
 
-	if (ISystem *pSystem = GetISystem())
-	{
-		pSystem->UnregisterErrorObserver(&m_errorObsever);
-		pSystem->UnregisterWindowMessageHandler(this);
-	}
+	GetISystem()->GetISystemEventDispatcher()->RemoveListener(this);
 
 	/*delete this;*/
 	this->~CGameStartup();
-}
-
-int CGameStartup::Update(bool haveFocus, unsigned int updateFlags)
-{
-	// The frame profile system already creates an "overhead" profile label
-	// in StartFrame(). Hence we have to set the FRAMESTART before.
-	CRY_PROFILE_FRAMESTART("Main");
-
-#if defined(JOBMANAGER_SUPPORT_PROFILING)
-	gEnv->GetJobManager()->SetFrameStartTime(gEnv->pTimer->GetAsyncTime());
-#endif
-
-	int returnCode = 0;
-
-	if (gEnv && gEnv->pSystem && gEnv->pConsole)
-	{
-#if CRY_PLATFORM_WINDOWS
-		if(gEnv && gEnv->pRenderer && gEnv->pRenderer->GetHWND())
-		{
-			bool focus = (::GetFocus() == gEnv->pRenderer->GetHWND());
-			static bool focused = focus;
-			if (focus != focused)
-			{
-				if(gEnv->pSystem->GetISystemEventDispatcher())
-				{
-					gEnv->pSystem->GetISystemEventDispatcher()->OnSystemEvent(ESYSTEM_EVENT_CHANGE_FOCUS, focus, 0);
-				}
-				focused = focus;
-			}
-		}
-#endif
-	}
-
-	// update the game
-	if (m_pMod)
-	{
-		returnCode = m_pMod->Update(haveFocus, updateFlags);
-	}
-
-#if defined(ENABLE_STATS_AGENT)
-	CStatsAgent::Update();
-#endif
-
-#if defined(JOBMANAGER_SUPPORT_FRAMEPROFILER)
-
-	// Update Backend profilers
-	uint32 timeSample = JobManager::IWorkerBackEndProfiler::GetTimeSample();
-
-	assert(gEnv);
-	PREFAST_ASSUME(gEnv);
-	
-	const JobManager::IBackend * const __restrict pBackends[] = 
-	{
-		gEnv->GetJobManager()->GetBackEnd(JobManager::eBET_Thread),
-		gEnv->GetJobManager()->GetBackEnd(JobManager::eBET_Blocking),
-	};
-
-	for(int i=0; i<CRY_ARRAY_COUNT(pBackends); ++i)
-	{
-		if(pBackends[i])
-		{
-			JobManager::IWorkerBackEndProfiler* pWorkerProfiler = pBackends[i]->GetBackEndWorkerProfiler();
-			pWorkerProfiler->Update(timeSample);
-		}
-	}
-#endif
-
-	// ghetto fullscreen detection, because renderer does not provide any kind of listener
-	if (!m_fullScreenCVarSetup && gEnv && gEnv->pSystem && gEnv->pConsole)
-	{
-		ICVar *pVar = gEnv->pConsole->GetCVar("r_Fullscreen");
-		if (pVar)
-		{
-			pVar->SetOnChangeCallback(FullScreenCVarChanged);
-			m_fullScreenCVarSetup = true;
-		}
-	}
-#if ENABLE_AUTO_TESTER 
-	s_autoTesterSingleton.Update();
-#endif
-	GCOV_FLUSH_UPDATE;
-
-	return returnCode;
 }
 
 void CGameStartup::FullScreenCVarChanged( ICVar *pVar )
@@ -789,35 +556,6 @@ void CGameStartup::FullScreenCVarChanged( ICVar *pVar )
 	{
 		gEnv->pSystem->GetISystemEventDispatcher()->OnSystemEvent(ESYSTEM_EVENT_TOGGLE_FULLSCREEN, pVar->GetIVal(), 0);
 	}
-}
-
-bool CGameStartup::GetRestartLevel(char** levelName)
-{
-	if(GetISystem()->IsRelaunch())
-		*levelName = (char*)(gEnv->pGame->GetIGameFramework()->GetLevelName());
-	return GetISystem()->IsRelaunch();
-}
-
-bool CGameStartup::GetRestartMod(char* pModNameBuffer, int modNameBufferSizeInBytes)
-{
-	if (m_reqModUnload)
-	{
-		if (modNameBufferSizeInBytes > 0)
-			pModNameBuffer[0] = 0;
-		return true;
-	}
-
-	if (m_reqModName.empty())
-		return false;
-
-	cry_strcpy(pModNameBuffer, modNameBufferSizeInBytes, m_reqModName.c_str());
-	return true;
-}
-
-const char* CGameStartup::GetPatch() const
-{
-	// michiel - GS
-	return NULL;	
 }
 
 #if defined(RELEASE_SERVER_SECURITY)
@@ -934,88 +672,7 @@ bool PerformDedicatedInstallationSanityCheck()
 }
 #endif
 
-int CGameStartup::Run( const char * autoStartLevelName )
-{
-#if	defined(RELEASE_SERVER_SECURITY)
-	CryLogAlways("Performing Validation Checks");
-	if (!PerformDedicatedInstallationSanityCheck())
-	{
-		CryFatalError("Installation appears to be corrupt. Please check the log file for a list of problems.");
-	}
-#endif
-	gEnv->pConsole->ExecuteString( "exec autoexec.cfg" );
-	if (autoStartLevelName)
-	{
-		//load savegame
-		if(CryStringUtils::stristr(autoStartLevelName, CRY_SAVEGAME_FILE_EXT) != 0 )
-		{
-			CryFixedStringT<256> fileName (autoStartLevelName);
-			// NOTE! two step trimming is intended!
-			fileName.Trim(" ");  // first:  remove enclosing spaces (outside ")
-			fileName.Trim("\""); // second: remove potential enclosing "
-			gEnv->pGame->GetIGameFramework()->LoadGame(fileName.c_str());
-		}
-		else	//start specified level
-		{
-			CryFixedStringT<256> mapCmd ("map ");
-			mapCmd+=autoStartLevelName;
-			gEnv->pConsole->ExecuteString(mapCmd.c_str());
-		}
-	}
-
-#if CRY_PLATFORM_WINDOWS
-	if (!(gEnv && gEnv->pSystem) || (!gEnv->IsEditor() && !gEnv->IsDedicated()))
-	{
-		gEnv->pInput->ShowCursor(true); // Make the cursor visible again (it was hidden in InitFramework() )
-		if (gEnv && gEnv->pSystem && gEnv->pSystem->GetIHardwareMouse())
-			gEnv->pSystem->GetIHardwareMouse()->DecrementCounter();
-	}
-
-	AllowAccessibilityShortcutKeys(false);
-
-	for(;;)
-	{
-		ISystem *pSystem = gEnv ? gEnv->pSystem : 0;
-		if (!pSystem)
-		{
-			break;
-		}
-		
-		if (pSystem->PumpWindowMessage(false) == -1)
-		{
-			break;
-		}
-
-		if (!Update(true, 0))
-		{
-			// need to clean the message loop (WM_QUIT might cause problems in the case of a restart)
-			// another message loop might have WM_QUIT already so we cannot rely only on this
-			pSystem->PumpWindowMessage(true);
-			break;
-		}
-	}
-#else
-	// We should use bVisibleByDefault=false then...
-	if (gEnv && gEnv->pHardwareMouse)
-		gEnv->pHardwareMouse->DecrementCounter();
-
-#if !CRY_PLATFORM_DURANGO
-	for(;;)
-	{
-		if (!Update(true, 0))
-		{
-			break;
-		}
-	}
-#endif
-
-#endif // CRY_PLATFORM_WINDOWS
-
-	return 0;
-}
-
 // If you have a valid RSA key set it here and set USE_RSA_KEY to 1
-#ifndef IS_EAAS
 #define USE_RSA_KEY 0
 #if USE_RSA_KEY
 static unsigned char g_rsa_public_key_data[] =
@@ -1027,22 +684,6 @@ static unsigned char g_rsa_public_key_data[] =
 	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
 	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
 	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-};
-#endif
-#else
-// For EaaS, a key is required in release mode
-// However, we set it in other configurations as well, so that signed PAK files can be loaded
-// This is a default key that is used by CryTek to sign the EaaS PAK files, you need to replace it with your own
-#define USE_RSA_KEY 1
-static unsigned char g_rsa_public_key_data[] =
-{
-	0x30,0x81,0x89,0x02,0x81,0x81,0x00,0xC5,0x66,0xA7,0xE5,0x21,0x0B,0x25,0x54,0xCC,0x29,0x53,0xD9,0x2F,
-	0x87,0xE8,0x8D,0x1E,0x03,0xE7,0x03,0x29,0x08,0x89,0xDF,0xC3,0x88,0xFA,0xA1,0x20,0x69,0x1B,0xD0,0xE6,
-	0x09,0xC0,0xB1,0x81,0x13,0xFD,0x9D,0x2C,0x1F,0xC2,0x3B,0x10,0xA3,0x19,0xF4,0xA5,0xB2,0xBE,0x63,0xAD,
-	0x76,0xD7,0xEB,0x6D,0x32,0xAA,0x3D,0xC1,0xE3,0x00,0x88,0x2E,0x5A,0x11,0xE8,0xD6,0x88,0xF0,0xA3,0x35,
-	0xF4,0xB8,0x89,0xFE,0xDB,0x3E,0x0A,0x75,0x75,0x00,0x3D,0x4A,0xA3,0xB2,0xC6,0x27,0x60,0x05,0x90,0x7A,
-	0x25,0x0E,0x45,0x32,0x1E,0xD7,0xE3,0x3B,0x50,0x17,0xE1,0xC0,0xAC,0xA6,0x8F,0xA5,0x54,0x8B,0x63,0x4E,
-	0x05,0x93,0x4F,0x64,0xB4,0x35,0x52,0xE5,0x8C,0xD5,0xC0,0x7C,0x9A,0x69,0x0B,0x02,0x03,0x01,0x00,0x01
 };
 #endif
 
@@ -1061,9 +702,6 @@ void CGameStartup::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR l
 {
 	switch (event)
 	{
-	case ESYSTEM_EVENT_RANDOM_SEED:
-		cry_random_seed(gEnv->bNoRandomSeed ? 0 : (uint32)wparam);
-		break;
 	case ESYSTEM_EVENT_CHANGE_FOCUS:
 		{
 			#if CRY_PLATFORM_WINDOWS
@@ -1071,7 +709,6 @@ void CGameStartup::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR l
 			AllowAccessibilityShortcutKeys(wparam==0);
 			
 			#endif
-			GetISystem()->GetISystemEventDispatcher()->OnSystemEvent(ESYSTEM_EVENT_RANDOM_SEED, (UINT_PTR)gEnv->pTimer->GetAsyncTime().GetMicroSecondsAsInt64(), 0);
 		}
 		break;
 	case ESYSTEM_EVENT_LEVEL_LOAD_START:
@@ -1094,80 +731,8 @@ void CGameStartup::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR l
 	}
 }
 
-bool CGameStartup::InitFramework(SSystemInitParams &startupParams)
-{
-	MEMSTAT_CONTEXT(EMemStatContextTypes::MSC_Other, 0, "Init Game Framework" );
-
-#if !defined(_LIB)
-	m_frameworkDll = GetFrameworkDLL(startupParams.szBinariesDir);
-
-	if (!m_frameworkDll)
-	{
-		// failed to open the framework dll
-		CryFatalError("Failed to open the GameFramework DLL!");
-		
-		return false;
-	}
-
-	IGameFramework::TEntryFunction CreateGameFramework = (IGameFramework::TEntryFunction)CryGetProcAddress(m_frameworkDll, DLL_INITFUNC_CREATEGAME );
-
-	if (!CreateGameFramework)
-	{
-		// the dll is not a framework dll
-		CryFatalError("Specified GameFramework DLL is not valid!");
-
-		return false;
-	}
-#endif //_LIB
-
-	m_pFramework = CreateGameFramework();
-
-	if (!m_pFramework)
-	{
-		CryFatalError("Failed to create the GameFramework Interface!");
-		// failed to create the framework
-
-		return false;
-	}
-
-#if CRY_PLATFORM_WINDOWS
-	if (startupParams.pSystem == NULL || (!startupParams.bEditor && !gEnv->IsDedicated()))
-	{
-		// Hide the cursor during loading (it will be shown again in Run())
-		// gEnv is no initialized yet, so we can't use gEnv->pInput->ShowCursor
-		::ShowCursor(FALSE);
-	}
-#endif
-
-	// initialize the engine
-	if (!m_pFramework->Init(startupParams))
-	{
-		CryFatalError("Failed to initialize CryENGINE!");
-		return false;
-	}
-	ModuleInitISystem(m_pFramework->GetISystem(),"CryGame");
-
-#if CRY_PLATFORM_WINDOWS
-	if (gEnv->pRenderer)
-	{
-		SetWindowLongPtr(reinterpret_cast<HWND>(gEnv->pRenderer->GetHWND()), GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-	}
-#endif
-	return true;
-}
-
-void CGameStartup::ShutdownFramework()
-{
-	if (m_pFramework)
-	{
-		m_pFramework->Shutdown();
-		m_pFramework = 0;
-	}
-}
-
 //////////////////////////////////////////////////////////////////////////
 #if CRY_PLATFORM_WINDOWS
-
 bool CGameStartup::HandleMessage(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, LRESULT *pResult)
 {
 	switch(msg)
@@ -1254,56 +819,4 @@ void CGameStartup::HandleResizeForVOIP(WPARAM wparam)
 		}
 	}	
 }
-
-//////////////////////////////////////////////////////////////////////////
 #endif // CRY_PLATFORM_WINDOWS
-
-CGameStartup* CGameStartupStatic::g_pGameStartup = NULL;
-
-void CGameStartupStatic::RequestLoadMod(IConsoleCmdArgs* pCmdArgs)
-{
-	if (pCmdArgs->GetArgCount() == 2)
-	{
-		if (g_pGameStartup) 
-		{	
-			g_pGameStartup->m_reqModName = pCmdArgs->GetArg(1);
-			ISystem* pSystem = g_pGameStartup->m_pFramework->GetISystem();
-			pSystem->Quit();
-		}
-	}
-	else
-	{
-		CryLog("Error, correct syntax is: g_loadMod modname");
-	}
-}
-
-void CGameStartupStatic::RequestUnloadMod(IConsoleCmdArgs* pCmdArgs)
-{
-	if (pCmdArgs->GetArgCount() == 1)
-	{
-		if (g_pGameStartup) 
-		{	
-			g_pGameStartup->m_reqModUnload = true;
-			ISystem* pSystem = g_pGameStartup->m_pFramework->GetISystem();
-			pSystem->Quit();
-		}
-	}
-	else
-	{
-		CryLog("Error, correct syntax is: g_unloadMod");
-	}
-}
-
-void CGameStartupStatic::ForceCursorUpdate()
-{
-#if CRY_PLATFORM_WINDOWS
-	if(gEnv && gEnv->pRenderer && gEnv->pRenderer->GetHWND())
-	{
-		SendMessage(HWND(gEnv->pRenderer->GetHWND()),WM_SETCURSOR,0,0);
-	}
-#endif
-}
-//--------------------------------------------------------------------------
-
-
-

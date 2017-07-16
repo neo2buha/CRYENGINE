@@ -8,7 +8,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 7:9:2004   17:36 : Created by Márcio Martins
+   - 7:9:2004   17:36 : Created by MÃ¡rcio Martins
    - 15:9:2010  12:30 : Revised by Dean Claassen
 
 *************************************************************************/
@@ -67,6 +67,9 @@ public:
 	virtual bool                          AddExtraActionListener(IActionListener* pExtraActionListener, const char* actionMap = NULL);
 	virtual bool                          RemoveExtraActionListener(IActionListener* pExtraActionListener, const char* actionMap = NULL);
 	virtual const TActionListeners&       GetExtraActionListeners() const;
+
+	virtual bool                          AddFlowgraphNodeActionListener(IActionListener* pExtraActionListener, const char* actionMap = NULL);
+	virtual bool                          RemoveFlowgraphNodeActionListener(IActionListener* pExtraActionListener, const char* actionMap = NULL);
 
 	virtual void                          AddAlwaysActionListener(TBlockingActionListener pActionListener); // TODO: Remove always action listeners and integrate into 1 prioritized type
 	virtual void                          RemoveAlwaysActionListener(TBlockingActionListener pActionListener);

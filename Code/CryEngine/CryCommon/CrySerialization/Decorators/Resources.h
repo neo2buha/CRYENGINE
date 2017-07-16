@@ -2,6 +2,9 @@
 
 #pragma once
 #include "ResourceSelector.h"
+#include "ResourceFilePath.h"
+
+#include <../CryAction/ICryMannequin.h>
 
 namespace Serialization
 {
@@ -25,7 +28,9 @@ template<class T> ResourceSelector<T> GeomCachePicker(T& s)               { retu
 template<class T> ResourceSelector<T> ParticleName(T& s)                  { return ResourceSelector<T>(s, "Particle"); }
 template<class T> ResourceSelector<T> TextureFilename(T& s)               { return ResourceSelector<T>(s, "Texture"); }
 template<class T> ResourceSelector<T> GeneralFilename(T& s)               { return ResourceSelector<T>(s, "AnyFile"); }
+template<class T> ResourceSelector<T> SoundFilename(T& s)                 { return ResourceSelector<T>(s, "Sound"); }
 template<class T> ResourceSelector<T> SmartObjectClasses(T& s)            { return ResourceSelector<T>(s, "SmartObjectClasses"); }
+template<class T> ResourceSelector<T> MissionPicker(T& s)                 { return ResourceSelector<T>(s, "Missions"); }
 template<class T> ResourceSelector<T> MaterialPicker(T& s)                { return ResourceSelector<T>(s, "Material"); }
 template<class T> ResourceSelector<T> LevelLayerPicker(T& s)              { return ResourceSelector<T>(s, "LevelLayer"); }
 template<class T> ResourceSelector<T> SequenceEventPicker(T& s)           { return ResourceSelector<T>(s, "SequenceEvent"); }
@@ -33,6 +38,25 @@ template<class T> ResourceSelector<T> EntityEventPicker(T& s)             { retu
 template<class T> ResourceSelector<T> SequenceCameraPicker(T& s)          { return ResourceSelector<T>(s, "SequenceCamera"); }
 template<class T> ResourceSelector<T> CharacterAnimationPicker(T& s)      { return ResourceSelector<T>(s, "CharacterAnimation"); }
 template<class T> ResourceSelector<T> TrackCharacterAnimationPicker(T& s) { return ResourceSelector<T>(s, "TrackCharacterAnimation"); }
+template<class T> ResourceSelector<T> ActionMapName(T& s)                 { return ResourceSelector<T>(s, "ActionMapName"); }
+template<class T> ResourceSelector<T> ActionMapActionName(T& s)           { return ResourceSelector<T>(s, "ActionMapActionName"); }
+template<class T> ResourceSelector<T> SurfaceTypeName(T& s)               { return ResourceSelector<T>(s, "SurfaceTypeName"); }
+template<class T> ResourceSelector<T> EntityClassName(T& s)               { return ResourceSelector<T>(s, "EntityClassName"); }
+
+inline Serialization::ResourceFilePath GeomPath(string& value)                          { return Serialization::ResourceFilePath(value, "Geometry (cgf)|*.cgf"); }
+inline Serialization::ResourceFilePath SkinName(string& value)                          { return Serialization::ResourceFilePath(value, "Attachment Geometry (skin)|*.skin"); }
+inline Serialization::ResourceFilePath ParticleEffectName(string& value)                { return Serialization::ResourceFilePath(value, "Particle Effect (pfx)|*.pfx"); }
+inline Serialization::ResourceFilePath ObjectIconPath(string& value)                    { return Serialization::ResourceFilePath(value, "Bitmap (bmp)|*.bmp"); }
+inline Serialization::ResourceFilePath MannequinAnimationDatabasePath(string& value)    { return Serialization::ResourceFilePath(value, "Animation Database (adb)|*.adb"); }
+inline Serialization::ResourceFilePath MannequinControllerDefinitionPath(string& value) { return Serialization::ResourceFilePath(value, "Controller Definition (xml)|*.xml"); }
+
+struct SMannequinControllerDefResourceParams : public ICustomResourceParams
+{
+	const SControllerDef* pControllerDef = nullptr;
+};
+
+template<class T> ResourceSelector<T> MannequinScopeContextName(T& s, std::shared_ptr<SMannequinControllerDefResourceParams> pParams) { return ResourceSelector<T>(s, "MannequinScopeContextName", pParams); }
+template<class T> ResourceSelector<T> MannequinFragmentName(T& s, std::shared_ptr<SMannequinControllerDefResourceParams> pParams)     { return ResourceSelector<T>(s, "MannequinFragmentName", pParams); }
 
 //! Decorators namespace is obsolete now, SHOULD NOT BE USED.
 namespace Decorators

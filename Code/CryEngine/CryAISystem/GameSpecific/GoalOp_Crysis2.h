@@ -7,7 +7,7 @@
              These should move into GameDLL when interfaces allow!
    -------------------------------------------------------------------------
    History:
-   - 18:11:2009 - Created by Márcio Martins
+   - 18:11:2009 - Created by MÃ¡rcio Martins
  *********************************************************************/
 
 #ifndef __GoalOp_Crysis2_H__
@@ -593,14 +593,14 @@ class COPCrysis2Hover : public CGoalOp
 	Vec3          m_InitialTurn;
 	Vec3          m_CurrentTarget;
 	EAIRegister   m_target;
-	bool          m_Continous;
+	bool          m_Continuous;
 
 	COPHoverState m_State;
 	COPHoverState m_NextState;
 public:
 
 	COPCrysis2Hover();
-	COPCrysis2Hover(EAIRegister reg, bool continous);
+	COPCrysis2Hover(EAIRegister reg, bool continuous);
 	explicit COPCrysis2Hover(const XmlNodeRef& node);
 
 	virtual ~COPCrysis2Hover();

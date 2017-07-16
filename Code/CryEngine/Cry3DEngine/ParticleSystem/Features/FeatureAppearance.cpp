@@ -15,10 +15,10 @@
 
 CRY_PFX2_DBG
 
-volatile bool gFeatureAppearance = false;
-
 namespace pfx2
 {
+
+EParticleDataType PDT(EPDT_Tile, uint8);
 
 SERIALIZATION_ENUM_DEFINE(EVariantMode, ,
                           Random,
@@ -36,7 +36,7 @@ public:
 
 	uint VariantCount() const
 	{
-		return m_tileCount / m_anim.m_frameCount;
+		return m_tileCount / max(1u, uint(m_anim.m_frameCount));
 	}
 
 	virtual void AddToComponent(CParticleComponent* pComponent, SComponentParams* pParams) override
@@ -55,7 +55,6 @@ public:
 			pComponent->AddParticleData(EPDT_Tile);
 			if (m_variantMode == EVariantMode::Ordered)
 				pComponent->AddParticleData(EPDT_SpawnId);
-			pComponent->AddParticleData(EPDT_Tile);
 			pComponent->AddToUpdateList(EUL_InitUpdate, this);
 		}
 	}
@@ -101,8 +100,7 @@ private:
 		uint32 tile;
 		if (mode == EVariantMode::Random)
 		{
-			SChaosKey key;
-			tile = key.Rand();
+			tile = context.m_spawnRng.Rand();
 		}
 		else if (mode == EVariantMode::Ordered)
 		{
@@ -116,7 +114,7 @@ private:
 
 };
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceTextureTiling, "Appearance", "Texture Tiling", defaultIcon, appearenceColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceTextureTiling, "Appearance", "Texture Tiling", colorAppearance);
 
 class CFeatureAppearanceMaterial : public CParticleFeature
 {
@@ -143,12 +141,23 @@ public:
 		ar(TextureFilename(m_textureName), "Texture", "Texture");
 	}
 
+	virtual uint GetNumResources() const override 
+	{ 
+		return !m_materialName.empty() || !m_textureName.empty() ? 1 : 0; 
+	}
+
+	virtual const char* GetResourceName(uint resourceId) const override
+	{ 
+		// Material has priority over the texture.
+		return !m_materialName.empty() ? m_materialName.c_str() : m_textureName.c_str();
+	}
+
 private:
 	string m_materialName;
 	string m_textureName;
 };
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceMaterial, "Appearance", "Material", defaultIcon, appearenceColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceMaterial, "Appearance", "Material", colorAppearance);
 
 class CFeatureAppearanceLighting : public CParticleFeature
 {
@@ -161,6 +170,7 @@ public:
 		, m_emissive(0.0f)
 		, m_curvature(0.0f)
 		, m_receiveShadows(false)
+		, m_affectedByFog(true)
 		, CParticleFeature(gpu_pfx2::eGpuFeatureType_Dummy) {}
 
 	virtual void AddToComponent(CParticleComponent* pComponent, SComponentParams* pParams) override
@@ -177,8 +187,12 @@ public:
 		pParams->m_shaderData.m_backLighting = m_backLight;
 		pParams->m_shaderData.m_emissiveLighting = m_emissive * toLightUnitScale;
 		pParams->m_shaderData.m_curvature = m_curvature;
+		if (m_albedo >= FLT_EPSILON)
+			pParams->m_renderObjectFlags |= FOB_LIGHTVOLUME;
 		if (m_receiveShadows)
 			pParams->m_renderObjectFlags |= FOB_INSHADOW;
+		if (!m_affectedByFog)
+			pParams->m_renderObjectFlags |= FOB_NO_FOG;
 	}
 
 	virtual void Serialize(Serialization::IArchive& ar) override
@@ -189,6 +203,7 @@ public:
 		ar(m_emissive, "Emissive", "Emissive (kcd/m2)");
 		ar(m_curvature, "Curvature", "Curvature");
 		ar(m_receiveShadows, "ReceiveShadows", "Receive Shadows");
+		ar(m_affectedByFog, "AffectedByFog", "Affected by Fog");
 		if (ar.isInput())
 			VersionFix(ar);
 	}
@@ -214,9 +229,10 @@ private:
 	UFloat10   m_emissive;
 	UUnitFloat m_curvature;
 	bool       m_receiveShadows;
+	bool       m_affectedByFog;
 };
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceLighting, "Appearance", "Lighting", defaultIcon, appearenceColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceLighting, "Appearance", "Lighting", colorAppearance);
 
 SERIALIZATION_DECLARE_ENUM(EBlendMode,
                            Opaque = 0,
@@ -249,7 +265,7 @@ private:
 	EBlendMode m_blendMode;
 };
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceBlending, "Appearance", "Blending", defaultIcon, appearenceColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceBlending, "Appearance", "Blending", colorAppearance);
 
 class CFeatureAppearanceSoftIntersect : public CParticleFeature
 {
@@ -279,7 +295,7 @@ private:
 	UFloat m_softNess;
 };
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceSoftIntersect, "Appearance", "SoftIntersect", defaultIcon, appearenceColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceSoftIntersect, "Appearance", "SoftIntersect", colorAppearance);
 
 class CFeatureAppearanceVisibility : public CParticleFeature, SVisibilityParams
 {
@@ -293,7 +309,7 @@ public:
 
 	virtual void AddToComponent(CParticleComponent* pComponent, SComponentParams* pParams) override
 	{
-		pParams->m_visibility = static_cast<const SVisibilityParams&>(*this);
+		pParams->m_visibility.Combine(*this);
 		if (m_drawNear)
 			pParams->m_renderObjectFlags |= FOB_NEAREST;
 		if (m_drawOnTop)
@@ -307,6 +323,8 @@ public:
 		SERIALIZE_VAR(ar, m_minCameraDistance);
 		SERIALIZE_VAR(ar, m_maxCameraDistance);
 		SERIALIZE_VAR(ar, m_viewDistanceMultiple);
+		SERIALIZE_VAR(ar, m_indoorVisibility);
+		SERIALIZE_VAR(ar, m_waterVisibility);
 		SERIALIZE_VAR(ar, m_drawNear);
 		SERIALIZE_VAR(ar, m_drawOnTop);
 	}
@@ -316,6 +334,6 @@ private:
 	bool m_drawOnTop;
 };
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceVisibility, "Appearance", "Visibility", defaultIcon, appearenceColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureAppearanceVisibility, "Appearance", "Visibility", colorAppearance);
 
 }

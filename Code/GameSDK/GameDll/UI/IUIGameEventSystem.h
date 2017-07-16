@@ -62,7 +62,7 @@ private:
 template <class T>
 struct SAutoRegUIEventSystem : public IUIEventSystemFactory
 {
-	virtual TUIEventSystemPtr Create() { return TUIEventSystemPtr(new T); }
+	virtual TUIEventSystemPtr Create() { return std::make_shared<T>(); }
 };
 
 #define UIEVENTSYSTEM(name) \
@@ -71,11 +71,12 @@ static const char* GetTypeNameS() { return name; }
 
 
 #if CRY_PLATFORM_WINDOWS && defined(_LIB)
-#define CRY_EXPORT_STATIC_LINK_VARIABLE( Var ) \
-	extern "C" { INT_PTR lib_func_##Var() { return (INT_PTR)&Var; } } \
-	__pragma( message("#pragma comment(linker,\"/include:_lib_func_"#Var"\")") )
+	#define CRY_EXPORT_STATIC_LINK_VARIABLE(Var)                        \
+	  extern "C" { INT_PTR lib_func_ ## Var() { return (INT_PTR)&Var; } \
+	  }                                                                 \
+	  __pragma(message("#pragma comment(linker,\"/include:_lib_func_" # Var "\")"))
 #else
-#define CRY_EXPORT_STATIC_LINK_VARIABLE( Var )
+	#define CRY_EXPORT_STATIC_LINK_VARIABLE(Var)
 #endif
 
 #define REGISTER_UI_EVENTSYSTEM( UIEventSystemClass ) \

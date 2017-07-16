@@ -9,17 +9,15 @@
 
 using namespace ACE;
 
-CAudioSystemEditor_sdlmixer* g_pSDLMixerInterface;
-
 //------------------------------------------------------------------
 extern "C" ACE_API IAudioSystemEditor * GetAudioInterface(ISystem * pSystem)
 {
 	ModuleInitISystem(pSystem, "EditorSDLMixer");
-	if (!g_pSDLMixerInterface)
+	if (!s_pSdlMixerInterface)
 	{
-		g_pSDLMixerInterface = new CAudioSystemEditor_sdlmixer();
+		s_pSdlMixerInterface = new CAudioSystemEditor_sdlmixer();
 	}
-	return g_pSDLMixerInterface;
+	return s_pSdlMixerInterface;
 }
 
 //------------------------------------------------------------------
@@ -32,10 +30,10 @@ BOOL __stdcall DllMain(HINSTANCE hinstDLL, ULONG fdwReason, LPVOID lpvReserved)
 		g_hInstance = hinstDLL;
 		break;
 	case DLL_PROCESS_DETACH:
-		if (g_pSDLMixerInterface)
+		if (s_pSdlMixerInterface)
 		{
-			delete g_pSDLMixerInterface;
-			g_pSDLMixerInterface = nullptr;
+			delete s_pSdlMixerInterface;
+			s_pSdlMixerInterface = nullptr;
 		}
 		break;
 	}

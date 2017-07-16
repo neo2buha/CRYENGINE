@@ -35,9 +35,9 @@ void CVehicleSeatAnimActionEnter::Enter()
 	}
 
 	IActor* pActor = m_pSeat->GetPassengerActor();
-	CRY_ASSERT(pActor);
+	CRY_ASSERT(gEnv->bMultiplayer || pActor);
 
-	IAnimatedCharacter* pAnimChar = pActor ? pActor->GetAnimatedCharacter() : NULL;
+	IAnimatedCharacter* pAnimChar = pActor ? pActor->GetAnimatedCharacter() : nullptr;
 	if (pAnimChar)
 	{
 		pAnimChar->SetMovementControlMethods(eMCM_Animation, eMCM_Animation);
@@ -62,9 +62,9 @@ void CVehicleSeatAnimActionExit::Enter()
 	}
 
 	IActor* pActor = m_pSeat->GetPassengerActor();
-	CRY_ASSERT(pActor);
+	CRY_ASSERT(gEnv->bMultiplayer || pActor);
 
-	IAnimatedCharacter* pAnimChar = pActor ? pActor->GetAnimatedCharacter() : NULL;
+	IAnimatedCharacter* pAnimChar = pActor ? pActor->GetAnimatedCharacter() : nullptr;
 	if (pAnimChar)
 	{
 		pAnimChar->SetMovementControlMethods(eMCM_Animation, eMCM_Animation);
@@ -76,8 +76,9 @@ void CVehicleSeatAnimActionExit::Exit()
 {
 	BaseAction::Exit();
 
+	// Leave the heli mid-air and this will trigger.
 	IActor* pActor = m_pSeat->GetPassengerActor();
-	CRY_ASSERT(pActor);
+	CRY_ASSERT(gEnv->bMultiplayer || pActor);
 
 	m_pSeat->StandUp();
 }

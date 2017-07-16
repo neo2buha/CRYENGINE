@@ -23,6 +23,7 @@
 #define DXGL_VERSION_42              420
 #define DXGL_VERSION_43              430 /* DX 11 */
 #define DXGL_VERSION_44              440
+#define DXGL_VERSION_45              450
 
 #define DXGLES_VERSION_30            300
 #define DXGLES_VERSION_31            310
@@ -48,9 +49,9 @@
 		#define DXGLES_REQUIRED_VERSION DXGLES_VERSION_31
 	#endif
 #elif CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_WINDOWS
-	#if defined(OPENGL_ES)
+	#if CRY_RENDERER_OPENGLES
 		#define DXGL_USE_GLAD
-		#define DXGL_ES_SUBSET
+//		#define DXGL_ES_SUBSET
 		#define DXGLES_REQUIRED_VERSION DXGLES_VERSION_31
 		#define DXGL_REQUIRED_VERSION   0
 	#else
@@ -69,7 +70,7 @@
 	#include <WinGDI.h>
 #endif
 
-#if CRY_PLATFORM_MOBILE && defined(DXGL_USE_SDL)
+#if CRY_PLATFORM_MOBILE && defined(USE_SDL2_VIDEO)
 	#define DXGL_SINGLEWINDOW
 #endif
 
@@ -96,10 +97,6 @@
 
 #include "GLFeatures.hpp"
 
-#if defined(DXGL_USE_SDL)
-	#include <SDL.h>
-#endif
-
 namespace NCryOpenGL
 {
 
@@ -107,7 +104,7 @@ namespace NCryOpenGL
 struct SDisplayConnection;
 typedef _smart_ptr<SDisplayConnection> TWindowContext;
 typedef EGLContext                     TRenderingContext;
-#elif defined(DXGL_USE_SDL)
+#elif defined(USE_SDL2_VIDEO)
 typedef SDL_Window*                    TWindowContext;
 typedef SDL_GLContext                  TRenderingContext;
 #elif CRY_PLATFORM_WINDOWS

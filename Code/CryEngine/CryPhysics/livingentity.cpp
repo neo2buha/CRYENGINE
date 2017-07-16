@@ -251,9 +251,7 @@ float CLivingEntity::UnprojectionNeeded(const Vec3 &pos,const quaternionf &qrot,
 			if (pentlist[i]->GetType()!=PE_LIVING) {
 				ReadLock lock(pentlist[i]->m_lockUpdate);
 				for(j=0;j<pentlist[i]->m_nParts;j++) if (pentlist[i]->m_parts[j].flags & collider_flags) {
-					gwd[1].R = Matrix33(pentlist[i]->m_qrot*pentlist[i]->m_parts[j].q);
-					gwd[1].offset = pentlist[i]->m_pos + pentlist[i]->m_qrot*pentlist[i]->m_parts[j].pos;
-					gwd[1].scale = pentlist[i]->m_parts[j].scale;
+					pentlist[i]->GetPartTransform(j, gwd[1].offset,gwd[1].R,gwd[1].scale, this);
 					if (pgeom->Intersect(pentlist[i]->m_parts[j].pPhysGeomProxy->pGeom, gwd,gwd+1, &ip, pcontacts)) {
 						got_unproj:
 						if (dirUnproj.len2()==0) dirUnproj = pcontacts[0].dir;
@@ -354,7 +352,7 @@ int CLivingEntity::SetParams(pe_params *_params, int bThreadSafe)
 	if (_params->type==pe_player_dimensions::type_id) {
 		pe_player_dimensions *params = (pe_player_dimensions*)_params;
 		ENTITY_VALIDATE("CLivingEntity:SetParams(player_dimensions)",params);
-		if (is_unused(params->sizeCollider)) params->sizeCollider = m_size;
+ 		if (is_unused(params->sizeCollider)) params->sizeCollider = m_size;
 		if (is_unused(params->heightCollider)) params->heightCollider = m_hCyl;
 		if (is_unused(params->heightPivot)) params->heightPivot = m_hPivot;
 		if (is_unused(params->bUseCapsule)) params->bUseCapsule = m_bUseCapsule;
@@ -419,7 +417,7 @@ int CLivingEntity::SetParams(pe_params *_params, int bThreadSafe)
 			}
 			ComputeBBox(m_BBox);
 		}
-		JobAtomicAdd(&m_pWorld->m_lockGrid,-m_pWorld->RepositionEntity(this,1));
+		m_pWorld->RepositionEntity(this,1|8);
 
 		return 1;
 	}
@@ -941,7 +939,7 @@ int CLivingEntity::SetStateFromSnapshot(TSerialize ser, int flags)
 
 /*
 		{
-			IPersistantDebug * pPD = gEnv->pGame->GetIGameFramework()->GetIPersistantDebug();
+			IPersistantDebug * pPD = gEnv->pGameFramework->GetIPersistantDebug();
 			Vec3 pts[3] = {debugOnlyOriginalHelperPos, helper.pos, m_pos};
 			pPD->Begin("Snap", false);
 			Vec3 bump(0,0,0.2f);
@@ -957,18 +955,7 @@ int CLivingEntity::SetStateFromSnapshot(TSerialize ser, int flags)
 */
 
 		float distance = m_pos.GetDistance(helper.pos);
-		if (ser.GetSerializationTarget() == eST_Network)
-		{
-			/*if (distance > MAX_DIFFERENCE)
-				setpos.pos = helper.pos + (m_pos - helper.pos).GetNormalized() * MAX_DIFFERENCE;
-			else
-				setpos.pos = m_pos + (helper.pos - m_pos) * distance/MAX_DIFFERENCE*0.033f;*/
-			setpos.pos = helper.pos;
-		}
-		else
-		{
-			setpos.pos = helper.pos;
-		}
+		setpos.pos = helper.pos;
 
 		SetParams( &setpos,0 );
 
@@ -1018,7 +1005,7 @@ float CLivingEntity::ShootRayDown(le_precomp_entity* pents, int nents, le_precom
 		if (j<pent->m_nColliders)
 			continue;
 		for(j1=pents[i].iPartsBegin;j1<pents[i].iPartsEnd;bHasMatSubst|=pparts[j1++].partflags & geom_mat_substitutor) 
-			if ((pparts[j1].partflags & (collider_flags|geom_no_coll_response)) == collider_flags) {
+			if ((pparts[j1].partflags & collider_flags) && !(pparts[j1].partflags & geom_no_coll_response)) {
 			PrefetchLine(&pparts[j1+1],0);
 			if (bIgnoreSmallObjects && (pentbest || pent->GetRigidBody(j)->v.len2()>1)) {
 				pparts[j1].pgeom->GetBBox(&bbox);
@@ -1027,7 +1014,6 @@ float CLivingEntity::ShootRayDown(le_precomp_entity* pents, int nents, le_precom
 				if (maxarea<sqr(m_size.x)*g_PI*0.25f && maxdim<m_size.z*1.4f)
 					continue;
 			}
-			//(pentlist[i]->m_qrot*pentlist[i]->m_parts[j].q).getmatrix(gwd.R);	//Q2M_IVO 
 			gwd.R = Matrix33(pparts[j1].partrot);
 			gwd.offset = pparts[j1].partoff;
 			gwd.scale = pparts[j1].partscale;
@@ -1060,12 +1046,12 @@ float CLivingEntity::ShootRayDown(le_precomp_entity* pents, int nents, le_precom
 		if (pentbest) {
 			SetGroundCollider(pentbest, (pentbest->m_parts[jbest].flags & geom_manually_breakable)!=0);
 			m_iLastGroundColliderPart = jbest;
-			Vec3 coll_origin = pentbest->m_pos+pentbest->m_qrot*pentbest->m_parts[jbest].pos;
-			quaternionf coll_q = pentbest->m_qrot*pentbest->m_parts[jbest].q;
-			float coll_scale = pentbest->m_parts[jbest].scale;
+			Vec3 coll_origin;	quaternionf coll_q;	float coll_scale;
+			pentbest->GetPartTransform(jbest, coll_origin,coll_q,coll_scale, this);
 			m_posLastGroundColl = ((pt-coll_origin)*coll_q)/coll_scale;
+			int mask = (2<<pentbest->m_iSimClass)-(pentbest->m_id>>31);
 			if (bHasMatSubst) for(i=nents-1;i>=0;--i) for(j1=pents[i].iPartsBegin;j1<pents[i].iPartsEnd;++j1)
-				if (pparts[j1].partflags & geom_mat_substitutor && 
+				if (pparts[j1].partflags & geom_mat_substitutor && pents[i].pent->m_parts[pparts[j1].ipart].flagsCollider & mask &&
 						pparts[j1].pgeom->PointInsideStatus(((pt-pparts[j1].partoff)*pparts[j1].partrot)*(fabs_tpl(pparts[j1].partscale-1)>1e-4f ? 1.0f/pparts[j1].partscale:1.0f)))
 					idbest=idbestAux = pents[i].pent->GetMatId(pparts[j1].surface_idx, pparts[j1].ipart);
 			m_lastGroundSurfaceIdx = idbest;
@@ -1094,13 +1080,13 @@ void CLivingEntity::AddLegsImpulse(const Vec3 &vel, const Vec3 &nslope, bool bIn
 	int ncoll;
 	CPhysicalEntity **pColliders/*,*pPrevCollider=m_pLastGroundCollider*/;
 	pe_status_sample_contact_area ssca;
-	RigidBody *pbody;
+	RigidBody body(false),*pbody;
 	pe_action_impulse ai;
 	ssca.ptTest = m_pos-m_qrot*Vec3(0,0,m_hPivot); ssca.dirTest = m_gravity;
 
 	if (m_pLastGroundCollider && m_flags&lef_push_objects &&
 			(unsigned int)m_pLastGroundCollider->m_iSimClass-1u<2u && m_pLastGroundCollider->m_flags & pef_pushable_by_players && 
-			((pbody=m_pLastGroundCollider->GetRigidBody(m_iLastGroundColliderPart))->Minv<m_massinv*10 ||
+			((pbody=m_pLastGroundCollider->GetRigidBodyTrans(&body,m_iLastGroundColliderPart,this))->Minv<m_massinv*10 ||
 			 (ncoll=m_pLastGroundCollider->GetColliders(pColliders))==0 || (ncoll==1 && pColliders[0]==m_pLastGroundCollider)) &&
 			!m_pLastGroundCollider->GetStatus(&ssca))
 	{
@@ -1109,7 +1095,8 @@ void CLivingEntity::AddLegsImpulse(const Vec3 &vel, const Vec3 &nslope, bool bIn
 		if (bInstantChange)
 			vrel -= pbody->v+(pbody->w^ai.point-pbody->pos);
 		Matrix33 K; K.SetZero();
-		m_pLastGroundCollider->GetContactMatrix(ai.point,m_iLastGroundColliderPart,K);
+		RigidBody body(false), *pbody=m_pLastGroundCollider->GetRigidBodyTrans(&body, m_iLastGroundColliderPart, this, 0,true);
+		pbody->GetContactMatrix(ai.point-pbody->pos, K);
 		K(0,0)+=m_massinv; K(1,1)+=m_massinv; K(2,2)+=m_massinv;
 		ai.impulse = nslope*(min(0.0f,nslope*vrel)/(nslope*K*nslope));
 		m_pLastGroundCollider->Action(&ai,1);
@@ -1128,7 +1115,7 @@ void CLivingEntity::RegisterContact(const Vec3 &posSelf, const Vec3& pt,const Ve
 		epc.pEntity[1] = pCollider; 
 		epc.pForeignData[1] = pCollider->m_pForeignData; 
 		epc.iForeignData[1] = pCollider->m_iForeignData;
-		RigidBody *pbody = pCollider->GetRigidBody(ipart);
+		RigidBody body(false), *pbody = pCollider->GetRigidBodyTrans(&body,ipart,this);
 		Vec3 v = pbody->v+(pbody->w^pt-pbody->pos);
 		epc.n = n;
 		if (bLegsContact) {
@@ -1170,7 +1157,7 @@ void CLivingEntity::RegisterUnprojContact(const le_contact &unproj)
 	if (m_nContacts==m_nContactsAlloc) {
 		le_contact *pContacts = m_pContacts;
 		m_pContacts = new le_contact[m_nContactsAlloc+=4];
-		NO_BUFFER_OVERRUN
+		NO_BUFFER_OVERRUN	// cppcheck-suppress memsetClass
 		memcpy(m_pContacts, pContacts, m_nContacts*sizeof(le_contact));
 		delete[] pContacts;
 	}
@@ -1199,10 +1186,8 @@ Vec3 CLivingEntity::SyncWithGroundCollider(float time_interval)
 	m_velGround.zero();
 
 	if (m_pLastGroundCollider) {
-		i = m_iLastGroundColliderPart;
-		Vec3 coll_origin = m_pLastGroundCollider->m_pos+m_pLastGroundCollider->m_qrot*m_pLastGroundCollider->m_parts[i].pos;
-		quaternionf coll_q = m_pLastGroundCollider->m_qrot*m_pLastGroundCollider->m_parts[i].q;
-		float coll_scale = m_pLastGroundCollider->m_parts[i].scale;
+		Vec3 coll_origin;	quaternionf coll_q;	float coll_scale;
+		m_pLastGroundCollider->GetPartTransform(i=m_iLastGroundColliderPart, coll_origin,coll_q,coll_scale, this);
 		newpos = coll_q*m_posLastGroundColl*coll_scale + coll_origin + m_qrot*Vec3(0,0,m_hPivot);
  		const Vec3 diff = (newpos-m_pos);
 		const float fMaxDist = m_maxVelGround * time_interval;
@@ -1214,7 +1199,8 @@ Vec3 CLivingEntity::SyncWithGroundCollider(float time_interval)
 		m_pLastGroundCollider->GetStatus(&sd);
 
 		Matrix33 K; K.SetZero();
-		m_pLastGroundCollider->GetContactMatrix(newpos,i,K);
+		RigidBody body(false), *pbody=m_pLastGroundCollider->GetRigidBodyTrans(&body, i, this, 0,true);
+		pbody->GetContactMatrix(newpos-pbody->pos,K);
 		Vec3 velGround = sd.v+(sd.w^newpos-sd.centerOfMass);
 		if ((velGround-velGround0).len2() < m_gravity.len2()*sqr(time_interval*2.0f))
 			m_velGround = velGround;
@@ -1257,17 +1243,6 @@ void CLivingEntity::ComputeBBox(Vec3 *BBox, int flags)
 	}
 }
 
-void CLivingEntity::ComputeBBoxLE(const Vec3 &pos, Vec3 *BBox, coord_block_BBox *partCoord)
-{
-	coord_block coord;
-	coord.pos = pos; coord.q = m_qrot;
-	m_pNewCoords = &coord;
-	partCoord->pos = m_parts[0].pos; partCoord->q = m_parts[0].q;
-	partCoord->scale = m_parts[0].scale; m_parts[0].pNewCoords = partCoord;
-	ComputeBBox(BBox, update_part_bboxes & m_nParts-2>>31);
-	m_pNewCoords = (coord_block*)&m_pos;
-}
-
 void CLivingEntity::UpdatePosition(const Vec3 &pos, const Vec3 *BBox, int bGridLocked)
 {
 	WriteLockCond lock(m_lockUpdate,m_bStateReading^1); 
@@ -1281,7 +1256,7 @@ void CLivingEntity::UpdatePosition(const Vec3 &pos, const Vec3 *BBox, int bGridL
 		for(int i=0;i<m_nParts;i++) m_parts[i].pNewCoords = (coord_block_BBox*)&m_parts[i].pos;
 		ComputeBBox(m_BBox);
 	}
-	JobAtomicAdd(&m_pWorld->m_lockGrid,-bGridLocked);
+	m_pWorld->UnlockGrid(this,-bGridLocked);
 }
 
 void CLivingEntity::StartStep(float time_interval)
@@ -1411,12 +1386,12 @@ int CLivingEntity::Step(float time_interval)
 			const float fSizeZ = m_size.z;
 			movelen = move.len(); 
 			const float fGap = (movelen+m_pWorld->m_vars.maxContactGapPlayer)*1.5f;
-			const Vec3 posDiff = pos - m_pos;
-			BBoxInner[0] = m_BBox[0]+(posDiff)-Vec3(fGap,fGap,fGap);
-			BBoxInner[1] = m_BBox[1]+(posDiff)+Vec3(fGap,fGap,fGap);
+			const Vec3 posDiff = pos - m_pos, maxUpStep = axis*(m_hCyl-m_size.z-m_size.x*m_bUseCapsule);
+			BBoxInner[0] = m_BBox[0]+(posDiff)-Vec3(fGap,fGap,fGap)+min(maxUpStep,Vec3(0));
+			BBoxInner[1] = m_BBox[1]+(posDiff)+Vec3(fGap,fGap,fGap)+max(maxUpStep,Vec3(0));
 			const float fGap2 = max(10.0f*time_interval,fGap); // adds a safety margin of m_size.x width
-			const Vec3 BBoxOuter0 = m_BBox[0]+(posDiff)-Vec3(fGap2,fGap2,fGap2);
-			const Vec3 BBoxOuter1 = m_BBox[1]+(posDiff)+Vec3(fGap2,fGap2,fGap2);
+			const Vec3 BBoxOuter0 = m_BBox[0]+(posDiff)-Vec3(fGap2,fGap2,fGap2)+min(maxUpStep,Vec3(0));
+			const Vec3 BBoxOuter1 = m_BBox[1]+(posDiff)+Vec3(fGap2,fGap2,fGap2)+max(maxUpStep,Vec3(0));
 
 			nents = m_pWorld->GetEntitiesAround(BBoxOuter0,BBoxOuter1, 
 				pentlist, m_collTypes|ent_independent|ent_triggers|ent_sort_by_mass, this, 0,iCaller);
@@ -1485,11 +1460,9 @@ int CLivingEntity::Step(float time_interval)
 				} 
 				for(int j1=0; j1<nUsedPartsCount; j1++) {
 					le_precomp_part &part = pPrecompParts[nPrecompParts++];
-					part.BBox[0]=pentlist[i]->m_parts[part.ipart=j=pentlist[i]->GetUsedPart(iCaller,j1)].BBox[0]; 
-					part.BBox[1]=pentlist[i]->m_parts[j].BBox[1]; 
-					part.partrot=pentlist[i]->m_qrot*pentlist[i]->m_parts[j].q; 
-					part.partoff=pentlist[i]->m_pos + pentlist[i]->m_qrot*pentlist[i]->m_parts[j].pos;
-					part.partscale=pentlist[i]->m_parts[j].scale;	
+					Vec3 *pBBox = pentlist[i]->GetPartBBox(part.ipart=j=pentlist[i]->GetUsedPart(iCaller,j1), part.BBox, this);
+					part.BBox[0]=pBBox[0]; part.BBox[1]=pBBox[1];
+					pentlist[i]->GetPartTransform(j, part.partoff,part.partrot,part.partscale, this);
 					part.partflags=pentlist[i]->m_parts[j].flags; 
 					part.pgeom=pentlist[i]->m_parts[j].pPhysGeomProxy->pGeom; 
 					part.surface_idx=pentlist[i]->m_parts[j].surface_idx;
@@ -1554,7 +1527,6 @@ int CLivingEntity::Step(float time_interval)
 						}
 						for(int j1=pPrecompEnts[i].iPartsBegin, bCheckBBox=pPrecompEnts[i].bCheckBBox; j1<pPrecompEnts[i].iPartsEnd; ++j1)
 							if (pPrecompParts[j1].partflags & flagsCollider && (!bCheckBBox || AABB_overlap(BBoxInner,pPrecompParts[j1].BBox)))	{
-								//(pent->m_qrot*pentlist[i]->m_parts[j].q).getmatrix(gwd[1].R); //Q2M_IVO 
 								gwd[1].R = Matrix33(pPrecompParts[j1].partrot);
 								gwd[1].offset = pPrecompParts[j1].partoff;
 								gwd[1].scale = pPrecompParts[j1].partscale;
@@ -1616,15 +1588,16 @@ int CLivingEntity::Step(float time_interval)
 									}
 
 									if (iSimClass==2) {
-										Matrix33 K;
-										K.SetZero();
+										Matrix33 K(ZERO);
 										if (uFlags & pef_pushable_by_players)
-											GetContactMatrix(pcontacts[ncont].center, 0, K);
+											K += Matrix33(Diag33(m_massinv));
 										int bPushOther = (uFlags & lef_push_objects) && (pent->m_flags & pef_pushable_by_players);
 										bPushOther |= iszero(iSimClass-2);
 										bPushOther &= iszero((int)(INT_PTR)pent-(int)(INT_PTR)m_pLastGroundCollider)^1;
-										if (bPushOther)
-											pent->GetContactMatrix(pcontacts[ncont].center, j, K);
+										if (bPushOther)	{
+											RigidBody body(false), *pbody=pent->GetRigidBodyTrans(&body, j, this, 0,true);
+											pbody->GetContactMatrix(pcontacts[ncont].center-pbody->pos, K);
+										}
 										else if (!(uFlags & pef_pushable_by_players))
 											continue;
 										pcontacts[ncont].center -= pcontacts[ncont].dir*pcontacts[ncont].t;
@@ -1632,7 +1605,7 @@ int CLivingEntity::Step(float time_interval)
 										if (fabs_tpl(ncontact.z)<0.5f) {
 											ncontact.z=0; ncontact.normalize();
 										}
-										RigidBody *pbody = pent->GetRigidBody(j);
+										RigidBody body(false), *pbody = pent->GetRigidBodyTrans(&body,j,this);
 										vrel = ncontact*(pbody->v+(pbody->w^pcontacts[ncont].center-pbody->pos)-vel-m_velGround);
 										if (iCyl==0 || fabs_tpl(vrel)*time_interval>m_size.x*0.2f) {
 											vrel = max(0.0f,vrel-ncontact*(vel+m_velGround));
@@ -1821,17 +1794,18 @@ int CLivingEntity::Step(float time_interval)
 						int bUnmovable = isneg(-pentmin->m_iSimClass>>31 & ~(-((int)m_flags & pef_pushable_by_players)>>31));
 						bPush &= bUnmovable^1;
 						{
-							Matrix33 K;
-							K.SetZero();
+							Matrix33 K(ZERO);
 							int bPushOther = (m_flags & (pentmin->m_iSimClass==3 ? lef_push_players : lef_push_objects)) && 
 								(pentmin->m_flags & pef_pushable_by_players) && 
 								(pentmin->m_iSimClass | m_pWorld->m_vars.bPlayersCanBreak | pentmin->m_flags & pef_players_can_break);
 							bPushOther &= iszero((int)(INT_PTR)pentmin-(int)(INT_PTR)m_pLastGroundCollider)^1;
 							bPushOther |= bUnmovable;
-							if (bPushOther)
-								pentmin->GetContactMatrix(ptcontact, jmin, K);
+							if (bPushOther)	{
+								RigidBody body(false), *pbody=pentmin->GetRigidBodyTrans(&body, jmin, this, 0,true);
+								pbody->GetContactMatrix(ptcontact-pbody->pos, K);
+							}
 							if (!bPushOther || /*pentmin->m_iSimClass-3 | */m_flags & pef_pushable_by_players)
-								GetContactMatrix(ptcontact, -1, K);
+								K += Matrix33(Diag33(m_massinv));
 							else 
 								bPush = 0;
 							vrel = ncontact*(vel+m_velGround); //(ncontact*gwd[0].v)*vel.len();
@@ -1845,7 +1819,7 @@ int CLivingEntity::Step(float time_interval)
 										vrel = -1.0f;
 								}
 							} else {
-								RigidBody *pbody = pentmin->GetRigidBody(jmin);
+								RigidBody body(false), *pbody = pentmin->GetRigidBodyTrans(&body,jmin,this);
 								vrel -= ncontact*(pbody->v+(pbody->w^ptcontact-pbody->pos));
 							}
 							vrel = min(0.0f, vrel);
@@ -2019,10 +1993,7 @@ int CLivingEntity::Step(float time_interval)
 				for(i=0;i<nents;i++) if (pentlist[i]->m_iSimClass==0) {//pentlist[i]->GetType()!=PE_LIVING && pentlist[i]->GetMassInv()*0.4f<m_massinv) {
 					for(int j1=0;j1<pentlist[i]->GetUsedPartsCount(iCaller);j1++) 
 						if (pentlist[i]->m_parts[j=pentlist[i]->GetUsedPart(iCaller,j1)].flags & collider_flags) {
-							Matrix33 rotMat = Matrix33(pentlist[i]->m_qrot*pentlist[i]->m_parts[j].q);
-							gwd[1].R = rotMat;
-							gwd[1].offset = pentlist[i]->m_pos + rotMat*pentlist[i]->m_parts[j].pos;
-							gwd[1].scale = pentlist[i]->m_parts[j].scale;
+							pentlist[i]->GetPartTransform(j, gwd[1].offset,gwd[1].R,gwd[1].scale, this);
 							if(m_pHeadGeom->Intersect(pentlist[i]->m_parts[j].pPhysGeomProxy->pGeom, gwd,gwd+1, &ip, pcontacts))
 								tmin = min(tmin,(float)pcontacts[0].t);
 						}
@@ -2032,15 +2003,24 @@ int CLivingEntity::Step(float time_interval)
 			}
 		}
 		
+		coord_block coord;
+		coord.pos = pos; coord.q = m_qrot;
+		m_pNewCoords = &coord;
 		coord_block_BBox partCoord;
-		ComputeBBoxLE(pos,BBoxInner,&partCoord); 
-		UpdatePosition(pos,BBoxInner, m_pWorld->RepositionEntity(this,1,BBoxInner));
+		partCoord.pos = m_parts[0].pos; partCoord.q = m_parts[0].q;
+		partCoord.scale = m_parts[0].scale; m_parts[0].pNewCoords = &partCoord;
+		ComputeBBox(BBoxInner, update_part_bboxes & m_nParts-2>>31);
+		int locked = m_pWorld->RepositionEntity(this,1,BBoxInner);
+		pos = coord.pos;
+		m_pNewCoords = (coord_block*)&m_pos;
+		UpdatePosition(pos,BBoxInner, locked);
 		bMoving = 1;
 	} else if (!m_bActive) {
+		m_pos = pos;
 		if (m_velRequested.len2()>0) {
 			m_pos += m_velRequested*time_interval;
 			m_BBox[0] += m_velRequested*time_interval; m_BBox[1] += m_velRequested*time_interval;
-			JobAtomicAdd(&m_pWorld->m_lockGrid,-m_pWorld->RepositionEntity(this,1));
+			m_pWorld->RepositionEntity(this,1|8);
 			bMoving = 1;
 		}
 		if (m_bReleaseGroundColliderWhenNotActive!=0)
@@ -2096,8 +2076,7 @@ int CLivingEntity::Step(float time_interval)
 		}
 
 		if (m_flags & (pef_monitor_poststep | pef_log_poststep)) {
-			EventPhysPostStep epps;
-			epps.pEntity=this; epps.pForeignData=m_pForeignData; epps.iForeignData=m_iForeignData;
+			EventPhysPostStep epps; InitEvent(&epps,this);
 			epps.dt=time_interval; epps.pos=m_pos; epps.q=m_qrot; epps.idStep=m_pWorld->m_idStep;
 			epps.pos -= m_qrot*Vec3(0,0,m_dh);
 			m_pWorld->OnEvent(m_flags,&epps);
@@ -2276,9 +2255,9 @@ void CLivingEntity::DrawHelperInformation(IPhysRenderer *pRenderer, int flags)
 
 void CLivingEntity::GetMemoryStatistics(ICrySizer *pSizer) const
 {
-	CPhysicalEntity::GetMemoryStatistics(pSizer);
 	if (GetType()==PE_LIVING)
 		pSizer->AddObject(this, sizeof(CLivingEntity));
+	CPhysicalEntity::GetMemoryStatistics(pSizer);
 }
 
 void CLivingEntity::Step_HandleFlying(Vec3 &vel, const Vec3& velGround, int bWasFlying, const Vec3& heightAdj, const float kInertia, const float time_interval)

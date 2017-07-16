@@ -1,16 +1,4 @@
-// Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
-
-// -------------------------------------------------------------------------
-//  File name:   IMaterialEffects.h
-//  Version:     v1.00
-//  Created:     26/7/2006 by JohnN/AlexL.
-//  Compilers:   Visual Studio.NET 2003
-//  Description: Interface to the Material Effects System
-// -------------------------------------------------------------------------
-//  History:
-//
-////////////////////////////////////////////////////////////////////////////
-
+// Copyright 2001-2016 Crytek GmbH. All rights reserved.
 #pragma once
 
 #if !defined(_RELEASE)
@@ -74,7 +62,7 @@ struct SMFXRunTimeEffectParams
 		, angle(MFX_INVALID_ANGLE)
 		, scale(1.0f)
 		, audioProxyEntityId(0)
-		, audioProxyId(DEFAULT_AUDIO_PROXY_ID)
+		, audioProxyId(CryAudio::DefaultAuxObjectId)
 		, audioProxyOffset(ZERO)
 		, numAudioRtpcs(0)
 		, fDecalPlacementTestMaxSize(1000.f)
@@ -122,12 +110,12 @@ public:
 	float        scale;
 
 	// Audio related.
-	EntityId            audioProxyEntityId; //!< If set, uses this Entity's audio proxy to execute audio triggers. otherwise creates independent sound.
-	AudioProxyId        audioProxyId;       //!< If set, uses the specified audio proxy of the entity, otherwise the default proxy id will be used.
-	Vec3                audioProxyOffset;   //!< In case of audio proxy, uses this offset.
+	EntityId              audioProxyEntityId; //!< If set, uses this Entity's audio proxy to execute audio triggers. otherwise creates independent sound.
+	CryAudio::AuxObjectId audioProxyId;       //!< If set, uses the specified audio proxy of the entity, otherwise the default proxy id will be used.
+	Vec3                  audioProxyOffset;   //!< In case of audio proxy, uses this offset.
 
-	SMFXAudioEffectRtpc audioRtpcs[MAX_AUDIO_RTPCS];
-	uint32              numAudioRtpcs;
+	SMFXAudioEffectRtpc   audioRtpcs[MAX_AUDIO_RTPCS];
+	uint32                numAudioRtpcs;
 };
 
 struct SMFXBreakageParams
@@ -476,7 +464,7 @@ private:
 		m_flowGraphList = 0;
 		m_forceFeedbackList = 0;
 	}
-	~SMFXResourceList()
+	virtual ~SMFXResourceList()
 	{
 		while (m_particleList != 0)
 		{
@@ -519,6 +507,48 @@ struct SMFXCustomParamValue
 	float fValue;
 };
 
+struct SAnimFXEventInfo
+{
+	SAnimFXEventInfo()
+		: szName(nullptr)
+		, uniqueId(0u)
+	{}
+
+	SAnimFXEventInfo(const char* szName, uint32 uniqueId)
+		: szName(szName)
+		, uniqueId(uniqueId)
+	{}
+
+	const char* szName;
+	uint32      uniqueId;
+};
+
+struct IAnimFXEvents
+{
+	// Library count
+	virtual uint32      GetLibrariesCount() const = 0;
+	virtual const char* GetLibraryName(uint32 index) const = 0;
+	// Events
+	virtual int         GetAnimFXEventsCount() const = 0;
+	virtual void        GetAnimFXEventInfo(int eventIndex, SAnimFXEventInfo& typeInfo) const = 0;
+	virtual void        GetAnimFXEventInfoById(uint32 uniqueId, SAnimFXEventInfo& typeInfo) const = 0;
+	// Events parameters
+	virtual int         GetAnimFXEventParamCount(int eventIndex) const = 0;
+	virtual void        GetAnimFXEventParam(int eventIndex, int paramIndex, SAnimFXEventInfo& extraParam) const = 0;
+	virtual const char* GetAnimFXEventParamName(uint32 eventTypeUid, uint32 eventParamUid) const = 0;
+
+protected:
+	virtual ~IAnimFXEvents() {}
+};
+
+struct IMaterialEffectsListener
+{
+	virtual void OnPostLoadFXLibraries() = 0;
+
+protected:
+	virtual ~IMaterialEffectsListener() {}
+};
+
 //////////////////////////////////////////////////////////////////////////
 struct IMaterialEffects
 {
@@ -545,11 +575,17 @@ struct IMaterialEffects
 	virtual void                CompleteInit() = 0;
 
 	virtual void                ReloadMatFXFlowGraphs() = 0;
-	virtual int                 GetMatFXFlowGraphCount() const = 0;
+	virtual size_t              GetMatFXFlowGraphCount() const = 0;
 	virtual IFlowGraphPtr       GetMatFXFlowGraph(int index, string* pFileName = NULL) const = 0;
 	virtual IFlowGraphPtr       LoadNewMatFXFlowGraph(const string& filename) = 0;
 
 	virtual void                EnumerateEffectNames(EnumerateMaterialEffectsDataCallback& callback, const char* szLibraryName) const = 0;
 	virtual void                EnumerateLibraryNames(EnumerateMaterialEffectsDataCallback& callback) const = 0;
+	virtual void                AddListener(IMaterialEffectsListener* pListener, const char* name) = 0;
+	virtual void                RemoveListener(IMaterialEffectsListener* pListener) = 0;
+	virtual void                LoadFXLibraryFromXMLInMemory(const char* szName, XmlNodeRef root) = 0;
+	virtual void                UnloadFXLibrariesWithPrefix(const char* szName) = 0;
+	virtual void                SetAnimFXEvents(IAnimFXEvents* pAnimEvents) = 0;
+	virtual IAnimFXEvents*      GetAnimFXEvents() = 0;
 	// </interfuscator:shuffle>
 };

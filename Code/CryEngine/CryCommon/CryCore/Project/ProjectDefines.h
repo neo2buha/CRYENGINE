@@ -12,14 +12,6 @@
 // This was chewing up a lot of CPU time just waiting for a connection
 #define NO_LIVECREATE
 
-// [VR]
-// Optional HMD SDK integrations
-#if defined(DEDICATED_SERVER)
-	#undef INCLUDE_OCULUS_SDK
-	#undef INCLUDE_OPENVR_SDK
-	#undef INCLUDE_OSVR_SDK
-#endif
-
 // Scaleform base configuration
 #if defined(DEDICATED_SERVER)
 	#undef INCLUDE_SCALEFORM_SDK   // Not used in dedicated server
@@ -39,20 +31,10 @@
 	#endif
 #endif
 
-// The following definitions are used by Sandbox and RC to determine which platform support is needed
-#define TOOLS_SUPPORT_POWERVR
-#define TOOLS_SUPPORT_DURANGO
-#define TOOLS_SUPPORT_ORBIS
-
 // Durango SDK and Orbis SDK are 64-bit only
 #if !(CRY_PLATFORM_WINDOWS && CRY_PLATFORM_64BIT)
 	#undef TOOLS_SUPPORT_DURANGO
 	#undef TOOLS_SUPPORT_ORBIS
-#endif
-
-// 2015/08/26: Latest PVR TexLib doesn't have VS2015 libs yet so it won't link with VS2015.
-#if _MSC_VER >= 1900
-	#undef TOOLS_SUPPORT_POWERVR
 #endif
 
 // Type used for vertex indices
@@ -143,24 +125,8 @@ extern void SliceAndSleep(const char* pFunc, int line);
 
 #define OLD_VOICE_SYSTEM_DEPRECATED
 
-//! This feature allows automatic crash submission to Jira, but does not work outside of Crytek.
-//! \note This #define will be commented out during code export.
-//#define ENABLE_CRASH_HANDLER
-
 #if !defined(PHYSICS_STACK_SIZE)
 	#define PHYSICS_STACK_SIZE (128U << 10)
-#endif
-
-#if !defined(USE_LEVEL_HEAP)
-	#define USE_LEVEL_HEAP 0
-#endif
-
-#if USE_LEVEL_HEAP && !defined(_RELEASE)
-	#define TRACK_LEVEL_HEAP_USAGE 1
-#endif
-
-#ifndef TRACK_LEVEL_HEAP_USAGE
-	#define TRACK_LEVEL_HEAP_USAGE 0
 #endif
 
 #if (!defined(_RELEASE) || defined(PERFORMANCE_BUILD)) && !defined(RESOURCE_COMPILER)
@@ -227,7 +193,14 @@ extern void SliceAndSleep(const char* pFunc, int line);
 	#define ENABLE_ART_RT_TIME_ESTIMATE
 #endif
 
-#if !defined(ENABLE_LW_PROFILERS)
+#if !defined(_RELEASE) || defined(ENABLE_STATOSCOPE_RELEASE)
+#define ENABLE_FLASH_INFO
+#endif
+
+// Remove the line below to disable the console in release builds
+#define ENABLE_DEVELOPER_CONSOLE_IN_RELEASE
+
+#if !defined(ENABLE_LW_PROFILERS) && !defined(ENABLE_DEVELOPER_CONSOLE_IN_RELEASE)
 	#ifndef USE_NULLFONT
 		#define USE_NULLFONT      1
 	#endif
@@ -318,7 +291,7 @@ extern void SliceAndSleep(const char* pFunc, int line);
 //------------------------------------------------------
 // Modules   : Renderer, Engine
 // Platform  : DX11
-#if CRY_PLATFORM_WINDOWS || CRY_PLATFORM_DURANGO /*|| CRY_PLATFORM_ORBIS*/
+#if CRY_PLATFORM_WINDOWS || CRY_PLATFORM_DURANGO || CRY_PLATFORM_ORBIS
 	#define FEATURE_SVO_GI
 	#if CRY_PLATFORM_WINDOWS
 		#define FEATURE_SVO_GI_ALLOW_HQ
@@ -338,11 +311,7 @@ extern void SliceAndSleep(const char* pFunc, int line);
 	#define ENABLE_LOADING_PROFILER
 #endif
 
-#if CRY_PLATFORM_ORBIS && (!defined(_RELEASE) || defined(PERFORMANCE_BUILD))
-	#define SUPPORT_HW_MOUSE_CURSOR
-#endif
-
-#if !defined(_DEBUG) && CRY_PLATFORM_WINDOWS && !defined(IS_EAAS)
+#if !defined(_DEBUG) && CRY_PLATFORM_WINDOWS
 //# define CRY_PROFILE_MARKERS_USE_GPA
 //# define CRY_PROFILE_MARKERS_USE_NVTOOLSEXT
 #endif
@@ -363,16 +332,13 @@ extern void SliceAndSleep(const char* pFunc, int line);
 
 //! Defines for various encryption methodologies that we support (or did support at some stage).
 #define SUPPORT_UNENCRYPTED_PAKS             //Enable during dev and on consoles to support paks that aren't encrypted in any way
-#if !(defined(IS_EAAS) && defined(_RELEASE)) //For EaaS release builds, require signing (at least)
-	#define SUPPORT_UNSIGNED_PAKS              //Enabled during dev to test release builds easier (remove this to enforce signed paks in release builds)
-#endif
 
 // #define SUPPORT_XTEA_PAK_ENCRYPTION                             //! C2 Style. Compromised - do not use.
 // #define SUPPORT_STREAMCIPHER_PAK_ENCRYPTION                     //! C2 DLC Style - by Mark Tully.
 #if !CRY_PLATFORM_DURANGO
 	#define SUPPORT_RSA_AND_STREAMCIPHER_PAK_ENCRYPTION //C3/Warface Style - By Timur Davidenko and integrated by Rob Jessop
 #endif
-#if !defined(_RELEASE) || defined(PERFORMANCE_BUILD)
+#if (!defined(_RELEASE) || defined(PERFORMANCE_BUILD)) && !defined(SUPPORT_UNSIGNED_PAKS)
 	#define SUPPORT_UNSIGNED_PAKS //Enable to load paks that aren't RSA signed
 #endif                          //!_RELEASE || PERFORMANCE_BUILD
 #if !CRY_PLATFORM_DURANGO
@@ -381,7 +347,6 @@ extern void SliceAndSleep(const char* pFunc, int line);
 
 #if CRY_PLATFORM_DURANGO
 //#define SUPPORT_SMARTGLASS // Disabled - needs fixing with April XDK
-//#define SUPPORT_DURANGO_LEGACY_MULTIPLAYER // March 2016 XDK dropped Party concept
 #endif
 
 #if defined(SUPPORT_RSA_AND_STREAMCIPHER_PAK_ENCRYPTION) || defined(SUPPORT_RSA_PAK_SIGNING)

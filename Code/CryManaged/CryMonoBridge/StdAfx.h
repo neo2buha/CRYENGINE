@@ -42,10 +42,26 @@
 #include <CryNetwork/IRemoteControl.h>
 #include <CryNetwork/ISimpleHttpServer.h>
 #include <CryGame/IGameFramework.h>
-#include <CryGame/IGame.h>
 #include <CryFlowGraph/IFlowSystem.h>
 
 #include <CryAudio/IAudioSystem.h>
+
+namespace MonoInternals
+{
+#include <mono/jit/jit.h>
+#include <mono/metadata/mono-gc.h>
+#include <mono/metadata/assembly.h>
+#include <mono/utils/mono-logger.h>
+#include <mono/metadata/mono-debug.h>
+#include <mono/metadata/debug-helpers.h>
+#include <mono/metadata/exception.h>
+#include <mono/metadata/object.h>
+#include <mono/metadata/class.h>
+#include <mono/metadata/exception.h>
+#include <mono/metadata/reflection.h>
+}
+
+#define HAVE_MONO_API
 
 #pragma warning(disable: 4018)	// conditional expression is constant
 #pragma warning(disable: 4018)	// conditional expression is constant

@@ -7,52 +7,52 @@
 
 #include "../CryFont/FBitmap.h"
 
-bool CD3D9Renderer::FontUpdateTexture(int nTexId, int nX, int nY, int USize, int VSize, byte* pData)
+bool CD3D9Renderer::FontUpdateTexture(int nTexId, int nX, int nY, int USize, int VSize, byte* pSrcData)
 {
 	CTexture* tp = CTexture::GetByID(nTexId);
 	assert(tp);
 
 	if (tp)
 	{
-		tp->UpdateTextureRegion(pData, nX, nY, 0, USize, VSize, 0, eTF_A8);
+		tp->UpdateTextureRegion(pSrcData, nX, nY, 0, USize, VSize, 0, eTF_A8);
 
 		return true;
 	}
 	return false;
 }
 
-bool CD3D9Renderer::FontUploadTexture(class CFBitmap* pBmp, ETEX_Format eTF)
+bool CD3D9Renderer::FontUploadTexture(class CFBitmap* pBmp, ETEX_Format eSrcFormat)
 {
 	if (!pBmp)
 	{
 		return false;
 	}
 
-	unsigned int* pData = new unsigned int[pBmp->GetWidth() * pBmp->GetHeight()];
+	unsigned int* pSrcData = new unsigned int[pBmp->GetWidth() * pBmp->GetHeight()];
 
-	if (!pData)
+	if (!pSrcData)
 	{
 		return false;
 	}
 
-	pBmp->Get32Bpp(&pData);
+	pBmp->Get32Bpp(&pSrcData);
 
 	char szName[128];
 	cry_sprintf(szName, "$AutoFont_%d", m_TexGenID++);
 
 	int iFlags = FT_TEX_FONT | FT_DONT_STREAM | FT_DONT_RELEASE;
-	CTexture* tp = CTexture::Create2DTexture(szName, pBmp->GetWidth(), pBmp->GetHeight(), 1, iFlags, (unsigned char*)pData, eTF, eTF);
+	CTexture* tp = CTexture::GetOrCreate2DTexture(szName, pBmp->GetWidth(), pBmp->GetHeight(), 1, iFlags, (unsigned char*)pSrcData, eSrcFormat);
 
-	SAFE_DELETE_ARRAY(pData);
+	SAFE_DELETE_ARRAY(pSrcData);
 
 	pBmp->SetRenderData((void*)tp);
 
 	return true;
 }
 
-int CD3D9Renderer::FontCreateTexture(int Width, int Height, byte* pData, ETEX_Format eTF, bool genMips)
+int CD3D9Renderer::FontCreateTexture(int Width, int Height, byte* pSrcData, ETEX_Format eSrcFormat, bool genMips)
 {
-	if (!pData)
+	if (!pSrcData)
 		return -1;
 
 	char szName[128];
@@ -61,7 +61,7 @@ int CD3D9Renderer::FontCreateTexture(int Width, int Height, byte* pData, ETEX_Fo
 	int iFlags = FT_TEX_FONT | FT_DONT_STREAM | FT_DONT_RELEASE;
 	if (genMips)
 		iFlags |= FT_FORCE_MIPS;
-	CTexture* tp = CTexture::Create2DTexture(szName, Width, Height, 1, iFlags, (unsigned char*)pData, eTF, eTF);
+	CTexture* tp = CTexture::GetOrCreate2DTexture(szName, Width, Height, 1, iFlags, (unsigned char*)pSrcData, eSrcFormat);
 
 	return tp->GetID();
 }
@@ -85,7 +85,7 @@ void CD3D9Renderer::FontSetTexture(class CFBitmap* pBmp, int nFilterMode)
 		CTexture* tp = (CTexture*)pBmp->GetRenderData();
 		if (tp)
 		{
-			tp->SetFilterMode(nFilterMode);
+			SSamplerState::SetDefaultFilterMode(nFilterMode);
 			tp->Apply(0);
 		}
 	}
@@ -100,7 +100,7 @@ void CD3D9Renderer::FontSetTexture(int nTexId, int nFilterMode)
 	if (!tp)
 		return;
 
-	tp->SetFilterMode(nFilterMode);
+	SSamplerState::SetDefaultFilterMode(nFilterMode);
 	tp->Apply(0);
 	//CTexture::m_Text_NoTexture->Apply(0);
 }
@@ -162,15 +162,12 @@ void CD3D9Renderer::FontSetBlending(int blendSrc, int blendDest)
 	if (eTF_R16G16F == CTexture::s_eTFZ || CTexture::s_eTFZ == eTF_R32F)
 		FX_SetState(m_fontBlendMode | GS_DEPTHFUNC_LEQUAL);
 	else
-		FX_SetState(m_fontBlendMode | GS_DEPTHFUNC_LEQUAL | GS_ALPHATEST_GREATER, 0);
+		FX_SetState(m_fontBlendMode | GS_DEPTHFUNC_LEQUAL | GS_ALPHATEST, 0);
 }
 
 void CD3D9Renderer::FontSetState(bool bRestore)
 {
 	static DWORD wireframeMode;
-#if !defined(OPENGL)
-	static D3DCOLORVALUE color;
-#endif //!defined(OPENGL)
 	static bool bMatColor;
 	static uint32 nState, nForceState;
 
@@ -198,7 +195,7 @@ void CD3D9Renderer::FontSetState(bool bRestore)
 		if (eTF_R16G16F == CTexture::s_eTFZ || CTexture::s_eTFZ == eTF_R32F)
 			FX_SetState(m_fontBlendMode | GS_DEPTHFUNC_LEQUAL);
 		else
-			FX_SetState(m_fontBlendMode | GS_DEPTHFUNC_LEQUAL | GS_ALPHATEST_GREATER, 0);
+			FX_SetState(m_fontBlendMode | GS_DEPTHFUNC_LEQUAL | GS_ALPHATEST, 0);
 
 		EF_SetColorOp(eCO_REPLACE, eCO_MODULATE, eCA_Diffuse | (eCA_Diffuse << 3), DEF_TEXARG0);
 		//GetDevice().SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);

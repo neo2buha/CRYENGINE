@@ -33,7 +33,7 @@ SSessionStats::SSessionStats()
 //---------------------------------------
 void SSessionStats::UpdateClientGUID()
 {
-	UpdateGUID( gEnv->pGame->GetIGameFramework()->GetClientActorId() );
+	UpdateGUID( gEnv->pGameFramework->GetClientActorId() );
 }
 
 //---------------------------------------
@@ -103,12 +103,12 @@ void SSessionStats::Clear()
 //---------------------------------------
 void SSessionStats::ResetClientSessionStats()
 {
-	COMPILE_TIME_ASSERT(ESIPS_Max == CRY_ARRAY_COUNT(m_streakIntStats));
+	static_assert(ESIPS_Max == CRY_ARRAY_COUNT(m_streakIntStats), "Unexpected array size!");
 	for(int i = 0; i < ESIPS_Max; i++)
 	{
 		m_streakIntStats[i].ResetSession();
 	}
-	COMPILE_TIME_ASSERT(ESFPS_Max == CRY_ARRAY_COUNT(m_streakFloatStats));
+	static_assert(ESFPS_Max == CRY_ARRAY_COUNT(m_streakFloatStats), "Unexpected array size!");
 	for(int i = 0; i < ESFPS_Max; i++)
 	{
 		m_streakFloatStats[i].ResetSession();
@@ -123,7 +123,7 @@ int SSessionStats::GetStat(const char* name, EMapPersistantStats stat) const
 }
 
 //---------------------------------------
-const SSessionStats::SMap::MapNameToCount& SSessionStats::GetStat(EMapPersistantStats stat) const
+const SSessionStats::SMap::MapNameToCount& SSessionStats::GetStatMap(EMapPersistantStats stat) const
 {
 	CRY_ASSERT(stat >= 0 && stat < CRY_ARRAY_COUNT(m_mapStats));
 	return m_mapStats[stat].m_map;
@@ -234,7 +234,6 @@ int SSessionStats::GetDerivedStat(EDerivedIntPersistantStats stat) const
 			return num;
 		}
 	default:
-		CRY_ASSERT_MESSAGE(false, string().Format("Failed to find EDerivedIntPersistantStats %d", stat));
 		return 0;
 	} 
 }
@@ -618,7 +617,7 @@ float SSessionStats::GetStatStrings(EDerivedFloatPersistantStats stat, CryFixedS
 	switch (stat)
 	{
 	case EDFPS_Accuracy:
-		valueString.Format("%.2f %%", MIN(statValue,100.f));
+		valueString.Format("%.2f %%", std::min(statValue,100.f));
 		break;
 	case EDFPS_LifeExpectancy:
 		valueString.Format("%s", GetTimeString(statValue));
@@ -695,7 +694,7 @@ float SSessionStats::GetStatStrings(const char* name, EMapPersistantStats stat, 
 //----------------------------------------------------------
 float SSessionStats::GetStatStrings( EMapPersistantStats stat, CryFixedStringT<64>& valueString )
 {
-	const SMap::MapNameToCount& statsMap = GetStat(stat);
+	const SMap::MapNameToCount& statsMap = GetStatMap(stat);
 
 	int statValue = 0;
 

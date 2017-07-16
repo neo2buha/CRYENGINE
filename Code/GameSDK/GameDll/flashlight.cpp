@@ -12,7 +12,7 @@ namespace
 {
 	CItem* GetLocalPlayerItem()
 	{
-		CPlayer* pPlayer = static_cast<CPlayer*>(gEnv->pGame->GetIGameFramework()->GetClientActor());
+		CPlayer* pPlayer = static_cast<CPlayer*>(gEnv->pGameFramework->GetClientActor());
 
 		if (!pPlayer)
 		{
@@ -56,8 +56,8 @@ bool CFlashLight::m_flashLightEnabled = true;
 bool CFlashLight::m_lightEnabled = true;
 
 CFlashLight::CFlashLight()
-	:	m_fogVolume(0)
-	,	m_lightId(0)
+	: m_fogVolume(0)
+	, m_lightId(0)
 {
 }
 
@@ -91,11 +91,11 @@ void CFlashLight::EnableLight(bool enable)
 
 		if (pOwner)
 		{
-			IEntityRenderProxy* pRenderProxy = static_cast<IEntityRenderProxy*>(pOwner->GetEntity()->GetProxy(ENTITY_PROXY_RENDER));
+			IEntityRender* pIEntityRender = (pOwner->GetEntity()->GetRenderInterface());
 
-			if (pRenderProxy)
+
 			{
-				pCasterException = pRenderProxy->GetRenderNode();
+				pCasterException = pIEntityRender->GetRenderNode();
 			}
 		}
 
@@ -149,9 +149,9 @@ void CFlashLight::EnableFogVolume(CWeapon* pWeapon, int slot, bool enable)
 	if (m_fogVolume == 0)
 	{
 		const Vec3 size = Vec3(
-		                    m_sharedparams->pFlashLightParams->fogVolumeRadius,
-		                    m_sharedparams->pFlashLightParams->fogVolumeSize,
-		                    m_sharedparams->pFlashLightParams->fogVolumeRadius);
+			m_sharedparams->pFlashLightParams->fogVolumeRadius,
+			m_sharedparams->pFlashLightParams->fogVolumeSize,
+			m_sharedparams->pFlashLightParams->fogVolumeRadius);
 
 		SEntitySpawnParams fogVolumeParams;
 		fogVolumeParams.pClass = gEnv->pEntitySystem->GetClassRegistry()->FindClass("FogVolume");
@@ -180,7 +180,10 @@ void CFlashLight::EnableFogVolume(CWeapon* pWeapon, int slot, bool enable)
 
 		EntityScripts::CallScriptFunction(pFogVolume, pFogVolume->GetScriptTable(), "OnPropertyChange");
 
-		pFogVolume->Activate(true);
+		if (auto* pScriptComponent = pFogVolume->GetComponent<IEntityScriptComponent>())
+		{
+			pScriptComponent->EnableScriptUpdate(true);
+		}
 	}
 	else
 	{

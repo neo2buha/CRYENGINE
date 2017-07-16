@@ -132,15 +132,15 @@ void CBoidObject::ExecuteTrigger(int nIndex)
 {
 	if ((nIndex >= 0) && (nIndex < (int)m_flock->m_bc.audio.size()))
 	{
-		const AudioControlId id = m_flock->m_bc.audio[nIndex];
-		if (id != INVALID_AUDIO_CONTROL_ID)
+		const CryAudio::ControlId id = m_flock->m_bc.audio[nIndex];
+		if (id != CryAudio::InvalidControlId)
 		{
 			IEntity* pEntity = gEnv->pEntitySystem->GetEntity(m_entity);
 			if (pEntity)
 			{
-				IEntityAudioProxyPtr audioProxy = crycomponent_cast<IEntityAudioProxyPtr>(pEntity->CreateProxy(ENTITY_PROXY_AUDIO));
+				IEntityAudioComponent* audioProxy = pEntity->GetOrCreateComponent<IEntityAudioComponent>();
 
-				if (audioProxy.get())
+				if (audioProxy)
 				{
 					audioProxy->ExecuteTrigger(id);
 				}

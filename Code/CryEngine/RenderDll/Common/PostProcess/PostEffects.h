@@ -101,7 +101,7 @@ public:
 	virtual void            OnBeginFrame(const SRenderingPassInfo& passInfo);
 
 	static void             SetupObject(CRenderObject* pObj, const SRenderingPassInfo& passInfo);
-	static void             GetPrevObjToWorldMat(CRenderObject* pObj, Matrix44A& res);
+	static bool             GetPrevObjToWorldMat(CRenderObject* pObj, Matrix44A& res);
 	static void             InsertNewElements();
 	static void             FreeData();
 	static const Matrix44A& GetPrevView() { return gRenDev->GetPreviousFrameCameraMatrix(); }
@@ -267,7 +267,8 @@ public:
 	CSunShafts()
 	{
 		m_nID = ePFX_SunShafts;
-		m_pOcclQuery = 0;
+		m_pOcclQuery[0] = nullptr;
+		m_pOcclQuery[1] = nullptr;
 
 		AddParamBool("SunShafts_Active", m_pActive, 0);
 		AddParamInt("SunShafts_Type", m_pShaftsType, 0);                                          // default shafts type - highest quality
@@ -312,7 +313,7 @@ private:
 	// int, float, float, float, vec4
 	CEffectParam*    m_pShaftsType, * m_pShaftsAmount, * m_pRaysAmount, * m_pRaysAttenuation, * m_pRaysSunColInfluence, * m_pRaysCustomCol;
 	CEffectParam*    m_pScratchStrength, * m_pScratchThreshold, * m_pScratchIntensity;
-	COcclusionQuery* m_pOcclQuery;
+	COcclusionQuery* m_pOcclQuery[2];
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -378,6 +379,8 @@ private:
 
 class CUberGamePostProcess : public CPostEffect
 {
+	friend class CUberGamePostEffectPass;
+
 public:
 
 	// Bitmaks used to enable only certain effects or combinations of most expensive effects
@@ -505,7 +508,7 @@ public:
 	virtual bool        Preprocess();
 	virtual void        Render();
 	virtual void        Reset(bool bOnSpecChange = false);
-	bool                UpdateParams(SColorGradingMergeParams& pMergeParams);
+	bool                UpdateParams(SColorGradingMergeParams& pMergeParams, bool bUpdateChart = true);
 
 	virtual const char* GetName() const
 	{
@@ -698,163 +701,6 @@ private:
 
 	// float
 	CEffectParam* m_pAmount;
-};
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-class CWaterRipples : public CPostEffect
-{
-	struct SWaterHit
-	{
-		SWaterHit()
-			: worldPos(0.0f, 0.0f)
-			, scale(1.0f)
-			, strength(1.0f)
-		{
-
-		}
-
-		SWaterHit(const Vec3& hitWorldPos, const float hitScale, const float hitStrength)
-			: worldPos(hitWorldPos.x, hitWorldPos.y)
-			, scale(hitScale)
-			, strength(hitStrength)
-		{
-
-		}
-
-		Vec2  worldPos;
-		float scale;
-		float strength;
-	};
-
-public:
-	CWaterRipples() : m_bSnapToCenter(false), m_bInitializeSim(true)
-	{
-		m_nRenderFlags = 0;
-		m_nID = ePFX_WaterRipples;
-
-		AddParamFloatNoTransition("WaterRipples_Amount", m_pAmount, 0.0f);
-
-		m_pRipplesGenTechName = "WaterRipplesGen";
-		m_pRipplesHitTechName = "WaterRipplesHit";
-		m_pRipplesParamName = "WaterRipplesParams";
-
-		m_fLastSpawnTime = 0.0f;
-		m_fLastUpdateTime = 0.0f;
-		m_fSimGridSize = 25.0f;
-		m_fSimGridSnapRange = 5.0f;
-
-		for (uint32 i = 0; i < RT_COMMAND_BUF_COUNT; i++)
-			s_pWaterHits[i].reserve(16);
-
-		s_nUpdateMask = 0;
-	}
-
-	static void  CreatePhysCallbacks();
-	static void  ReleasePhysCallbacks();
-	virtual bool Preprocess();
-
-	// Enabled/Disabled if no hits on list to process - call from render thread
-	bool RT_SimulationStatus();
-
-	// Add hits to list - called from main thread
-	static void  AddHit(const Vec3& vPos, const float scale, const float strength);
-
-	virtual void Release()
-	{
-		Reset();
-	}
-
-	void                RenderHits();
-	virtual void        Render();
-	virtual void        Reset(bool bOnSpecChange = false);
-
-	virtual const char* GetName() const
-	{
-		return "WaterRipples";
-	}
-
-	Vec4 GetLookupParams() { return s_vLookupParams; }
-
-	void DEBUG_DrawWaterHits();
-
-private:
-
-	static int OnEventPhysCollision(const struct EventPhys* pEvent);
-
-private:
-
-	enum { MAX_HITS = 128 };
-
-	struct SWaterHitRecord
-	{
-		SWaterHit mHit;
-		float     fHeight;
-		int       nCounter;
-	};
-
-	CCryNameTSCRC m_pRipplesGenTechName;
-	CCryNameTSCRC m_pRipplesHitTechName;
-	CCryNameR     m_pRipplesParamName;
-
-	// float
-	CEffectParam*                       m_pAmount;
-	float                               m_fLastSpawnTime;
-	float                               m_fLastUpdateTime;
-
-	float                               m_fSimGridSize;
-	float                               m_fSimGridSnapRange;
-
-	static std::vector<SWaterHit>       s_pWaterHits[RT_COMMAND_BUF_COUNT];
-	static std::vector<SWaterHit>       s_pWaterHitsMGPU;
-	static std::vector<SWaterHitRecord> m_DebugWaterHits;
-	static Vec3                         s_CameraPos;
-	static Vec2                         s_SimOrigin;
-
-	static int                          s_nUpdateMask;
-	static Vec4                         s_vParams;
-	static Vec4                         s_vLookupParams;
-
-	static bool                         s_bInitializeSim;
-	bool                                m_bSnapToCenter;
-	bool                                m_bInitializeSim;
-
-};
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-class CWaterVolume : public CPostEffect
-{
-public:
-	CWaterVolume()
-	{
-		m_nRenderFlags = 0;
-		m_nID = ePFX_WaterVolume;
-
-		AddParamFloatNoTransition("WaterVolume_Amount", m_pAmount, 0.0f);
-		m_nCurrSimID = 0;
-	}
-
-	virtual bool Preprocess();
-	virtual void Render();
-	virtual void Reset(bool bOnSpecChange = false);
-	int          GetCurrentPuddle()
-	{
-		return m_nCurrSimID;
-	}
-
-	virtual const char* GetName() const
-	{
-		return "WaterVolume";
-	}
-
-private:
-
-	// float
-	CEffectParam* m_pAmount;
-	int           m_nCurrSimID;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1272,6 +1118,8 @@ private:
 
 class CFlashBang : public CPostEffect
 {
+	friend class CFlashBangPass;
+
 public:
 	CFlashBang()
 	{
@@ -1282,8 +1130,7 @@ public:
 		AddParamFloat("FlashBang_Time", m_pTime, 2.0f);               // flashbang time duration in seconds
 		AddParamFloat("FlashBang_BlindAmount", m_pBlindAmount, 0.5f); // flashbang blind time (fraction of frashbang time)
 
-		m_pGhostImage = 0;
-		m_fBlindAmount = 1.0f;
+		m_pGhostImage = nullptr;
 		m_fSpawnTime = 0.0f;
 	}
 
@@ -1306,136 +1153,10 @@ private:
 
 	SDynTexture* m_pGhostImage;
 
-	float        m_fBlindAmount;
 	float        m_fSpawnTime;
 
 	// float, float
 	CEffectParam* m_pTime, * m_pDifractionAmount, * m_pBlindAmount;
-};
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-class CSceneRain : public CPostEffect
-{
-public:
-	CSceneRain()
-	{
-		m_nRenderFlags = 0;
-		m_nID = ePFX_SceneRain;
-
-		m_pConeVB = 0;
-		m_nConeVBSize = 0;
-		m_updateFrameCount = 0;
-		m_bReinit = true;
-
-		AddParamBool("SceneRain_Active", m_pActive, 0);
-	}
-
-	virtual int         CreateResources();
-	virtual void        Release();
-	virtual bool        Preprocess();
-	virtual void        Render();
-	virtual void        Reset(bool bOnSpecChange = false);
-	virtual void        OnLostDevice();
-
-	virtual const char* GetName() const;
-
-	// Rain volume parameters (filled during rain layer/occ generation pass)
-	SRainParams m_RainVolParams;
-
-private:
-	bool   m_bReinit;
-	void*  m_pConeVB;
-	uint16 m_nConeVBSize;
-	uint32 m_updateFrameCount;
-	void CreateBuffers(uint16 nVerts, void*& pINVB, SVF_P3F_C4B_T2F* pVtxList);
-};
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-class CSceneSnow : public CPostEffect
-{
-public:
-	_smart_ptr<IRenderMesh> m_pSnowFlakeMesh;
-	CSceneSnow()
-	{
-		m_nID = ePFX_SceneSnow;
-
-		AddParamBool("SceneSnow_Active", m_pActive, 0);
-
-		m_nAliveClusters = 0;
-		m_pSnowFlakeMesh = NULL;
-		m_nSnowFlakeVertCount = 0;
-		m_nNumClusters = 0;
-		m_nFlakesPerCluster = 0;
-	}
-
-	virtual ~CSceneSnow()
-	{
-		Release();
-	}
-
-	bool                IsActiveSnow();
-
-	virtual int         CreateResources();
-	virtual bool        Preprocess();
-	virtual void        Render();
-	virtual void        Reset(bool bOnSpecChange = false);
-	virtual void        Release();
-
-	virtual const char* GetName() const;
-
-	// Rain volume parameters (filled during rain layer/occ generation pass)
-	// Needed for occlusion.
-	SRainParams m_RainVolParams;
-	SSnowParams m_SnowVolParams;
-
-private:
-
-	// Snow particle properties
-	struct SSnowCluster
-	{
-		// set default data
-		SSnowCluster() : m_pPos(0, 0, 0), m_pPosPrev(0, 0, 0), m_fSpawnTime(0.0f), m_fLifeTime(4.0f), m_fLifeTimeVar(2.5f), m_fWeight(0.3f), m_fWeightVar(0.1f)
-		{
-
-		}
-
-		// World position
-		Vec3  m_pPos, m_pPosPrev;
-		// Spawn time
-		float m_fSpawnTime;
-		// Life time and variation
-		float m_fLifeTime, m_fLifeTimeVar;
-		// Weight and variation
-		float m_fWeight, m_fWeightVar;
-	};
-
-	// Generate particle cluster mesh
-	bool GenerateClusterMesh();
-	// Spawn a cluster
-	void SpawnCluster(SSnowCluster*& pCluster);
-	// Update all clusters
-	void UpdateClusters();
-	// Draw clusters
-	void DrawClusters();
-	// Half resolution composite.
-	void HalfResComposite();
-
-	// float
-	CEffectParam* m_pActive;
-
-	typedef std::vector<SSnowCluster*> SSnowClusterVec;
-	typedef SSnowClusterVec::iterator  SSnowClusterItor;
-	SSnowClusterVec m_pClusterList;
-
-	int             m_nSnowFlakeVertCount;
-
-	int             m_nAliveClusters;
-	int             m_nNumClusters;
-	int             m_nFlakesPerCluster;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1580,7 +1301,7 @@ public:
 	{
 	}
 
-	SHudData(const CRendElementBase* pInRE, const SShaderItem* pInShaderItem, const CShaderResources* pInShaderResources, CRenderObject* pInRO) :
+	SHudData(const CRenderElement* pInRE, const SShaderItem* pInShaderItem, const CShaderResources* pInShaderResources, CRenderObject* pInRO) :
 		pRE(pInRE),
 		pShaderItem(pInShaderItem),
 		pShaderResources(pInShaderResources),
@@ -1594,7 +1315,7 @@ public:
 	}
 
 public:
-	const CRendElementBase* pRE;
+	const CRenderElement* pRE;
 	CRenderObject*          pRO;
 	const SShaderItem*      pShaderItem; // to be removed after Alpha MS
 	const CShaderResources* pShaderResources;
@@ -1627,6 +1348,8 @@ struct HudDataSortCmp
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 class C3DHud : public CPostEffect
 {
+	friend class C3DHudPass;
+
 public:
 
 	typedef CThreadSafeRendererContainer<SHudData> SHudDataVec;
@@ -1695,29 +1418,19 @@ public:
 #endif
 	}
 
-	virtual int  CreateResources();
-	virtual void Release();
-	virtual bool Preprocess();
+	virtual int         CreateResources();
+	virtual void        Release();
+	virtual bool        Preprocess();
 
-	virtual void Update();
-	virtual void OnBeginFrame(const SRenderingPassInfo& passInfo);
+	virtual void        Update();
+	virtual void        OnBeginFrame(const SRenderingPassInfo& passInfo);
 
-	virtual void Reset(bool bOnSpecChange = false);
-	virtual void AddRE(const CRendElementBase* re, const SShaderItem* pShaderItem, CRenderObject* pObj, const SRenderingPassInfo& passInfo);
-	virtual void Render();
-
-	// Shared shader params/textures setup
-	void                CalculateProjMatrix();
-	void                SetShaderParams(SHudData& pData);
-	void                SetTextures(SHudData& pData);
-	void                RenderMesh(const CRendElementBase* pRE, SShaderPass* pPass);
+	virtual void        Reset(bool bOnSpecChange = false);
+	virtual void        AddRE(const CRenderElement* re, const SShaderItem* pShaderItem, CRenderObject* pObj, const SRenderingPassInfo& passInfo);
+	virtual void        Render();
 
 	void                FlashUpdateRT();
-	void                DownsampleHud4x4(CTexture* pDstRT);
 	void                UpdateBloomRT(CTexture* pDstRT, CTexture* pBlurDst);
-	void                FinalPass();
-	void                ReleaseFlashPlayerRef(const uint32 nThreadID);
-	void                RenderFinalPass();
 
 	virtual const char* GetName() const
 	{
@@ -1733,6 +1446,18 @@ public:
 	{
 		m_maxParallax = maxParallax;
 	}
+
+private:
+	// Shared shader params/textures setup
+	void CalculateProjMatrix();
+	void SetShaderParams(SHudData& pData);
+	void SetTextures(SHudData& pData);
+	void RenderMesh(const CRenderElement* pRE, SShaderPass* pPass);
+
+	void DownsampleHud4x4(CTexture* pDstRT);
+	void FinalPass();
+	void ReleaseFlashPlayerRef(const uint32 nThreadID);
+	void RenderFinalPass();
 
 private:
 
@@ -1785,6 +1510,8 @@ private:
 
 class CFilterKillCamera : public CPostEffect
 {
+	friend class CKillCameraPass;
+
 public:
 
 	CFilterKillCamera()
@@ -1843,7 +1570,7 @@ public:
 			pRenderObject = NULL;
 		}
 
-		const CRendElementBase* pRenderElement;
+		const CRenderElement* pRenderElement;
 		const CRenderObject*    pRenderObject;
 	};
 
@@ -1900,7 +1627,7 @@ public:
 			m_pRenderData[nThreadID].pRenderElement = NULL;
 	}
 
-	virtual void AddRE(const CRendElementBase* pRE, const SShaderItem* pShaderItem, CRenderObject* pObj, const SRenderingPassInfo& passInfo);
+	virtual void AddRE(const CRenderElement* pRE, const SShaderItem* pShaderItem, CRenderObject* pObj, const SRenderingPassInfo& passInfo);
 
 private:
 

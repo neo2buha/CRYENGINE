@@ -186,13 +186,13 @@ const char* CAIHandler::GetInitialCharacterName()
 
 	if (!m_pScriptObject->GetValue("Properties", pEntityProperties))
 	{
-		AIWarningID("<CAIHandler> ", "can't find Properties. Entity %s", m_pEntity->GetEntityTextDescription());
+		AIWarningID("<CAIHandler> ", "can't find Properties. Entity %s", m_pEntity->GetEntityTextDescription().c_str());
 		return 0;
 	}
 
 	if (!pEntityProperties->GetValue("aicharacter_character", szAICharacterName))
 	{
-		AIWarningID("<CAIHandler> ", "can't find aicharacter_character. Entity %s", m_pEntity->GetEntityTextDescription());
+		AIWarningID("<CAIHandler> ", "can't find aicharacter_character. Entity %s", m_pEntity->GetEntityTextDescription().c_str());
 		return 0;
 	}
 
@@ -209,16 +209,19 @@ const char* CAIHandler::GetInitialBehaviorName()
 	if (isModularBehaviorTreeEnabled)
 	{
 		SmartScriptTable pEntityProperties;
-		m_pScriptObject->GetValue("Properties", pEntityProperties);
-		if (pEntityProperties)
+		if (m_pScriptObject)
 		{
-			const char* behaviorTreeName = 0;
-			if (pEntityProperties->GetValue("esModularBehaviorTree", behaviorTreeName))
+			m_pScriptObject->GetValue("Properties", pEntityProperties);
+			if (pEntityProperties)
 			{
-				const bool hasValidModularBehaviorTreeName = (behaviorTreeName && behaviorTreeName[0] != 0);
-				if (hasValidModularBehaviorTreeName)
+				const char* behaviorTreeName = 0;
+				if (pEntityProperties->GetValue("esModularBehaviorTree", behaviorTreeName))
 				{
-					return 0;
+					const bool hasValidModularBehaviorTreeName = (behaviorTreeName && behaviorTreeName[0] != 0);
+					if (hasValidModularBehaviorTreeName)
+					{
+						return 0;
+					}
 				}
 			}
 		}
@@ -226,7 +229,7 @@ const char* CAIHandler::GetInitialBehaviorName()
 
 	SmartScriptTable pEntityPropertiesInstance;
 
-	if (!m_pScriptObject->GetValue("PropertiesInstance", pEntityPropertiesInstance))
+	if (!m_pScriptObject || !m_pScriptObject->GetValue("PropertiesInstance", pEntityPropertiesInstance))
 	{
 		AIWarningID("<CAIHandler> ", "can't find PropertiesInstance. Entity %s", m_pEntity->GetName());
 		return 0;
@@ -258,16 +261,7 @@ void CAIHandler::Init()
 	if (!SetCommonTables())
 		return;
 
-	if (IAIObject* aiObject = m_pEntity->GetAI())
-	{
-		if (IAIActorProxy* proxy = aiObject->GetProxy())
-		{
-			const char* behaviorSelectionTree = proxy->GetBehaviorSelectionTreeName();
-
-			if (!behaviorSelectionTree || *behaviorSelectionTree == '\0')
-				SetInitialBehaviorAndCharacter();
-		}
-	}
+	SetInitialBehaviorAndCharacter();
 
 	m_pPreviousBehavior = 0;
 	m_CurrentAlertness = 0;
@@ -349,7 +343,7 @@ void CAIHandler::SetInitialBehaviorAndCharacter()
 		m_sFirstCharacterName = szDefaultCharacter;
 		if (!SetCharacter(szDefaultCharacter, SET_DELAYED) && !m_sFirstCharacterName.empty())
 			AIWarningID("<CAIHandler> ", "Could not set initial character: %s on Entity: %s",
-			            szDefaultCharacter, m_pEntity->GetEntityTextDescription());
+			            szDefaultCharacter, m_pEntity->GetEntityTextDescription().c_str());
 #endif
 
 		const char* szDefaultBehavior = GetInitialBehaviorName();
@@ -442,17 +436,7 @@ void CAIHandler::Reset(EObjectResetType type)
 	else
 	{
 		SetCommonTables();
-
-		if (IAIObject* aiObject = m_pEntity->GetAI())
-		{
-			if (IAIActorProxy* proxy = aiObject->GetProxy())
-			{
-				const char* behaviorSelectionTree = proxy->GetBehaviorSelectionTreeName();
-
-				if (!behaviorSelectionTree || *behaviorSelectionTree == '\0')
-					SetInitialBehaviorAndCharacter();
-			}
-		}
+		SetInitialBehaviorAndCharacter();
 	}
 
 	m_pPreviousBehavior = 0;
@@ -1039,7 +1023,10 @@ void CAIHandler::SetBehavior(const char* szNextBehaviorName, const IAISignalExtr
 	m_sBehaviorName = szNextBehaviorName;
 	m_pBehavior = pNextBehavior;
 
-	m_pScriptObject->SetValue("Behavior", m_pBehavior);
+	if (m_pScriptObject)
+	{
+		m_pScriptObject->SetValue("Behavior", m_pBehavior);
+	}
 
 	gEnv->pAISystem->Record(aiObject, IAIRecordable::E_BEHAVIORSELECTED, m_sBehaviorName);
 
@@ -1092,7 +1079,7 @@ void CAIHandler::SetBehavior(const char* szNextBehaviorName, const IAISignalExtr
 		{
 			if (IAIActor* actor = aiObject->CastToIAIActor())
 			{
-				// TODO(márcio): Save a ref here instead of going around the world to get to the other side
+				// TODO(mÃ¡rcio): Save a ref here instead of going around the world to get to the other side
 				const char* currentName = proxy->GetCurrentBehaviorName();
 				const char* previousName = proxy->GetPreviousBehaviorName();
 
@@ -1145,7 +1132,7 @@ void CAIHandler::FindOrLoadBehavior(const char* szBehaviorName, SmartScriptTable
 			//fixme - problem with reloading!!!!
 			gEnv->pScriptSystem->ExecuteFile(szAIBehaviorFileName, true, true);
 
-			// Márcio: We need to load base behaviors here too!
+			// MÃ¡rcio: We need to load base behaviors here too!
 		}
 
 		if (!m_pBehaviorTable->GetValue(szBehaviorName, pBehaviorTable))
@@ -1243,7 +1230,7 @@ IActor* CAIHandler::GetActor() const
 	CRY_ASSERT(m_pEntity);
 	if (!m_pEntity)
 		return NULL;
-	IActorSystem* pASystem = gEnv->pGame->GetIGameFramework()->GetIActorSystem();
+	IActorSystem* pASystem = gEnv->pGameFramework->GetIActorSystem();
 	if (!pASystem)
 		return NULL;
 	return pASystem->GetActor(m_pEntity->GetId());

@@ -3,7 +3,7 @@
 #pragma once
 
 #include <QAbstractItemModel>
-#include "ATLControlsModel.h"
+#include "ACETypes.h"
 
 class QVBoxLayout;
 class QFrame;
@@ -12,15 +12,14 @@ class QTreeView;
 
 namespace ACE
 {
-class CATLControl;
+class CAudioControl;
 class IAudioSystemEditor;
 
-class QConnectionModel : public QAbstractItemModel, public IATLControlModelListener
+class QConnectionModel : public QAbstractItemModel
 {
 public:
 	QConnectionModel();
-	~QConnectionModel();
-	void Init(CATLControl* pControl, const string& group);
+	void Init(CAudioControl* pControl);
 
 	enum EConnectionModelRoles
 	{
@@ -29,18 +28,15 @@ public:
 
 	enum EConnectionModelColumns
 	{
-		eConnectionModelColoums_Name = 0,
-		eConnectionModelColoums_Path,
-		eConnectionModelColoums_Size,
+		eConnectionModelColumns_Name = 0,
+		eConnectionModelColumns_Path,
+		eConnectionModelColumns_Size,
 	};
 
 	//////////////////////////////////////////////////////////
 	// QAbstractTableModel implementation
-	virtual int rowCount(const QModelIndex& parent) const override;
-	virtual int columnCount(const QModelIndex& parent) const override
-	{
-		return eConnectionModelColoums_Size;
-	};
+	virtual int             rowCount(const QModelIndex& parent) const override;
+	virtual int             columnCount(const QModelIndex& parent) const override;
 	virtual QVariant        data(const QModelIndex& index, int role) const override;
 	virtual QVariant        headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 	virtual Qt::ItemFlags   flags(const QModelIndex& index) const override;
@@ -50,13 +46,7 @@ public:
 	virtual QStringList     mimeTypes() const override;
 	virtual bool            dropMimeData(const QMimeData* pData, Qt::DropAction action, int row, int column, const QModelIndex& parent) override;
 	virtual Qt::DropActions supportedDropActions() const override;
-	//////////////////////////////////////////////////////////
-
-	//////////////////////////////////////////////////////////
-	// IATLControlModelListener implementation
-	virtual void OnConnectionAdded(CATLControl* pControl, IAudioSystemItem* pMiddlewareControl);
-	virtual void OnConnectionRemoved(CATLControl* pControl, IAudioSystemItem* pMiddlewareControl);
-	virtual void OnControlModified(CATLControl* pControl);
+	virtual bool            setData(const QModelIndex& index, const QVariant& value, int role) override;
 	//////////////////////////////////////////////////////////
 
 private:
@@ -64,10 +54,10 @@ private:
 	void ResetCache();
 	void DecodeMimeData(const QMimeData* pData, std::vector<CID>& ids) const;
 
-	CATLControl*               m_pControl;
+	CAudioControl*             m_pControl;
 	IAudioSystemEditor*        m_pAudioSystem;
-	string                     m_group;
 	std::vector<ConnectionPtr> m_connectionsCache;
+	std::vector<QString>       m_platformNames;
 };
 
 }

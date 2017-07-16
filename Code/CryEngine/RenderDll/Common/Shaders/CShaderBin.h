@@ -250,8 +250,11 @@ class CShaderManBin
 	bool              SaveBinShaderLocalInfo(SShaderBin* pBin, uint32 dwName, uint64 nMaskGenFX, TArray<int32>& Funcs, std::vector<SFXParam>& Params, std::vector<SFXSampler>& Samplers, std::vector<SFXTexture>& Textures);
 	SParamCacheInfo*  GetParamInfo(SShaderBin* pBin, uint32 dwName, uint64 nMaskGenFX);
 
+<<<<<<< HEAD
 	void              AddGenMacroses(SShaderGen* shG, CParserBin& Parser, uint64 nMaskGen);
 
+=======
+>>>>>>> upstream/stabilisation
 	bool              ParseBinFX_Global_Annotations(CParserBin& Parser, SParserFrame& Frame, bool* bPublic, CCryNameR techStart[2]);
 	bool              ParseBinFX_Global(CParserBin& Parser, SParserFrame& Frame, bool* bPublic, CCryNameR techStart[2]);
 	bool              ParseBinFX_Sampler_Annotations_Script(CParserBin& Parser, SParserFrame& Frame, STexSamplerFX* pSampler);
@@ -307,6 +310,7 @@ public:
 	void             mfRemoveFXParams(CShader* pSH);
 	int              mfSizeFXParams(uint32& nCount);
 	void             mfReleaseFXParams();
+	void             AddGenMacros(SShaderGen* shG, CParserBin& Parser, uint64 nMaskGen);
 
 	void             InvalidateCache(bool bIncludesOnly = false);
 

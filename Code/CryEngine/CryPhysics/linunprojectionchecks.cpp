@@ -299,7 +299,8 @@ int tri_box_lin_unprojection(unprojection_mode *pmode, const triangle *ptri,int 
 			t0.set(dp_x_edge1*ncontact, ncontact.len2()*tmax.y); t0.y = 1.0/t0.y;
 			pcontact->t = tmax.x*t0.y*ncontact.len2();
 			pcontact->pt = ptri->pt[i] + (ptri->pt[inc_mod3[i]]-ptri->pt[i])*t0.x*t0.y + pmode->dir*pcontact->t;
-			pcontact->n = (ncontact*pbox->Basis)*sgnnz((pt[i]-pt[dec_mod3[i]])*ncontact);
+			pcontact->n = ncontact*pbox->Basis;
+			pcontact->n *= sgnnz(pcontact->n*(pbox->center-pcontact->pt));
 			pcontact->iFeature[0] = 0xA0 | i;
 			pcontact->iFeature[1] = 0x20 | idbest&0xF;
 	}
@@ -933,7 +934,7 @@ int box_box_lin_unprojection(unprojection_mode *pmode, const box *pbox1,int iFea
 		pt0[idir0] += t0.x*t0.y;
 		bContact = inrange(t0.x*t0.y,(real)0,size[0][idir0]*2) & isneg(fabs_tpl(axes[idir1]*(pt0+dir[0]*pcontact->t-center[0]))-size[1][idir1]);
 		pcontact->pt = pbox1->center + pt0*pbox1->Basis + pmode->dir*pcontact->t;
-		pcontact->n = (n*pbox1->Basis)*sgnnz(n*center[0]);
+		pcontact->n = (n*pbox1->Basis)*sgnnz(n*(center[0]-dir[0]*pcontact->t));
 		pcontact->iFeature[0] = 0x20 | idir0<<2|isg0.y+1|isg0.x+1>>1;
 		pcontact->iFeature[1] = 0x20 | idir1<<2|isg1.y+1|isg1.x+1>>1;
 	} else { // face-vertex
@@ -1280,9 +1281,13 @@ int box_cylinder_lin_unprojection(unprojection_mode *pmode, const box *pbox,int 
 			isg.Set((idbest<<1&2)-1,(idbest&2)-1,(idbest>>1&2)-1);
 			n = -cross_with_ort(axis,ic.z);
 			pt[ic.z]=0; pt[ic.x]=size[ic.x]*isg.x; pt[ic.y]=size[ic.y]*isg.y;
-			t0.set(((center-pt)*tmin.y-dir*tmin.x ^ axis)*n, n.len2()*tmin.y); t0.y=(real)1.0/t0.y;
-			pt[ic.z] = (t0.x*=t0.y);
-			pcontact->t = tmin.x*t0.y*n.len2();
+			t0.set(((center-pt)*tmin.y-dir*tmin.x ^ axis)*n, n.len2()*tmin.y); 
+			if (fabs(t0.y) > 1e-10f) {
+				t0.y = (real)1.0/t0.y;
+				pt[ic.z] = (t0.x*=t0.y);
+				pcontact->t = tmin.x*t0.y*n.len2();
+			} else
+				pcontact->t = tmin.val();
 			pt += dir*pcontact->t;
 			bContact = isneg(fabs_tpl(t0.x)-size[ic.z]-e) & isneg(fabs_tpl((pt-center)*axis)-hh-e);
 			pcontact->pt = pt*pbox->Basis + pbox->center;
@@ -1458,16 +1463,35 @@ int box_cylinder_lin_unprojection(unprojection_mode *pmode, const box *pbox,int 
 		}
 	}
 
-	if (bContact) {
+	if (bContact && (!parea || parea->npt<2)) {
 		// make sure contact point lies on primitives (there might be false hits if they were initially separated)
-		e = min(min(min(size.x,size.y),size.z),r)*0.05f;
+		e = 1.1f;
 		pt = (pbox->Basis*(pcontact->pt-pbox->center-pmode->dir*pcontact->t)).abs();
-		bContact = inrange(max(-e,pt.x-size.x) + max(-e,pt.y-size.y) + max(-e,pt.z-size.z), e*-2.99f, e*3.0f);
+		bContact = isneg(max(max(pt.x-size.x*e,pt.y-size.y*e),pt.z-size.z*e));
 		c = pcontact->pt-pcyl->center; nlen = c*pcyl->axis;
-		bContact &= inrange(max(-e*pcyl->r,(fabs_tpl(nlen)-pcyl->hh)*pcyl->r) + max(-e*pcyl->r,(c-pcyl->axis*nlen).len2()-sqr(pcyl->r)), 
-												e*-1.99f*pcyl->r, e*2.0f*pcyl->r);
+		bContact &= isneg(max(fabs_tpl(nlen)-pcyl->hh*e, (c-pcyl->axis*nlen).len2() - sqr(pcyl->r*e)));
 		if (!bContact)
 			return 0;
+	}
+
+	if (bContact & bFindMinUnproj && parea && parea->npt<2) {
+		Vec3 rdown = pcontact->pt-pcyl->center;	rdown -= pcyl->axis*(pcyl->axis*rdown);
+		Vec3r org = center+pbox->Basis*rdown;
+		quotient tray[2] = { quotient(-pcyl->hh), quotient(pcyl->hh) };
+		for(i=0; i<3; i++) {
+			j = sgnnz(axis[i]);
+			tray[0] = max(tray[0], quotient(-size[i]-org[i]*j,axis[i]*j));
+			tray[1] = min(tray[1], quotient( size[i]-org[i]*j,axis[i]*j));
+		}
+		if (tray[1]-tray[0] > pcyl->hh) {
+			parea->type = geom_contact_area::polyline;
+			for(i=0;i<2;i++) 
+				parea->pt[i] = pcyl->center + rdown + pcyl->axis*tray[i].val() + pmode->dir*pcontact->t;
+			parea->n1 = rdown.normalized();
+			parea->piFeature[1][0]=parea->piFeature[1][1] = 0x20; 
+			parea->piFeature[0][0]=parea->piFeature[0][1] = pcontact->iFeature[0];
+			parea->npt = 2;
+		}
 	}
 
 	return bContact|(pmode->bCheckContact^1);
@@ -1631,6 +1655,15 @@ int box_capsule_lin_unprojection(unprojection_mode *pmode, const box *pbox,int i
 	int bContact0,bContact1,bContact2;
 	sphere sph;
 	pcontact->t = 0;
+	#define check_cap(prim,pprim,iend) \
+		sph.center = pcaps->center+pcaps->axis*pcaps->hh*(iend*2-3); sph.r = pcaps->r;	pmode->dir.zero(); \
+		if (bContact##iend = prim##_sphere_lin_unprojection(pmode, pprim,iFeature1, &sph,-1, &capcont,parea))	\
+			if (capcont.n*pcaps->axis*(iend*2-3)*pcaps->hh > pcaps->hh*0.1f) {	\
+				pmode->dir = pcaps->axis*(3-iend*2); \
+				if (bContact##iend = prim##_sphere_lin_unprojection(pmode, pprim,iFeature1, &sph,-1, &capcont,parea) && (!pcontact->t || capcont.t<pcontact->t))	\
+					*pcontact = capcont, dir_best = pmode->dir;	\
+			}	else if (bContact##iend = capcont.t>pcontact->t)	\
+				*pcontact = capcont, dir_best = pmode->dir;
 
 	if (pmode->dir.len2()==0) {
 		Vec3 dir_best(ZERO);
@@ -1640,14 +1673,8 @@ int box_capsule_lin_unprojection(unprojection_mode *pmode, const box *pbox,int i
 		else
 			pcontact->t = 0;
 		tcyl = pcontact->t;
-		sph.center = pcaps->center-pcaps->axis*pcaps->hh; sph.r = pcaps->r;	pmode->dir.zero();
-		if ((bContact1 = box_sphere_lin_unprojection(pmode, pbox,iFeature1, &sph,-1, &capcont,parea)) && 
-			  (capcont.t>pcontact->t || capcont.n*pcaps->axis>0))
-			*pcontact = capcont, dir_best = pmode->dir;
-		sph.center = pcaps->center+pcaps->axis*pcaps->hh;	pmode->dir.zero();
-		if ((bContact2 = box_sphere_lin_unprojection(pmode, pbox,iFeature1, &sph,-1, &capcont,parea)) && 
-				(capcont.t>pcontact->t || capcont.n*pcaps->axis<0))
-			*pcontact = capcont, dir_best = pmode->dir;
+		check_cap(box,pbox,1)
+		check_cap(box,pbox,2)
 		pmode->dir = dir_best;
 	}	else {
 		bContact0 = box_cylinder_lin_unprojection(pmode, pbox,iFeature1, pcaps,0x43, pcontact,parea);
@@ -1865,7 +1892,7 @@ int cyl_cyl_lin_unprojection(unprojection_mode *pmode, const cylinder *pcyl1,int
 		n = axis[0]*(axis[0]*axis[1]) - axis[1];
 		if (n.len2()>sqr((real)0.01))
 			nlen = n.len();
-		else { // in case of degenerate n (ño-axis cylinders) mask it to point to center, not to plane
+		else { // in case of degenerate n (co-axis cylinders) mask it to point to center, not to plane
 			n = center[1]-center[0]; n -= pcyl[icyl]->axis*(n*pcyl[icyl]->axis);
 			if (n.len2()>0.0001f)
 				nlen = n.len();
@@ -2133,7 +2160,7 @@ int cyl_cyl_lin_unprojection(unprojection_mode *pmode, const cylinder *pcyl1,int
 			t1.set((dp^pcyl1->axis)*axisx, (real)1);//sina);
 			//pcontact->t = tmax.x*t0.y;
 			pcontact->pt = pcyl2->center + pcyl2->axis*t1.x;//val();
-			pcontact->n = axisx*sgnnz(axisx*(pcyl2->center-pcyl1->center));
+			pcontact->n = axisx*sgnnz(axisx*dp);
 			pcontact->pt -= pcontact->n*pcyl2->r;
 			pcontact->iFeature[0] = pcontact->iFeature[1] = 0x40;
 			break;
@@ -2153,7 +2180,7 @@ int cyl_cyl_lin_unprojection(unprojection_mode *pmode, const cylinder *pcyl1,int
 		parea->npt = 0;
 		dc = pcyl[0]->center+pmode->dir*pcontact->t-pcyl[1]->center;
 		if (sqr(sina) < (1-pmode->maxcos)*2) {
-			parea->n1 = pcontact->n;
+			parea->n1 = -pcontact->n;
 			if (fabs_tpl(fabs_tpl(dc*pcyl[0]->axis)-(pcyl[0]->hh+pcyl[1]->hh)) < min(pcyl[0]->hh,pcyl[1]->hh)*0.05f*(bCapped[0]&bCapped[1]))	{	
 				// check for cap-cap area contact
 				i = -sgnnz(pcyl[0]->axis*dc); j = sgnnz(pcyl[1]->axis*dc);
@@ -2272,16 +2299,8 @@ int cylinder_capsule_lin_unprojection(unprojection_mode *pmode, const cylinder *
 		if (bContact0 = cyl_cyl_lin_unprojection(pmode, pcyl,iFeature1, pcaps,0x43, pcontact,parea))
 			dir_best = pmode->dir;
 		tcyl = pcontact->t;
-		sph.center = pcaps->center-pcaps->axis*pcaps->hh; sph.r = pcaps->r;	pmode->dir.zero();
-		if ((bContact1 = cylinder_sphere_lin_unprojection(pmode, pcyl,iFeature1, &sph,-1, &capcont,parea)) && 
-			  (capcont.t>pcontact->t || capcont.n*pcaps->axis>0))
-			*pcontact = capcont, dir_best = pmode->dir;
-		else bContact1=0;
-		sph.center = pcaps->center+pcaps->axis*pcaps->hh;	pmode->dir.zero();
-		if ((bContact2 = cylinder_sphere_lin_unprojection(pmode, pcyl,iFeature1, &sph,-1, &capcont,parea)) && 
-				(capcont.t>pcontact->t || capcont.n*pcaps->axis<0))
-			*pcontact = capcont, dir_best = pmode->dir;
-		else bContact2=0;
+		check_cap(cylinder,pcyl,1)
+		check_cap(cylinder,pcyl,2)
 		pmode->dir = dir_best;
 	}	else {
 		bContact0 = cyl_cyl_lin_unprojection(pmode, pcyl,iFeature1, pcaps,0x43, pcontact,parea);

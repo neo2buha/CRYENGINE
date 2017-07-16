@@ -14,7 +14,7 @@ bool CLocalDatagramSocket::Init(TLocalNetAddress addr)
 {
 	NET_ASSERT(0 == m_addr);
 	m_addr = addr;
-	ScopedSwitchToGlobalHeap globalHeap;
+
 	if (!m_pManager)
 		m_pManager = new CManager();
 	return m_pManager->Register(this);
@@ -36,7 +36,7 @@ ESocketError CLocalDatagramSocket::Send(const uint8* pBuffer, size_t nLength, co
 	if (m_isDead)
 		return eSE_MiscFatalError;
 
-	const TLocalNetAddress* addr = boost::get<const TLocalNetAddress>(&to);
+	const TLocalNetAddress* addr = stl::get_if<TLocalNetAddress>(&to);
 	if (!addr)
 		return eSE_Ok; // unreachable address will clobber udp sending
 
@@ -150,8 +150,6 @@ CLocalDatagramSocket* CLocalDatagramSocket::CManager::GetSocket(TLocalNetAddress
 
 CLocalDatagramSocket::SPacket* CLocalDatagramSocket::CManager::AllocPacket()
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	SPacket* pPacket;
 	if (m_freePackets.empty())
 		pPacket = new SPacket;

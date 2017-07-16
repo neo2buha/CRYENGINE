@@ -13,6 +13,7 @@
 #include <CrySerialization/IArchive.h>
 #include <CryDynamicResponseSystem/IDynamicResponseSystem.h>
 #include <CrySystem/TimeValue.h>
+#include <CryAudio/IAudioInterfacesCommonData.h>
 
 #if defined (DRS_COLLECT_DEBUG_DATA)
 	#include "ResponseSystemDebugDataProvider.h"
@@ -34,23 +35,32 @@ class CDialogLineDatabase;
 class CResponseActor final : public DRS::IResponseActor
 {
 public:
-	CResponseActor(const CHashedString name, EntityId linkedEntityID);
-	virtual ~CResponseActor();
+	CResponseActor(const string& name, EntityId linkedEntityID, const char* szGlobalVariableCollectionToUse);
+	virtual ~CResponseActor() override;
 
 	//////////////////////////////////////////////////////////
 	// IResponseActor implementation
-	virtual const CHashedString&       GetName() const override;
-	virtual CVariableCollection*       GetLocalVariables() override       { return m_pLocalVariables; }
-	virtual const CVariableCollection* GetLocalVariables() const override { return m_pLocalVariables; }
+	virtual const string&              GetName() const override { return m_name; }
+	virtual CVariableCollection*       GetLocalVariables() override;
+	virtual const CVariableCollection* GetLocalVariables() const override;
 	virtual EntityId                   GetLinkedEntityID() const override { return m_linkedEntityID; }
 	virtual IEntity*                   GetLinkedEntity() const override;
-	virtual DRS::SignalId              QueueSignal(const CHashedString& signalName, DRS::IVariableCollectionSharedPtr pSignalContext = nullptr, DRS::IResponseManager::IListener* pSignalListener = nullptr) override;
-
+	virtual void                       SetAuxAudioObjectID(CryAudio::AuxObjectId overrideAuxProxy) override { m_auxAudioObjectIdToUse = overrideAuxProxy; }
+	virtual CryAudio::AuxObjectId      GetAuxAudioObjectID() const override { return m_auxAudioObjectIdToUse; }
+	virtual DRS::SignalInstanceId      QueueSignal(const CHashedString& signalName, DRS::IVariableCollectionSharedPtr pSignalContext = nullptr, DRS::IResponseManager::IListener* pSignalListener = nullptr) override;
 	//////////////////////////////////////////////////////////
 
+	const CHashedString&               GetNameHashed() const { return m_nameHashed; }
+	const CHashedString&               GetCollectionName() const { return m_variableCollectionName; }
+	VariableCollectionSharedPtr        GetNonGlobalVariableCollection() { return m_pNonGlobalVariableCollection; }  //for editor only
+
 private:
-	const EntityId       m_linkedEntityID;
-	CVariableCollection* m_pLocalVariables;
+	const EntityId              m_linkedEntityID;
+	const CHashedString         m_nameHashed;
+	const CHashedString         m_variableCollectionName;
+	const string                m_name;
+	VariableCollectionSharedPtr m_pNonGlobalVariableCollection;
+	CryAudio::AuxObjectId       m_auxAudioObjectIdToUse;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -59,13 +69,14 @@ class CResponseSystem final : public DRS::IDynamicResponseSystem, public ISystem
 {
 public:
 	CResponseSystem();
-	virtual ~CResponseSystem();
+	virtual ~CResponseSystem() override;
 
 	static CResponseSystem* GetInstance() { return s_pInstance; }
+	static CryGUID GetSchematycPackageGUID() { return "981168e2-f16d-46b7-bfaa-e11966204d47"_cry_guid; }
 
 	//////////////////////////////////////////////////////////
 	// DRS::IDynamicResponseSystem implementation
-	virtual bool                                     Init(const char* szFilesFolder) override;
+	virtual bool                                     Init() override;
 	virtual bool                                     ReInit() override;
 	virtual void                                     Update() override;
 
@@ -77,9 +88,9 @@ public:
 	virtual void                                     ReleaseVariableCollection(DRS::IVariableCollection* pToBeReleased) override;
 	virtual DRS::IVariableCollectionSharedPtr        CreateContextCollection() override;
 
-	virtual void                                     CancelSignalProcessing(const CHashedString& signalName, DRS::IResponseActor* pSender = nullptr) override;
+	virtual bool                                     CancelSignalProcessing(const CHashedString& signalName, DRS::IResponseActor* pSender = nullptr, DRS::SignalInstanceId instanceToSkip = DRS::s_InvalidSignalId) override;
 
-	virtual CResponseActor*                          CreateResponseActor(const CHashedString& pActorName, EntityId entityID = INVALID_ENTITYID) override;
+	virtual CResponseActor*                          CreateResponseActor(const char* szActorName, EntityId entityID = INVALID_ENTITYID, const char* szGlobalVariableCollectionToUse = nullptr) override;
 	virtual bool                                     ReleaseResponseActor(DRS::IResponseActor* pActorToFree) override;
 	virtual CResponseActor*                          GetResponseActor(const CHashedString& actorName) override;
 
@@ -90,10 +101,13 @@ public:
 	virtual CResponseManager*                        GetResponseManager() const override    { return m_pResponseManager; }
 	virtual CSpeakerManager*                         GetSpeakerManager() const override     { return m_pSpeakerManager; }
 
+	virtual DRS::ValuesListPtr                       GetCurrentState(uint32 saveHints) const override;
+	virtual void                                     SetCurrentState(const DRS::ValuesList& outCollectionsList) override;
 	virtual void                                     Serialize(Serialization::IArchive& ar) override;
+
 #if !defined(_RELEASE)
-	virtual void                                     SetCurrentDrsUserName(const char* szNewDrsUserName) override;
-	virtual const char*                              GetCurrentDrsUserName() const override { return m_currentDrsUserName.c_str(); }
+	virtual void        SetCurrentDrsUserName(const char* szNewDrsUserName) override;
+	virtual const char* GetCurrentDrsUserName() const override { return m_currentDrsUserName.c_str(); }
 	string m_currentDrsUserName;
 #endif
 	//////////////////////////////////////////////////////////
@@ -103,9 +117,11 @@ public:
 	virtual void OnSystemEvent(ESystemEvent event, UINT_PTR pWparam, UINT_PTR pLparam) override;
 	//////////////////////////////////////////////////////////
 
+	VariableCollectionSharedPtr CreateLocalCollection(const string& name);  //remark: name not really relevant, since we do not allow GetCollectionByName for local collections
+
 	CVariableCollectionManager* GetVariableCollectionManager() const { return m_pVariableCollectionManager; }
 	//we store the current time for the DRS ourselves in a variable, so that we can use this variable in conditions and it allows us to save/load/modify the current DRS time easily
-	float                       GetCurrentDrsTime()                  { return m_CurrentTime.GetSeconds(); }
+	float                       GetCurrentDrsTime() const            { return m_currentTime.GetSeconds(); }
 
 #if defined(DRS_COLLECT_DEBUG_DATA)
 	CResponseSystemDebugDataProvider m_responseSystemDebugDataProvider;
@@ -115,7 +131,9 @@ public:
 #endif
 
 private:
-	void _Reset(uint32 resetFlags);
+	void        RegisterSchematycEnvPackage(Schematyc::IEnvRegistrar& registrar);
+
+	void        InternalReset(uint32 resetFlags);
 
 	typedef std::vector<CResponseActor*> ResponseActorList;
 
@@ -125,13 +143,15 @@ private:
 	CDataImportHelper*          m_pDataImporterHelper;
 	CVariableCollectionManager* m_pVariableCollectionManager;
 	CResponseManager*           m_pResponseManager;
-	ResponseActorList           m_CreatedActors;
+	ResponseActorList           m_createdActors;
 	string                      m_filesFolder;
-	CTimeValue                  m_CurrentTime;
-	CVariable*                  m_pCurrentTimeVariable;
+	CTimeValue                  m_currentTime;
 	bool                        m_bIsCurrentlyUpdating;
 	uint32                      m_pendingResetRequest;
 
 	ICVar*                      m_pUsedFileFormat;
+	ICVar*                      m_pDataPath;
 };
+
+enum { ESYSTEM_EVENT_INITIALIZE_DRS = ESYSTEM_EVENT_GAME_POST_INIT_DONE };
 }

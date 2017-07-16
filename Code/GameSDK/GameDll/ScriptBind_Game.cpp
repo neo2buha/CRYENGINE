@@ -255,12 +255,12 @@ int CScriptBind_Game::CacheResource(IFunctionHandler *pH, const char* whoIsReque
 				}
 
 				CryFixedStringT<256> diffuseCubemap;
-				diffuseCubemap.Format("%s%s%s.%s",	PathUtil::AddSlash(PathUtil::GetPath(specularCubemap).c_str()).c_str(), 
+				diffuseCubemap.Format("%s%s%s.%s",	PathUtil::AddSlash(PathUtil::GetPathWithoutFilename(specularCubemap)).c_str(), 
 													PathUtil::GetFileName(specularCubemap).c_str(), "_diff", PathUtil::GetExt(specularCubemap));
 
 				// '\\' in filename causing texture duplication
 				string specularCubemapUnix = PathUtil::ToUnixPath(specularCubemap);
-				string diffuseCubemapUnix = PathUtil::ToUnixPath(diffuseCubemap.c_str());
+				string diffuseCubemapUnix = PathUtil::ToUnixPath(diffuseCubemap);
 
 				gameCache.CacheTexture(specularCubemapUnix.c_str(), resourceFlags);
 				gameCache.CacheTexture(diffuseCubemapUnix.c_str(), resourceFlags);
@@ -393,7 +393,7 @@ int CScriptBind_Game::IsPlayer(IFunctionHandler *pH, ScriptHandle entityId)
 	if(eId == LOCAL_PLAYER_ENTITY_ID)
 		return pH->EndFunction(true);
 
-	IActor *pActor = gEnv->pGame->GetIGameFramework()->GetIActorSystem()->GetActor(eId);
+	IActor *pActor = gEnv->pGameFramework->GetIActorSystem()->GetActor(eId);
 	return pH->EndFunction(pActor && pActor->IsPlayer());
 }
 
@@ -526,7 +526,7 @@ int CScriptBind_Game::IsMountedWeaponUsableWithTarget(IFunctionHandler *pH)
 		return pH->EndFunction();
 	}
 	
-	IGameFramework *pGameFramework = gEnv->pGame->GetIGameFramework();
+	IGameFramework *pGameFramework = gEnv->pGameFramework;
 	IItem* pItem = pGameFramework->GetIItemSystem()->GetItem(itemEntityId);
 	if (!pItem)
 	{
@@ -783,7 +783,7 @@ int CScriptBind_Game::DebugDrawPersistanceDirection(
 		int r, int g, int b,
 		float duration)
 {
-	IPersistantDebug* debugRenderer = gEnv->pGame->GetIGameFramework()->GetIPersistantDebug();
+	IPersistantDebug* debugRenderer = gEnv->pGameFramework->GetIPersistantDebug();
 	assert(debugRenderer != NULL);
 
 	debugRenderer->Begin("CScriptBind_Game::DebugDrawPersistanceDirection", false);

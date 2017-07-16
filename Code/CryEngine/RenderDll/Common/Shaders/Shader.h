@@ -15,11 +15,11 @@
 
 #include <CryString/CryName.h>
 #include <CryRenderer/IShader.h>
-#include "ShaderResources.h"
+#include "../CommonRender.h" // CBaseResource
 
 // bump this value up if you want to invalidate shader cache (e.g. changed some code or .ext file)
 // #### VIP NOTE ####: DON'T USE MORE THAN ONE DECIMAL PLACE!!!! else it doesn't work...
-#define FX_CACHE_VER     9.5
+#define FX_CACHE_VER     9.9
 #define FX_SER_CACHE_VER 1.0    // Shader serialization version (FX_CACHE_VER + FX_SER_CACHE_VER)
 
 // Maximum 1 digit here
@@ -33,10 +33,7 @@
 
 #define CB_PER_BATCH        0
 #define CB_PER_INSTANCE     1
-#define CB_PER_FRAME        2
 #define CB_PER_MATERIAL     3
-#define CB_PER_LIGHT        4
-#define CB_PER_SHADOWGEN    5
 #define CB_SKIN_DATA        6
 #define CB_INSTANCE_DATA    7
 #define CB_NUM              8
@@ -62,7 +59,7 @@
 
 struct SShaderPass;
 class CShader;
-class CRendElementBase;
+class CRenderElement;
 class CResFile;
 struct SEnvTexture;
 struct SParserFrame;
@@ -75,6 +72,7 @@ struct SCGParam;
 struct SSFXParam;
 struct SSFXSampler;
 struct SSFXTexture;
+class CShaderResources;
 
 enum eCompareFunc
 {
@@ -113,10 +111,10 @@ struct SFXSampler
 	CCryNameR           m_Values;      // Parameter values (after '=')
 	byte                m_eType;       // ESamplerType
 	short               m_nRegister[eHWSC_Num];
-	int                 m_nTexState;
+	SamplerStateHandle  m_nTexState;
 	SFXSampler()
 	{
-		m_nTexState = -1;
+		m_nTexState = EDefaultSamplerStates::Unspecified;
 		m_nArray = 0;
 		m_nFlags = 0;
 		for (int i = 0; i < eHWSC_Num; i++)
@@ -527,23 +525,6 @@ struct SCompressedData
 typedef std::map<int, struct SD3DShader*> FXDeviceShader;
 typedef FXDeviceShader::iterator          FXDeviceShaderItor;
 
-typedef std::map<int, SCompressedData>    FXCompressedShader;
-typedef FXCompressedShader::iterator      FXCompressedShaderItor;
-typedef std::map<CCryNameTSCRC, int>      FXCompressedShaderRemap;
-typedef FXCompressedShaderRemap::iterator FXCompressedShaderRemapItor;
-struct SHWActivatedShader
-{
-	bool                    m_bPersistent;
-	FXCompressedShader      m_CompressedShaders;
-	FXCompressedShaderRemap m_Remap;
-	~SHWActivatedShader();
-
-	int  Size();
-	void GetMemoryUsage(ICrySizer* pSizer) const;
-};
-typedef std::map<CCryNameTSCRC, SHWActivatedShader*> FXCompressedShaders;
-typedef FXCompressedShaders::iterator                FXCompressedShadersItor;
-
 #define CACHE_READONLY 0
 #define CACHE_USER     1
 
@@ -583,8 +564,6 @@ enum EHWSRMaskBit
 {
 	HWSR_FOG = 0,
 
-	HWSR_AMBIENT,
-
 	HWSR_ALPHATEST,
 	HWSR_ALPHABLEND,
 
@@ -592,19 +571,15 @@ enum EHWSRMaskBit
 	HWSR_MSAA_QUALITY1,
 	HWSR_MSAA_SAMPLEFREQ_PASS,
 
-	HWSR_HDR_MODE,      // deprecated: this flag is redundant and can be dropped, since rendering always HDR since CE3
-	HWSR_HDR_ENCODE,
-
-	HWSR_INSTANCING_ATTR,
+	HWSR_SECONDARY_VIEW,
 
 	HWSR_VERTEX_VELOCITY,
 	HWSR_SKELETON_SSD,
 	HWSR_SKELETON_SSD_LINEAR,
+	HWSR_COMPUTE_SKINNING,
 
 	HWSR_OBJ_IDENTITY,
-	HWSR_DETAIL_OVERLAY,
 	HWSR_NEAREST,
-	HWSR_NOZPASS,
 	HWSR_DISSOLVE,
 	HWSR_NO_TESSELLATION,
 	HWSR_PER_INSTANCE_CB_TEMP,
@@ -629,7 +604,6 @@ enum EHWSRMaskBit
 	HWSR_DECAL_TEXGEN_2D,
 
 	HWSR_SHADOW_MIXED_MAP_G16R16,
-	HWSR_GSM_COMBINED,
 	HWSR_HW_PCF_COMPARE,
 	HWSR_SHADOW_JITTERING,
 	HWSR_POINT_LIGHT,
@@ -641,7 +615,6 @@ enum EHWSRMaskBit
 	HWSR_PARTICLE_SHADOW,
 	HWSR_SOFT_PARTICLE,
 	HWSR_OCEAN_PARTICLE,
-	HWSR_GLOBAL_ILLUMINATION,
 	HWSR_ANIM_BLEND,
 	HWSR_ENVIRONMENT_CUBEMAP,
 	HWSR_MOTION_BLUR,
@@ -656,6 +629,9 @@ enum EHWSRMaskBit
 	HWSR_VOLUMETRIC_FOG,
 
 	HWSR_REVERSE_DEPTH,
+
+	HWSR_PROJECTION_MULTI_RES,
+	HWSR_PROJECTION_LENS_MATCHED,
 	HWSR_MAX
 };
 
@@ -677,6 +653,7 @@ extern uint64 g_HWSR_MaskBit[HWSR_MAX];
 #define HWSG_NOISE                0x10000
 #define HWSG_PRECACHEPHASE        0x20000
 #define HWSG_FP_EMULATION         0x40000
+#define HWSG_GS_MULTIRES          0x80000
 
 // HWShader per-instance Modificator flags (SHWSInstance::m_MDMask)
 // Vertex shader specific
@@ -724,6 +701,9 @@ public:
 	static struct SD3DShader* s_pCurHS;
 	static struct SD3DShader* s_pCurCS;
 
+	static class CHWShader* s_pCurHWVS;
+	static char *s_GS_MultiRes_NV;
+
 	string                    m_Name;
 	string                    m_NameSourceFX;
 	string                    m_EntryFunc;
@@ -736,7 +716,7 @@ public:
 	uint32                    m_nPreprocessFlags;
 	int                       m_nFrame;
 	int                       m_nFrameLoad;
-	int                       m_Flags;
+	uint32                    m_Flags;
 	uint32                    m_CRC32;
 	uint32                    m_dwShaderType;
 
@@ -777,13 +757,13 @@ public:
 	virtual const char* mfGetEntryName() = 0;
 	virtual void        mfUpdatePreprocessFlags(SShaderTechnique* pTech) = 0;
 	virtual bool        mfFlushCacheFile() = 0;
-	virtual bool        mfPrecache(SShaderCombination& cmb, bool bForce, bool bFallback, bool bCompressedOnly, CShader* pSH, CShaderResources* pRes) = 0;
+	virtual bool        mfPrecache(SShaderCombination& cmb, bool bForce, bool bFallback, CShader* pSH, CShaderResources* pRes) = 0;
 
 	virtual bool        Export(SShaderSerializeContext& SC) = 0;
 	static CHWShader*   Import(SShaderSerializeContext& SC, int nOffs, uint32 CRC32, CShader* pSH);
 
 	// Vertex shader specific functions
-	virtual EVertexFormat mfVertexFormat(bool& bUseTangents, bool& bUseLM, bool& bUseHWSkin) = 0;
+	virtual InputLayoutHandle mfVertexFormat(bool& bUseTangents, bool& bUseLM, bool& bUseHWSkin) = 0;
 
 	virtual const char*   mfGetActivatedCombinations(bool bForLevel) = 0;
 
@@ -805,8 +785,6 @@ public:
 	}
 
 	static const char*      GetCurrentShaderCombinations(bool bForLevel);
-	static bool             PreactivateShaders();
-	static void             RT_PreactivateShaders();
 
 	static byte*            mfIgnoreRemapsFromCache(int nRemaps, byte* pP);
 	static byte*            mfIgnoreBindsFromCache(int nParams, byte* pP);
@@ -825,8 +803,6 @@ public:
 	// Import/Export
 	static bool ImportSamplers(SShaderSerializeContext& SC, struct SCHWShader* pSHW, byte*& pData, std::vector<STexSamplerRT>& Samplers);
 	static bool ImportParams(SShaderSerializeContext& SC, SCHWShader* pSHW, byte*& pData, std::vector<SFXParam>& Params);
-
-	static FXCompressedShaders m_CompressedShaders;
 };
 
 inline void SortLightTypes(int Types[4], int nCount)
@@ -1046,7 +1022,6 @@ private:
 #define FHF_PUBLIC              0x400
 #define FHF_NOLIGHTS            0x800
 #define FHF_POSITION_INVARIANT  0x1000
-#define FHF_RE_CLOUD            0x20000
 #define FHF_TRANSPARENT         0x40000
 #define FHF_WASZWRITE           0x80000
 #define FHF_USE_GEOMETRY_SHADER 0x100000
@@ -1063,7 +1038,7 @@ struct SShaderTechnique
 	int                       m_Flags;     // Different flags (FHF_)
 	uint32                    m_nPreprocessFlags;
 	int8                      m_nTechnique[TTYPE_MAX]; // Next technique in sequence
-	TArray<CRendElementBase*> m_REs;                   // List of all render elements registered in the shader
+	TArray<CRenderElement*> m_REs;                   // List of all render elements registered in the shader
 	TArray<SHRenderTarget*>   m_RTargets;
 	float                     m_fProfileTime;
 
@@ -1140,7 +1115,7 @@ struct SShaderTechnique
 		}
 		for (uint32 i = 0; i < m_REs.Num(); i++)
 		{
-			CRendElementBase* pRE = m_REs[i];
+			CRenderElement* pRE = m_REs[i];
 			pRE->Release(false);
 		}
 		m_REs.Free();
@@ -1166,7 +1141,8 @@ enum EShaderDrawType
 	eSHDT_Fur,
 	eSHDT_NoDraw,
 	eSHDT_CustomDraw,
-	eSHDT_Sky
+	eSHDT_Sky,
+	eSHDT_DebugHelper,
 };
 
 // General Shader structure
@@ -1183,7 +1159,7 @@ public:
 	uint32                    m_nMDV;   // Vertex modificator flags
 	uint32                    m_NameShaderICRC;
 
-	EVertexFormat             m_eVertexFormat; // Base vertex format for the shader (see VertexFormats.h)
+	InputLayoutHandle         m_eVertexFormat; // Base vertex format for the shader (see VertexFormats.h)
 	ECull                     m_eCull;         // Global culling type
 
 	TArray<SShaderTechnique*> m_HWTechniques;    // Hardware techniques
@@ -1213,7 +1189,7 @@ public:
 		, m_Flags2(0)
 		, m_nMDV(0)
 		, m_NameShaderICRC(0)
-		, m_eVertexFormat(eVF_P3F_C4B_T2F)
+		, m_eVertexFormat(EDefaultInputLayouts::P3F_C4B_T2F)
 		, m_eCull((ECull) - 1)
 		, m_nMaskCB(0)
 		, m_eShaderType(eST_General)
@@ -1294,7 +1270,7 @@ public:
 		SShaderTechnique* pTech = m_HWTechniques[nTechnique];
 		return pTech->m_nTechnique[nRegisteredTechnique];
 	}
-	virtual TArray<CRendElementBase*>* GetREs(int nTech)
+	virtual TArray<CRenderElement*>* GetREs(int nTech)
 	{
 		if (nTech < 0)
 			nTech = 0;
@@ -1307,7 +1283,7 @@ public:
 	}
 	virtual int           GetTexId();
 	virtual unsigned int  GetUsedTextureTypes(void);
-	virtual EVertexFormat GetVertexFormat(void) { return m_eVertexFormat; }
+	virtual InputLayoutHandle GetVertexFormat(void) { return m_eVertexFormat; }
 	virtual uint64        GetGenerationMask()   { return m_nMaskGenFX; }
 	virtual ECull         GetCull(void)
 	{
@@ -1336,7 +1312,7 @@ public:
 
 	//=======================================================================================
 
-	bool              mfPrecache(SShaderCombination& cmb, bool bForce, bool bCompressedOnly, CShaderResources* pRes);
+	bool              mfPrecache(SShaderCombination& cmb, bool bForce, CShaderResources* pRes);
 
 	SShaderTechnique* mfFindTechnique(const CCryNameTSCRC& name)
 	{

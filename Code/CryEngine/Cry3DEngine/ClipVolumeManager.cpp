@@ -115,7 +115,7 @@ void CClipVolumeManager::UnregisterRenderNode(IRenderNode* pRenderNode)
 
 bool CClipVolumeManager::IsClipVolumeRequired(IRenderNode* pRenderNode) const
 {
-	const uint32 NoClipVolumeLights = DLF_SUN | DLF_REFLECTIVE_SHADOWMAP | DLF_ATTACH_TO_SUN;
+	const uint32 NoClipVolumeLights = DLF_SUN | DLF_ATTACH_TO_SUN;
 
 	const bool bForwardObject = (pRenderNode->m_nInternalFlags & IRenderNode::REQUIRES_FORWARD_RENDERING) != 0;
 	const EERType ertype = pRenderNode->GetRenderNodeType();
@@ -142,7 +142,7 @@ CClipVolume* CClipVolumeManager::GetClipVolumeByPos(const Vec3& pos, const IClip
 
 void CClipVolumeManager::GetMemoryUsage(class ICrySizer* pSizer) const
 {
-	pSizer->AddObject(this, sizeof(this));
+	pSizer->AddObject(this, sizeof(*this));
 	for (size_t i = 0; i < m_ClipVolumes.size(); ++i)
 		pSizer->AddObject(m_ClipVolumes[i].m_pVolume);
 }

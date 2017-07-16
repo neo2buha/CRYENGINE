@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include <CryAction/ILipSyncProvider.h>
+
 /// The CLipSyncProvider_TransitionQueue communicates with sound proxy to play synchronized facial animation directly on the transition queue
 class CLipSyncProvider_TransitionQueue : public ILipSyncProvider
 {
@@ -19,23 +21,22 @@ public:
 	explicit CLipSyncProvider_TransitionQueue(EntityId entityId);
 
 	// ILipSyncProvider
-	void RequestLipSync(IEntityAudioProxy* pProxy, const AudioControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
-	void StartLipSync(IEntityAudioProxy* pProxy, const AudioControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
-	void PauseLipSync(IEntityAudioProxy* pProxy, const AudioControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
-	void UnpauseLipSync(IEntityAudioProxy* pProxy, const AudioControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
-	void StopLipSync(IEntityAudioProxy* pProxy, const AudioControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
-	void UpdateLipSync(IEntityAudioProxy* pProxy, const AudioControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
+	void RequestLipSync(IEntityAudioComponent* pProxy, const CryAudio::ControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
+	void StartLipSync(IEntityAudioComponent* pProxy, const CryAudio::ControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
+	void PauseLipSync(IEntityAudioComponent* pProxy, const CryAudio::ControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
+	void UnpauseLipSync(IEntityAudioComponent* pProxy, const CryAudio::ControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
+	void StopLipSync(IEntityAudioComponent* pProxy, const CryAudio::ControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
+	void UpdateLipSync(IEntityAudioComponent* pProxy, const CryAudio::ControlId audioTriggerId, const ELipSyncMethod lipSyncMethod) override;
 	// ~ILipSyncProvider
 
 	void FullSerialize(TSerialize ser);
-	void GetEntityPoolSignature(TSerialize signature);
 
 private:
 	IEntity*            GetEntity();
 	ICharacterInstance* GetCharacterInstance();
-	void                FindMatchingAnim(const AudioControlId audioTriggerId, const ELipSyncMethod lipSyncMethod, ICharacterInstance& character, int* pAnimIdOut, CryCharAnimationParams* pAnimParamsOut) const;
+	void                FindMatchingAnim(const CryAudio::ControlId audioTriggerId, const ELipSyncMethod lipSyncMethod, ICharacterInstance& character, int* pAnimIdOut, CryCharAnimationParams* pAnimParamsOut) const;
 	void                FillCharAnimationParams(const bool isDefaultAnim, CryCharAnimationParams* pParams) const;
-	void                SynchronizeAnimationToSound(const AudioControlId audioTriggerId);
+	void                SynchronizeAnimationToSound(const CryAudio::ControlId audioTriggerId);
 
 private:
 	enum EState
@@ -65,7 +66,7 @@ private:
 
 	// Filled when animation is started:
 	uint32         m_nCurrentAnimationToken;
-	AudioControlId m_soundId;
+	CryAudio::ControlId m_soundId;
 };
 DECLARE_SHARED_POINTERS(CLipSyncProvider_TransitionQueue);
 
@@ -80,8 +81,6 @@ public:
 	virtual void                 PostInitClient(int channelId) override;
 	virtual bool                 ReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params) override;
 	virtual void                 PostReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params) override;
-	virtual bool                 GetEntityPoolSignature(TSerialize signature) override;
-	virtual void                 Release() override;
 	virtual void                 FullSerialize(TSerialize ser) override;
 	virtual bool                 NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int pflags) override;
 	virtual void                 PostSerialize() override;
@@ -91,10 +90,13 @@ public:
 	virtual void                 HandleEvent(const SGameObjectEvent& event) override;
 	virtual void                 ProcessEvent(SEntityEvent& event) override;
 	virtual void                 SetChannelId(uint16 id) override;
-	virtual void                 SetAuthority(bool auth) override;
 	virtual void                 PostUpdate(float frameTime) override;
 	virtual void                 PostRemoteSpawn() override;
 	// ~IGameObjectExtension
+
+	// IEntityComponent
+	virtual void OnShutDown() override;
+	// ~IEntityComponent
 
 private:
 	void InjectLipSyncProvider();

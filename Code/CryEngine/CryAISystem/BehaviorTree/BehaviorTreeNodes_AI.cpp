@@ -5,7 +5,7 @@
 
 #include "AIActor.h" // Big one, but needed for timestamp collection
 #include "Puppet.h"  // Big one, but needed for the posture manager
-#include "AIBubblesSystem/IAIBubblesSystem.h"
+#include "AIBubblesSystem/AIBubblesSystem.h"
 #include "AIGroup.h"
 #include "Group/GroupManager.h"
 #include <CryAISystem/BehaviorTree/Action.h>
@@ -24,10 +24,18 @@
 #include "TargetSelection/TargetTrackManager.h"
 #include "BehaviorTree/BehaviorTreeNodes_Helicopter.h"
 #include <CryString/CryName.h>
+<<<<<<< HEAD
 #include "ICryMannequin.h"
 #include <CryGame/IGameFramework.h>
 #include "BehaviorTreeManager.h"
 
+=======
+#include <CryGame/IGameFramework.h>
+#include "BehaviorTreeManager.h"
+
+#include <../CryAction/ICryMannequin.h>
+
+>>>>>>> upstream/stabilisation
 namespace
 {
 struct FireModeDictionary
@@ -2939,9 +2947,13 @@ private:
 #if !defined(SYS_ENV_AS_STRUCT)
 		assert(gEnv != NULL);
 #endif
-		assert(gEnv->pGame != NULL);
+		assert(gEnv->pGameFramework != NULL);
 
+<<<<<<< HEAD
 		IGameFramework* gameFramework = gEnv->pGame->GetIGameFramework();
+=======
+		IGameFramework* gameFramework = gEnv->pGameFramework;
+>>>>>>> upstream/stabilisation
 		IF_UNLIKELY (gameFramework == NULL)
 		{
 			return NULL;

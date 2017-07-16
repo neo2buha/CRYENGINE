@@ -9,7 +9,6 @@
 #include "UpdateAspectDataContext.h"
 #include "AutoFreeHandle.h"
 #include "Config.h"
-#include "Lobby/ICryMatchMakingPrivate.h"
 
 #include <CryGame/IGameFramework.h>       // LOCAL_PLAYER_ENTITY_ID
 #include <CryEntitySystem/IEntitySystem.h>
@@ -23,26 +22,29 @@
 	#include <CryRenderer/IRenderAuxGeom.h>
 #endif
 
+static uint8 GetDefaultProfileForAspect(EntityId id, EEntityAspects aspectID)
+{
+	IEntity* pEntity = gEnv->pEntitySystem->GetEntity(id);
+	if (!pEntity)
+	{
+		CRY_ASSERT_MESSAGE(gEnv->IsEditor(), "Trying to get default profile for aspect %d on unknown entity %d", aspectID, id);
+		return ~uint8(0);
+	}
+	INetEntity* pNetEntity = pEntity->GetNetEntity();
+	return pNetEntity ? pNetEntity->GetDefaultProfile(aspectID) : 0;
+}
+
+static void SetEntityAspectProfile(EntityId id, NetworkAspectType aspectBit, uint8 profile)
+{
+	CRY_ASSERT(0 == (aspectBit & (aspectBit - 1)));
+	IEntity* pEntity = gEnv->pEntitySystem->GetEntity(id);
+	if (INetEntity* pNetEntity = pEntity->GetNetEntity())
+		pNetEntity->SetAspectProfile(static_cast<EEntityAspects>(aspectBit), profile, true);
+}
+
 CNetContextState::CNetContextState(CNetContext* pContext, int token, CNetContextState* pPrev) : m_pMMM(new CMementoMemoryManager(string().Format("NetContextState[%d]", token)))
 {
 	MMM_REGION(m_pMMM);
-
-#if NETWORK_HOST_MIGRATION
-	bool migrating = false;
-
-	ICryLobby* pLobby = CNetwork::Get()->GetLobby();
-	if (pLobby)
-	{
-		ICryMatchMakingPrivate* pMatchMaking = static_cast<ICryMatchMakingPrivate*>(pLobby->GetMatchMaking());
-		if (pMatchMaking)
-		{
-			if (pMatchMaking->IsNubSessionMigrating())
-			{
-				migrating = true;
-			}
-		}
-	}
-#endif
 
 	m_pNetIDs.reset(new TNetIDMap);
 	m_pLoggedBreakage.reset(new TNetIntBreakDescriptionList);
@@ -60,56 +62,18 @@ CNetContextState::CNetContextState(CNetContext* pContext, int token, CNetContext
 	m_localPhysicsTime = m_pGameContext ? m_pGameContext->GetPhysicsTime() : 0.0f;
 	m_spawnedObjectId = 0;
 
-	if (pPrev)
+	if (pPrev && pPrev->m_vObjects.size())
 	{
-#if NETWORK_HOST_MIGRATION
-		if (migrating)
+		m_vObjects.resize(pPrev->m_vObjects.size());
+		if (m_multiplayer)
 		{
-			*m_pNetIDs.get() = *pPrev->m_pNetIDs.get();
-
-			if (pPrev->m_vObjects.size())
-			{
-				m_spawnedObjectId = pPrev->m_spawnedObjectId;
-				m_vObjects = pPrev->m_vObjects;
-				m_vObjectsEx = pPrev->m_vObjectsEx; // We're definitely multiplayer so no need to test
-
-				for (size_t i = 0; i < m_vObjectsEx.size(); i++)
-				{
-					for (int j = 0; j < NumAspects; j++)
-					{
-						m_vObjectsEx[i].vAspectData[j] = MMM().InvalidHdl;
-						m_vObjectsEx[i].vRemoteAspectData[j] = MMM().InvalidHdl;
-					}
-				}
-			}
+			m_vObjectsEx.resize(pPrev->m_vObjectsEx.size());
 		}
-		else
-#endif
+		for (size_t i = 0; i < m_vObjects.size(); i++)
 		{
-			if (pPrev->m_vObjects.size())
-			{
-				m_vObjects.resize(pPrev->m_vObjects.size());
-				if (m_multiplayer)
-				{
-					m_vObjectsEx.resize(pPrev->m_vObjectsEx.size());
-				}
-				for (size_t i = 0; i < m_vObjects.size(); i++)
-				{
-					m_vObjects[i].salt = pPrev->m_vObjects[i].salt + 2;
-					AddToFreeObjects(static_cast<uint16>(i));
-				}
-			}
+			m_vObjects[i].salt = pPrev->m_vObjects[i].salt + 2;
+			AddToFreeObjects(static_cast<uint16>(i));
 		}
-
-#if NETWORK_HOST_MIGRATION
-		// If we're changing context because of a host migration, we need to copy the list of removed static entities
-		// so that we can tell any clients who join after this point
-		if (migrating)
-		{
-			m_removedStaticEntities = pPrev->m_removedStaticEntities;
-			m_established = pPrev->m_established;
-		}
-#endif
 	}
 
 	extern void DownloadConfig();
@@ -207,7 +171,6 @@ void CNetContextState::ChangeSubscription(INetContextListenerPtr pListener, INet
 unsigned CNetContextState::ChangeSubscription(TSubscriptions& subscriptions, INetContextListenerPtr pListener, unsigned events)
 {
 	ASSERT_GLOBAL_LOCK;
-	ScopedSwitchToGlobalHeap useGlobalHeap;
 	for (TSubscriptions::iterator iter = subscriptions.begin(); iter != subscriptions.end(); ++iter)
 	{
 		if (iter->pListener == pListener)
@@ -308,10 +271,6 @@ void CNetContextState::SendRemoveStaticEntitiesTo(INetContextListenerPtr pListen
 void CNetContextState::SendBindEventsTo(INetContextListenerPtr pListener, bool alsoAuth)
 {
 	if (!m_pContext)
-	{
-		return;
-	}
-	if ((gEnv->bHostMigrating && gEnv->bMultiplayer))
 	{
 		return;
 	}
@@ -610,7 +569,7 @@ void CNetContextState::PropogateProfileChangesToGame()
 		for (TChangedProfiles::iterator it = m_changedProfiles.begin(); it != m_changedProfiles.end(); ++it)
 		{
 			ASSERT_PRIMARY_THREAD;
-			m_pGameContext->SetAspectProfile(m_vObjects[it->obj.GetID().id].userID, it->aspect, it->profile);
+			SetEntityAspectProfile(m_vObjects[it->obj.GetID().id].userID, it->aspect, it->profile);
 			UnlockObject(it->obj.GetID(), eCOL_GameDataSync);
 		}
 		m_changedProfiles.resize(0);
@@ -1110,7 +1069,7 @@ void CNetContextState::SetAspectProfile(EntityId id, NetworkAspectType aspectBit
 		// not sure if this is the correct thing to do, but should work
 		// if the object is not bound, allow the SetAspectProfile to succeed anyway
 		ASSERT_PRIMARY_THREAD;
-		m_pGameContext->SetAspectProfile(id, aspectBit, profile);
+		SetEntityAspectProfile(id, aspectBit, profile);
 	}
 	else
 	{
@@ -1118,7 +1077,7 @@ void CNetContextState::SetAspectProfile(EntityId id, NetworkAspectType aspectBit
 		if (obj.bOwned)
 		{
 			ASSERT_PRIMARY_THREAD;
-			m_pGameContext->SetAspectProfile(id, aspectBit, profile);
+			SetEntityAspectProfile(id, aspectBit, profile);
 			LockObject(netID, eCOL_GameDataSync);
 			lockedUpdate = true;
 		}
@@ -1505,7 +1464,8 @@ void CNetContextState::RebindObject(SNetObjectID netId, EntityId userId)
 		obj.refUserID = obj.userID = userId;
 
 		for (NetworkAspectID i = 0; i < NumAspects; ++i)
-			obj.vAspectProfiles[i] = obj.vAspectDefaultProfiles[i] = m_pGameContext->GetDefaultProfileForAspect(userId, 1 << i);
+			obj.vAspectProfiles[i] = obj.vAspectDefaultProfiles[i] = 
+				GetDefaultProfileForAspect(userId, static_cast<EEntityAspects>(1 << i));
 
 		// TODO: make sure only relevant to mp - Lin
 		if (m_multiplayer)
@@ -1544,11 +1504,6 @@ void CNetContextState::RebindObject(SNetObjectID netId, EntityId userId)
 
 void CNetContextState::UnbindStaticObject(EntityId id)
 {
-#if NETWORK_HOST_MIGRATION
-	// Add to the removed list so that we still have a valid list if we host migrate
-	stl::push_back_unique(m_removedStaticEntities, id);
-#endif
-
 	SNetObjectID netID = GetNetID(id);
 	if (netID)
 	{
@@ -1620,13 +1575,6 @@ bool CNetContextState::UnbindObject(SNetObjectID netID, uint32 flags)
 	event.id = netID;
 	event.userID = userId;
 	Broadcast(&event);
-
-#if NETWORK_HOST_MIGRATION
-	if (obj.spawnType == eST_Static)
-	{
-		stl::push_back_unique(m_removedStaticEntities, userId);
-	}
-#endif
 
 	if (flags & eUOF_CallGame)
 	{
@@ -1749,7 +1697,7 @@ bool CNetContextState::AllocateObject(EntityId userID, SNetObjectID netID, Netwo
 		for (NetworkAspectID i = 0; i < NumAspects; i++)
 		{
 			ASSERT_PRIMARY_THREAD;
-			profiles[i] = m_pGameContext->GetDefaultProfileForAspect(userID, 1 << i);
+			profiles[i] = GetDefaultProfileForAspect(userID, static_cast<EEntityAspects>(1 << i));
 			if (profiles[i] >= MaxProfilesPerAspect)
 			{
 #if ENABLE_DEBUG_KIT
@@ -1950,7 +1898,7 @@ bool CNetContextState::AllocateObject(EntityId userID, SNetObjectID netID, Netwo
 	NET_ASSERT(obj.salt == netID.salt);
 
 	IEntity* pEntity = gEnv->pEntitySystem->GetEntity(userID);
-	if (CVARS.LogLevel)
+	if (CVARS.LogLevel > 1)
 	{
 		NetLog("AllocateObject: userID:%.8x (%s) netID:%s aspectBits:%.2x [%s %s] controller:%p",
 		       userID,
@@ -2009,10 +1957,6 @@ bool CNetContextState::AllocateObject(EntityId userID, SNetObjectID netID, Netwo
 			}
 		};
 		objx.pPulseState = new CPriorityPulseStateWrapper();
-#if ENABLE_ASPECT_HASHING
-		for (int i = 0; i < NumAspects; i++)
-			objx.hash[i] = 0;
-#endif
 
 		if (obj.userID)
 		{
@@ -2618,16 +2562,26 @@ void CNetContextState::GC_ControlObject(SNetObjectID id, bool controlled, CNetOb
 	ASSERT_GLOBAL_LOCK;
 	ASSERT_PRIMARY_THREAD;
 	ENSURE_REALTIME;
-	if (m_vObjects[id.id].userID)
-		m_pGameContext->ControlObject(m_vObjects[id.id].userID, controlled);
+	if (const EntityId eid = m_vObjects[id.id].userID)
+	{
+		if (IEntity* pEntity = gEnv->pEntitySystem->GetEntity(eid))
+		{
+			pEntity->GetNetEntity()->SetAuthority(controlled);
+		}
+		m_pGameContext->ControlObject(eid, controlled);
+	}
 }
 
-void CNetContextState::GC_BoundObject(std::pair<EntityId, NetworkAspectType> p)
+void CNetContextState::GC_BoundObject(const EntityId eid)
 {
 	ASSERT_GLOBAL_LOCK;
 	ASSERT_PRIMARY_THREAD;
 	ENSURE_REALTIME;
-	m_pGameContext->BoundObject(p.first, p.second);
+
+	IEntity* pEntity = gEnv->pEntitySystem->GetEntity(eid);
+	CRY_ASSERT_MESSAGE(pEntity, "[net] notification of binding non existant entity %.8x received", eid);
+	if (INetEntity* pNetEntity = (pEntity ? pEntity->GetNetEntity() : nullptr))
+		pNetEntity->BecomeBound();
 }
 
 void CNetContextState::GC_SendPostSpawnEntities(CContextViewPtr pView)
@@ -2661,7 +2615,7 @@ void CNetContextState::GC_SetAspectProfile(NetworkAspectType aspect, uint8 profi
 	ENSURE_REALTIME;
 	ASSERT_PRIMARY_THREAD;
 	if (m_vObjects[netID.id].userID)
-		m_pGameContext->SetAspectProfile(m_vObjects[netID.id].userID, aspect, profile);
+		SetEntityAspectProfile(m_vObjects[netID.id].userID, aspect, profile);
 	UnlockObject(netID, eCOL_GameDataSync);
 }
 
@@ -2748,7 +2702,7 @@ void CNetContextState::GC_Lazy_TickEstablishers()
 {
 	_smart_ptr<CNetContextState> pThis = this;
 
-	if (!gEnv->pGame->GetIGameFramework()->GetNetContext())
+	if (!gEnv->pGameFramework->GetNetContext())
 	{
 		// Can get in here if the host leaves while we're in the middle of loading, need to abort the tick to avoid
 		// several tasks crashing
@@ -2961,115 +2915,6 @@ void CNetContextState::NC_RequestRemoteUpdate(EntityId id, NetworkAspectType asp
 	MarkObjectChanged(event.id, aspects);
 }
 
-#if NETWORK_HOST_MIGRATION
-void CNetContextState::CleanUnusedObjects()
-{
-	if ((gEnv->bHostMigrating && gEnv->bMultiplayer))
-	{
-		ClearFreeObjects();
-
-		for (size_t netID = 0; netID < m_vObjects.size(); netID++)
-		{
-			if (!m_vObjects[netID].bAllocated)
-			{
-				AddToFreeObjects(netID);
-			}
-		}
-	}
-}
-
-void CNetContextState::ServerTakeObjectOwnership()
-{
-	CRY_ASSERT(gEnv->bServer);
-	if (gEnv->bServer)
-	{
-	#if ENABLE_DEBUG_KIT
-		NetLog("CNetContextState::ServerTakeObjectOwnership: bHostMigrating=%d, bServer=%d", (gEnv->bHostMigrating && gEnv->bMultiplayer), gEnv->bServer);
-	#endif
-
-		if ((gEnv->bHostMigrating && gEnv->bMultiplayer))
-		{
-			CleanUnusedObjects();
-
-			for (size_t netID = 0; netID < m_vObjects.size(); netID++)
-			{
-				SContextObject& obj = m_vObjects[netID];
-
-				if (obj.bAllocated && !obj.bOwned)
-				{
-					SNetObjectID realNetID = GetNetID(obj.userID);
-
-					if (!realNetID || !GetContextObject(realNetID).main || IsDead())
-					{
-						continue;
-					}
-
-					obj.bOwned = true;
-					obj.pController = NULL;
-
-					UpdateAuthority(realNetID, false, false);
-				}
-			}
-		}
-	}
-}
-
-void CNetContextState::ClientUpdateObjectOwnership()
-{
-	if (!gEnv->bServer)
-	{
-	#if ENABLE_DEBUG_KIT
-		NetLog("CNetContextState::ClientUpdateObjectOwnership: bHostMigrating=%d, bServer=%d", (gEnv->bHostMigrating && gEnv->bMultiplayer), gEnv->bServer);
-	#endif
-
-		if ((gEnv->bHostMigrating && gEnv->bMultiplayer))
-		{
-			CleanUnusedObjects();
-
-			//-- There is only one subscription at this point, and it is the new server, not the old one.
-	#if ENABLE_DEBUG_KIT
-			NetLog("CNetContextState::ClientUpdateObjectOwnership: m_subscriptions.size() = %d", m_subscriptions.size());
-	#endif
-			INetContextListenerPtr pController = m_subscriptions[0].pListener;
-
-			for (size_t netID = 0; netID < m_vObjects.size(); netID++)
-			{
-				SContextObject& obj = m_vObjects[netID];
-
-				if (obj.bAllocated)
-				{
-					if (obj.bControlled)
-					{
-						//-- Client already controls this object
-	#if ENABLE_DEBUG_KIT
-						CryLog("[OWNERSHIP] Replace %s controller: %s -> none",
-						       obj.GetName(),
-						       obj.pController ? obj.pController->GetName().c_str() : "none");
-	#endif
-						obj.pController = NULL;
-					}
-					else
-					{
-						//-- external controller, so we need to update the controller to the new server
-	#if ENABLE_DEBUG_KIT
-						CryLog("[OWNERSHIP] Replace %s controller: %s -> %s",
-						       obj.GetName(),
-						       obj.pController ? obj.pController->GetName().c_str() : "none",
-						       pController ? pController->GetName().c_str() : "none");
-	#endif
-						obj.pController = NULL;
-						obj.pController = pController;
-					}
-
-					SNetObjectID realNetID = GetNetID(obj.userID);
-
-				}
-			}
-		}
-	}
-}
-#endif
-
 /*
  * Debug support routines go here
  */
@@ -3216,7 +3061,7 @@ void CNetContextState::NetDump(ENetDumpType type)
 							//IGameChannel* pGameChan = pChan ? pChan-> : NULL;
 							TNetChannelID chanid = pChan ? pChan->GetLocalChannelID() : 0;
 
-							NetLog("  %d %s %s flags:%d%d%d%d aspects:%.2x class %s channel=%p controlchan %d",
+							NetLog("  %d %s %s flags(alc,ctrl,stc,own):%d%d%d%d aspects:%.2x class %s channel=%p controlchan %d",
 							       iterNetIDs->first, iterNetIDs->second.GetText(), name,
 							       obj.main->bAllocated, obj.main->bControlled, obj.main->spawnType, obj.main->bOwned,
 							       obj.xtra->nAspectsEnabled, nom.c_str(), pChan, chanid);
@@ -3244,55 +3089,6 @@ void CNetContextState::NetDump(ENetDumpType type)
 			}
 		}
 		break;
-
-#if ENABLE_HOST_MIGRATION_STATE_CHECK
-	case eNDT_HostMigrationStateCheck:
-		{
-			ICryLobby* pLobby = CNetwork::Get()->GetLobby();
-
-			if (pLobby)
-			{
-				ICryMatchMakingPrivate* pMatchMaking = static_cast<ICryMatchMakingPrivate*>(pLobby->GetMatchMaking());
-
-				if (pMatchMaking)
-				{
-					for (TNetIDMap::const_iterator iterNetIDs = m_pNetIDs->begin(); iterNetIDs != m_pNetIDs->end(); ++iterNetIDs)
-					{
-						IEntity* pEntity = gEnv->pEntitySystem->GetEntity(iterNetIDs->first);
-						const char* name = pEntity ? pEntity->GetName() : "<<no name>>";
-						SContextObjectRef obj = GetContextObject(iterNetIDs->second);
-						SHostMigrationStateCheckData data;
-
-						data.type = eHMSCDT_NID;
-						data.nid.id = iterNetIDs->second.id;
-						data.nid.salt = iterNetIDs->second.salt;
-						cry_strcpy(data.nid.name, name);
-
-						if (obj.main && obj.xtra)
-						{
-							data.nid.allocated = obj.main->bAllocated;
-							data.nid.controlled = obj.main->bControlled;
-							data.nid.spawnType = obj.main->spawnType;
-							data.nid.owned = obj.main->bOwned;
-							data.nid.aspectsEnabled = obj.xtra->nAspectsEnabled;
-						}
-						else
-						{
-							data.nid.allocated = false;
-							data.nid.controlled = false;
-							data.nid.spawnType = eST_NUM_SPAWN_TYPES;
-							data.nid.owned = false;
-							data.nid.aspectsEnabled = 0;
-						}
-
-						pMatchMaking->HostMigrationStateCheckAddDataItem(&data);
-					}
-				}
-			}
-		}
-
-		break;
-#endif
 	}
 	NetLog("[NetDump] End");
 }
@@ -3381,7 +3177,6 @@ void CNetContextState::DrawDebugScreens()
 		static const float colWidth = 150.f;
 		static const float rowHeight = 10.f;
 
-		IRenderer* pRend = gEnv->pRenderer;
 		float white[] = { 1.0f, 1.0f, 1.0f, 1.0f };
 		float yellow[] = { 1.0f, 1.0f, 0.0f, 1.0f };
 		float orange[] = { 1.0f, 0.4f, 0.0f, 1.0f };
@@ -3391,12 +3186,12 @@ void CNetContextState::DrawDebugScreens()
 		x = nameWidth;
 		y = 100.f;
 
-		pRend->Draw2dLabel(x, y, 1, orange, false, "TOTAL");
+		IRenderAuxText::Draw2dLabel(x, y, 1, orange, false, "TOTAL");
 		x += colWidth + colWidth;
 
 		for (TSubscriptions::const_iterator iter = m_subscriptions.begin(); iter != m_subscriptions.end(); ++iter)
 		{
-			pRend->Draw2dLabel(x, y, 1, orange, false, "%s", iter->pListener->GetName().c_str());
+			IRenderAuxText::Draw2dLabel(x, y, 1, orange, false, "%s", iter->pListener->GetName().c_str());
 			x += colWidth;
 		}
 		y += rowHeight;
@@ -3411,7 +3206,7 @@ void CNetContextState::DrawDebugScreens()
 
 		for (ClassMap::const_iterator cmiter = cm.begin(); cmiter != cm.end(); ++cmiter)
 		{
-			pRend->Draw2dLabel(0.f, y, 1, white, false, "%s", cmiter->first->GetName());
+			IRenderAuxText::Draw2dLabel(0.f, y, 1, white, false, "%s", cmiter->first->GetName());
 
 			x = nameWidth + colWidth + colWidth;
 
@@ -3449,7 +3244,7 @@ void CNetContextState::DrawDebugScreens()
 					muClassObjectsInView += iter->pListener->GetObjectMemUsage(*noiter);
 				}
 
-				pRend->Draw2dLabel(x, y, 1, white, false, "%" PRISIZE_T " [%" PRISIZE_T "]", muClassObjectsInView.required, muClassObjectsInView.instances);
+				IRenderAuxText::Draw2dLabel(x, y, 1, white, false, "%" PRISIZE_T " [%" PRISIZE_T "]", muClassObjectsInView.required, muClassObjectsInView.instances);
 				x += colWidth;
 
 				muClassObjectsTotal += muClassObjectsInView;
@@ -3458,11 +3253,11 @@ void CNetContextState::DrawDebugScreens()
 			muClassObjectsTotal += muClassObjectsBase;
 			muClassObjectsTotal += muClassObjectsAspectData;
 
-			pRend->Draw2dLabel(nameWidth, y, 1, white, false, "%" PRISIZE_T, muClassObjectsTotal.required);
-			pRend->Draw2dLabel(nameWidth + (colWidth * 0.5f), y, 1, white, false, "%" PRISIZE_T " / %" PRISIZE_T " / %" PRISIZE_T,
-			                   muClassObjectsBase.required,
-			                   muClassObjectsAspectData.required,
-			                   muClassObjectsTotal.used);
+			IRenderAuxText::Draw2dLabel(nameWidth, y, 1, white, false, "%" PRISIZE_T, muClassObjectsTotal.required);
+			IRenderAuxText::Draw2dLabel(nameWidth + (colWidth * 0.5f), y, 1, white, false, "%" PRISIZE_T " / %" PRISIZE_T " / %" PRISIZE_T,
+			                            muClassObjectsBase.required,
+			                            muClassObjectsAspectData.required,
+			                            muClassObjectsTotal.used);
 			y += rowHeight;
 
 			muAll += muClassObjectsTotal;
@@ -3477,14 +3272,14 @@ void CNetContextState::DrawDebugScreens()
 			muMax.used = muAll.used;
 		}
 
-		pRend->Draw2dLabel(0.f, y, 1, orange, false, "TOTAL");
-		pRend->Draw2dLabel(nameWidth, y, 1, orange, false, "%" PRISIZE_T, muAll.required);
-		pRend->Draw2dLabel(nameWidth + (colWidth * 0.5f), y, 1, orange, false, "%" PRISIZE_T " / %" PRISIZE_T, muAll.required - muAll.used, muAll.used);
-		pRend->Draw2dLabel(nameWidth + colWidth + colWidth, y, 1, orange, false, "%" PRISIZE_T " [%" PRISIZE_T "]", muAll.used / m_subscriptions.size(), muAll.instances / m_subscriptions.size());
+		IRenderAuxText::Draw2dLabel(0.f, y, 1, orange, false, "TOTAL");
+		IRenderAuxText::Draw2dLabel(nameWidth, y, 1, orange, false, "%" PRISIZE_T, muAll.required);
+		IRenderAuxText::Draw2dLabel(nameWidth + (colWidth * 0.5f), y, 1, orange, false, "%" PRISIZE_T " / %" PRISIZE_T, muAll.required - muAll.used, muAll.used);
+		IRenderAuxText::Draw2dLabel(nameWidth + colWidth + colWidth, y, 1, orange, false, "%" PRISIZE_T " [%" PRISIZE_T "]", muAll.used / m_subscriptions.size(), muAll.instances / m_subscriptions.size());
 		y += rowHeight;
-		pRend->Draw2dLabel(0.f, y, 1, yellow, false, "MAX");
-		pRend->Draw2dLabel(nameWidth, y, 1, yellow, false, "%" PRISIZE_T, muMax.required);
-		pRend->Draw2dLabel(nameWidth + (colWidth * 0.5f), y, 1, yellow, false, "%" PRISIZE_T " / %" PRISIZE_T, muMax.required - muMax.used, muMax.used);
+		IRenderAuxText::Draw2dLabel(0.f, y, 1, yellow, false, "MAX");
+		IRenderAuxText::Draw2dLabel(nameWidth, y, 1, yellow, false, "%" PRISIZE_T, muMax.required);
+		IRenderAuxText::Draw2dLabel(nameWidth + (colWidth * 0.5f), y, 1, yellow, false, "%" PRISIZE_T " / %" PRISIZE_T, muMax.required - muMax.used, muMax.used);
 	}
 #endif
 
@@ -3527,26 +3322,8 @@ void CNetContextState::DrawDebugScreens()
 
 						if ((pClassName[0] == 0) || CryStringUtils::stristr(pEntity->GetClass()->GetName(), pClassName))
 						{
-							SDrawTextInfo ti;
-							ColorB color;
+							ColorB color = !netID ? ColorB(128, 128, 128, 255) : ColorB(255, 255, 255, 255);
 							AABB aabb;
-
-							if (!netID)
-							{
-								ti.color[0] = 0.5f;
-								ti.color[1] = 0.5f;
-								ti.color[2] = 0.5f;
-								ti.color[3] = 1.0f;
-							}
-							else
-							{
-								ti.color[0] = 1.0f;
-								ti.color[1] = 1.0f;
-								ti.color[2] = 1.0f;
-								ti.color[3] = 1.0f;
-							}
-
-							color.set(uint8(ti.color[0] * 255.0f), uint8(ti.color[1] * 255.0f), uint8(ti.color[2] * 255.0f), uint8(ti.color[3] * 255.0f));
 
 							pEntity->GetLocalBounds(aabb);
 							pRenderAuxGeom->DrawAABB(aabb, pEntity->GetWorldTM(), false, color, eBBD_Faceted);
@@ -3558,15 +3335,11 @@ void CNetContextState::DrawDebugScreens()
 
 							textPos = aabbCenterPos + aabb.GetRadius() * dir;
 
-							ti.xscale = textSize;
-							ti.yscale = textSize;
-							ti.flags = eDrawText_DepthTest | eDrawText_FixedSize | eDrawText_Center | eDrawText_CenterV | eDrawText_800x600;
-
 							char buff[160];
-							cry_sprintf(buff, "%s\n%s\nAct %d Hid %d Inv %d\nID %u\nNetID %s\nGUID %016" PRIx64,
-							            pEntity->GetName(), pEntity->GetClass()->GetName(), pEntity->IsActive(), pEntity->IsHidden(), pEntity->IsInvisible(), pEntity->GetId(), netID.GetText(), pEntity->GetGuid());
+							cry_sprintf(buff, "%s\n%s\nAct %d Hid %d Inv %d\nID %u\nNetID %s\nGUID %s",
+							           pEntity->GetName(), pEntity->GetClass()->GetName(), pEntity->IsActivatedForUpdates(), pEntity->IsHidden(), pEntity->IsInvisible(), pEntity->GetId(), netID.GetText(), pEntity->GetGuid().ToDebugString());
 
-							gEnv->pRenderer->DrawTextQueued(textPos, ti, buff);
+							IRenderAuxText::DrawText(textPos, textSize, color, eDrawText_DepthTest | eDrawText_FixedSize | eDrawText_Center | eDrawText_CenterV | eDrawText_800x600, buff);
 						}
 					}
 				}

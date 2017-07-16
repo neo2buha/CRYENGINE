@@ -156,7 +156,7 @@ ILINE bool InitializePoseAlignerBipedHuman(PoseAligner::CPose& pose, IEntity& en
 	int jointIndexLeftBlend = rIDefaultSkeleton.GetJointIDByName("Bip01 planeWeightLeft");
 	int jointIndexRightBlend = rIDefaultSkeleton.GetJointIDByName("Bip01 planeWeightRight");
 
-	if (!pose.Initialize(entity, jointIndexRoot))
+	if (!pose.Initialize(entity, &character, jointIndexRoot))
 		return false;
 
 	pose.SetRootOffsetMinMax(-0.4f, 0.0f);
@@ -213,7 +213,7 @@ ILINE bool InitializePoseAlignerBipedAlien(PoseAligner::CPose& pose, IEntity& en
 	if (jointIndexFrontRight < 0)
 		return false;
 
-	if (!pose.Initialize(entity, jointIndexRoot))
+	if (!pose.Initialize(entity, &character, jointIndexRoot))
 		return false;
 
 	pose.SetRootOffsetMinMax(-0.5f, 0.0f);
@@ -258,7 +258,7 @@ ILINE bool InitializePoseAlignerPinger(PoseAligner::CPose& pose, IEntity& entity
 
 	const bool bIsMP = gEnv->bMultiplayer;
 
-	IVehicle* pVehicle = gEnv->pGame->GetIGameFramework()->GetIVehicleSystem()->GetVehicle(entity.GetId());
+	IVehicle* pVehicle = gEnv->pGameFramework->GetIVehicleSystem()->GetVehicle(entity.GetId());
 	if (bIsMP && !pVehicle)
 		return false;
 
@@ -301,7 +301,7 @@ ILINE bool InitializePoseAlignerPinger(PoseAligner::CPose& pose, IEntity& entity
 	if (jointIndexFrontCenterBlend < 0)
 		return false;
 
-	if (!pose.Initialize(entity, jointIndexRoot))
+	if (!pose.Initialize(entity, &character, jointIndexRoot))
 		return false;
 
 	PoseAligner::SChainDesc chainDesc;
@@ -393,7 +393,7 @@ ILINE bool InitializePoseAlignerScorcher(PoseAligner::CPose& pose, IEntity& enti
 	if (jointIndexFrontRightBlend < 0)
 		return false;
 
-	if (!pose.Initialize(entity, jointIndexRoot))
+	if (!pose.Initialize(entity, &character, jointIndexRoot))
 		return false;
 
 	pose.SetRootOffsetMinMax(-1.0f, 1.0f);
@@ -485,7 +485,7 @@ ILINE bool InitializePoseAlignerDeer(PoseAligner::CPose& pose, IEntity& entity, 
 	if (jointIndexFrontRight < 0)
 		return false;
 
-	if (!pose.Initialize(entity, jointIndexRoot))
+	if (!pose.Initialize(entity, &character, jointIndexRoot))
 		return false;
 
 	pose.SetRootOffsetMinMax(-0.1f, 0.04f);
@@ -578,29 +578,8 @@ ILINE bool InitializePoseAligner(PoseAligner::CPose& pose, IEntity& entity, ICha
 	return pose.GetChainCount() != 0;
 }
 
-class CPoseAlignerC3 :
-	PoseAligner::CPose
+bool CPoseAlignerC3::Initialize(IEntity& entity, ICharacterInstance* pCharacter)
 {
-	CRYGENERATE_CLASS(CPoseAlignerC3, "AnimationPoseAlignerC3", 0xf5381a4c1374ff00, 0x8de19ba730cf572b)
-
-public:
-	virtual bool Initialize(IEntity& entity) override;
-};
-
-CPoseAlignerC3::CPoseAlignerC3()
-{
-}
-
-CPoseAlignerC3::~CPoseAlignerC3()
-{
-}
-
-bool CPoseAlignerC3::Initialize(IEntity& entity)
-{
-	ICharacterInstance* pCharacter = entity.GetCharacter(0);
-	if (!pCharacter)
-		return false;
-
 	return InitializePoseAligner(*this, entity, *pCharacter);
 }
 

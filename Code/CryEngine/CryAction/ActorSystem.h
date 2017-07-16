@@ -8,7 +8,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 23:8:2004   15:52 : Created by Márcio Martins
+   - 23:8:2004   15:52 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #ifndef __ACTORSYSTEM_H__
@@ -21,7 +21,6 @@
 #include "IActorSystem.h"
 #include <CryGame/IGameFramework.h>
 #include "ItemParams.h"
-#include <CryEntitySystem/IEntityPoolManager.h>
 
 typedef std::map<EntityId, IActor*> TActorMap;
 
@@ -30,7 +29,6 @@ class CPlayerEntityProxy;
 
 class CActorSystem :
 	public IActorSystem,
-	public IEntityPoolListener,
 	public IEntitySystemSink
 {
 	struct DemoSpectatorSystem
@@ -74,11 +72,6 @@ public:
 
 	// ~IActorSystem
 
-	// IEntityPoolListener
-	virtual void OnEntityReturnedToPool(EntityId entityId, IEntity* pEntity);
-	virtual void OnEntityPreparedFromPool(EntityId entityId, IEntity* pEntity);
-	// ~IEntityPoolListener
-
 	// IEntitySystemSink
 	virtual bool OnBeforeSpawn(SEntitySpawnParams& params);
 	virtual void OnSpawn(IEntity* pEntity, SEntitySpawnParams& params);
@@ -98,7 +91,7 @@ public:
 
 private:
 
-	//	static IEntityProxy *CreateActor(IEntity *pEntity, SEntitySpawnParams &params, void *pUserData);
+	//	static IEntityComponent *CreateActor(IEntity *pEntity, SEntitySpawnParams &params, void *pUserData);
 	static bool HookCreateActor(IEntity*, IGameObject*, void*);
 
 	static void ActorSystemErrorMessage(const char* fileName, const char* errorInfo, bool displayErrorDialog);

@@ -16,37 +16,23 @@
 //! Used, for example, as construction argument. Safer and more informative than bool arguments.
 //! Example:
 //!     struct FObjectOpts;
-//!     struct CObject { CObject(FObjectOpts = ZERO); };
+//!     struct CObject { CObject(FObjectOpts = 0); };
 //!     CObject object_def();
-//!     CObject object( FObjectOpts().Size(8).AllowGrowth(true) );
-template<class TOpt, class T, class TContainer, int NInit = 0>
-struct TOptVar
-{
-	typedef T TValue;
+//!     CObject object( FObjectOpts().SetSize(8).SetAllowGrowth(true) );
 
-	TOptVar()
-		: _val(T(NInit))
-	{
-		offset(this);
-	}
-	TOptVar(T val)
-		: _val(val) {}
+#define OPT_STRUCT(TOpts)                           \
+  typedef TOpts TThis;                              \
+  TOpts operator()() const { return TOpts(*this); } \
 
-	operator T() const
-	{ return _val; }
-	T    operator()() const
-	{ return _val; }
-	T    operator+() const
-	{ return _val; }
-	bool operator!() const
-	{ return !_val; }
+#define OPT_VAR_INIT(Type, Var, init)                               \
+  Type _##Var = init;                                               \
+  ILINE const Type& Var() const { return _##Var; }                  \
+  ILINE TThis& Var(const Type &val) { _##Var = val; return *this; } \
 
-	TContainer& operator()(T val)
-	{
-		_val = val;
-		return *(TContainer*)((char*)this - offset());
-	}
+#define OPT_VAR(Type, Var)        \
+  OPT_VAR_INIT(Type, Var, Type()) \
 
+<<<<<<< HEAD
 private:
 	T             _val;
 
@@ -83,3 +69,5 @@ private:
   TThis& Var(bool val) { _ ## Var = val; return *this; } \
 
 // *INDENT-ON*
+=======
+>>>>>>> upstream/stabilisation

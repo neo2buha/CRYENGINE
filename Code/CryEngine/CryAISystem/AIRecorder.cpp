@@ -988,12 +988,7 @@ void CAIRecorder::Init(void)
 	{
 		ISystemEventDispatcher* pDispatcher = gEnv->pSystem->GetISystemEventDispatcher();
 		if (pDispatcher)
-			pDispatcher->RegisterListener(this);
-	}
-
-	if (gEnv->pEntitySystem)
-	{
-		gEnv->pEntitySystem->GetIEntityPoolManager()->AddListener(this, "AIRecorder", IEntityPoolListener::EntityReturnedToPool);
+			pDispatcher->RegisterListener(this, "CAIRecorder");
 	}
 }
 
@@ -1013,7 +1008,7 @@ void CAIRecorder::GetCompleteFilename(char const* szFilename, bool bAppendFileCo
 	if (!szFilename || !szFilename[0])
 	{
 		// Use current level
-		szFilename = PathUtil::GetFileName(gEnv->pGame->GetIGameFramework()->GetLevelName());
+		szFilename = PathUtil::GetFileName(gEnv->pGameFramework->GetLevelName());
 	}
 
 	if (!szFilename || !szFilename[0])
@@ -1268,11 +1263,6 @@ void CAIRecorder::Shutdown(void)
 			pDispatcher->RemoveListener(this);
 	}
 
-	if (gEnv->pEntitySystem)
-	{
-		gEnv->pEntitySystem->GetIEntityPoolManager()->RemoveListener(this);
-	}
-
 	DestroyDummyObjects();
 
 	for (TUnits::iterator it = m_Units.begin(); it != m_Units.end(); ++it)
@@ -1292,20 +1282,6 @@ void CAIRecorder::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lp
 	{
 		if (IsRunning())
 			Stop();
-	}
-}
-
-//
-//----------------------------------------------------------------------------------------------
-void CAIRecorder::OnEntityReturnedToPool(EntityId entityId, IEntity* pEntity)
-{
-	assert(pEntity);
-
-	// If this AI is being recorded, stop recording on it so a new record is created for it later
-	CAIObject* pAI = static_cast<CAIObject*>(pEntity->GetAI());
-	if (pAI)
-	{
-		pAI->ResetRecorderUnit();
 	}
 }
 

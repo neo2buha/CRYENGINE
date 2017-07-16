@@ -88,17 +88,17 @@ void CTextureCompiler::GetInputFilename(
 //////////////////////////////////////////////////////////////////////////
 // choose a specialized imposter, because otherwise file-format
 // constraints for specific texture-types may be violated
-	#define COMPILE_DELAYED_REGULAR "EngineAssets/TextureMsg/TextureCompiling.dds"
-	#define COMPILE_DELAYED_CUBEMAP "EngineAssets/TextureMsg/TextureCompiling_cm.dds"
-	#define COMPILE_DELAYED_CUBEDIF "EngineAssets/TextureMsg/TextureCompiling_cm_diff.dds"
-	#define COMPILE_DELAYED_NORMAL  "EngineAssets/TextureMsg/TextureCompiling_ddn.dds"
-	#define COMPILE_DELAYED_NORMALA "EngineAssets/TextureMsg/TextureCompiling_ddna.dds"
+	#define COMPILE_DELAYED_REGULAR "%ENGINE%/EngineAssets/TextureMsg/TextureCompiling.dds"
+	#define COMPILE_DELAYED_CUBEMAP "%ENGINE%/EngineAssets/TextureMsg/TextureCompiling_cm.dds"
+	#define COMPILE_DELAYED_CUBEDIF "%ENGINE%/EngineAssets/TextureMsg/TextureCompiling_cm_diff.dds"
+	#define COMPILE_DELAYED_NORMAL  "%ENGINE%/EngineAssets/TextureMsg/TextureCompiling_ddn.dds"
+	#define COMPILE_DELAYED_NORMALA "%ENGINE%/EngineAssets/TextureMsg/TextureCompiling_ddna.dds"
 
-	#define COMPILE_FAILED_REGULAR  "EngineAssets/TextureMsg/RCError.dds"
-	#define COMPILE_FAILED_CUBEMAP  "EngineAssets/TextureMsg/RCError_cm.dds"
-	#define COMPILE_FAILED_CUBEDIF  "EngineAssets/TextureMsg/RCError_cm_diff.dds"
-	#define COMPILE_FAILED_NORMAL   "EngineAssets/TextureMsg/RCError_ddn.dds"
-	#define COMPILE_FAILED_NORMALA  "EngineAssets/TextureMsg/RCError_ddna.dds"
+	#define COMPILE_FAILED_REGULAR  "%ENGINE%/EngineAssets/TextureMsg/RCError.dds"
+	#define COMPILE_FAILED_CUBEMAP  "%ENGINE%/EngineAssets/TextureMsg/RCError_cm.dds"
+	#define COMPILE_FAILED_CUBEDIF  "%ENGINE%/EngineAssets/TextureMsg/RCError_cm_diff.dds"
+	#define COMPILE_FAILED_NORMAL   "%ENGINE%/EngineAssets/TextureMsg/RCError_ddn.dds"
+	#define COMPILE_FAILED_NORMALA  "%ENGINE%/EngineAssets/TextureMsg/RCError_ddna.dds"
 
 static const char* GetDelayedTexture(const char* szFile)
 {
@@ -222,18 +222,33 @@ static bool CopyDummy(const char* szImposter, const char* szSrcFile, const char*
 	return success;
 }
 
-static bool CopyResult(const char* szSrcFile, const char* szDstFile)
+static bool MoveAssetFile(const char* szSrcFile, const char* szDstFile)
 {
 	bool success = true;
 
 	if (strcmp(szSrcFile, szDstFile))
 	{
-		success = true;
-
-		if (GetFileAttributes(szDstFile) != INVALID_FILE_ATTRIBUTES)
+		const auto attributes = GetFileAttributes(szDstFile);
+		if (attributes != INVALID_FILE_ATTRIBUTES)
 		{
+			if ((attributes & FILE_ATTRIBUTE_READONLY) != 0)
+			{
+				// CE-12815. Should be able to compile tiff to dds if .cryasset file is write protected.
+				if (stricmp(PathUtil::GetExt(szDstFile), "cryasset") == 0)
+				{
+					DeleteFile(szSrcFile);
+					return true;
+				}
+				else
+				{
+					iLog->LogError("Can't write to read-only file: \"%s\"\n", szDstFile);
+					return false;
+				}
+			}
 			success = success && (DeleteFile(szDstFile) != FALSE);
 		}
+
+		gEnv->pCryPak->MakeDir(PathUtil::GetPathWithoutFilename(szDstFile));
 
 		success = success && (GetFileAttributes(szSrcFile) != INVALID_FILE_ATTRIBUTES);
 		success = success && (MoveFile(szSrcFile, szDstFile) != FALSE);
@@ -261,15 +276,194 @@ static bool CopyResult(const char* szSrcFile, const char* szDstFile)
 
 			if (!success)
 			{
-	#if defined(DEBUG) && defined(_DEBUG)
-				iLog->Log("Debug: RN: from \"%s\", to \"%s\"\n", szSrcFile, szDstFile);
-	#endif
+				iLog->LogError("Can't copy from \"%s\" to \"%s\"\n", szSrcFile, szDstFile);
 			}
 		}
 	}
 
 	return success;
 }
+
+static bool IsFileReadOnly(const char* szPath)
+{
+	const auto attributes = GetFileAttributes(szPath);
+	return (attributes != INVALID_FILE_ATTRIBUTES) && ((attributes & FILE_ATTRIBUTE_READONLY) != 0);
+}
+
+
+// RAII handler of temporary asset data.
+class CTemporaryAsset
+{
+	struct SAsset
+	{
+		SAsset(string src, string dst, string tmp) : src(src), dst(dst), tmp(tmp) {}
+		string src; // Source file.
+		string dst; // Destination file.
+		string tmp; // A temporary file for the RC processing.
+	};
+
+public:
+	CTemporaryAsset(const string& srcFile, const string& dstFile)
+		: m_assets(CreateTemp(srcFile, dstFile))
+	{
+	}
+
+	~CTemporaryAsset()
+	{
+		DeleteTemp(GetTmpPath());
+	}
+
+	const string& GetTmpPath() const
+	{
+		return m_assets.front().tmp;
+	}
+
+	// Moves asset(s) from the temporary to the destination location.
+	void CreateDestinationAssets(const bool bSuccess) const
+	{
+		for (const auto& asset : m_assets)
+		{
+			const bool bAssetCreated = bSuccess && MoveAsset(asset.tmp.c_str(), asset.dst.c_str());
+			if (!bAssetCreated && (CRenderer::CV_r_texturecompilingIndicator >= 0))
+			{
+				CopyDummy(GetFailedTexture(asset.dst.c_str()), asset.src.c_str(), asset.dst.c_str(), COMPILE_FAILED_DELTA);
+			}
+
+			// Suggest reload of the texture after success or failure.
+			if (gEnv && gEnv->pRenderer)
+			{
+				gEnv->pRenderer->EF_ReloadFile_Request(asset.dst.c_str());
+			}
+		}
+	}
+
+private:
+	static string GetTemporaryDirectoryPath()
+	{
+		char path[ICryPak::g_nMaxPath] = {};
+		return gEnv->pCryPak->AdjustFileName("%USER%/TextureCompiler", path, ICryPak::FLAGS_PATH_REAL | ICryPak::FLAGS_FOR_WRITING | ICryPak::FLAGS_ADD_TRAILING_SLASH);
+	}
+
+	// Create a temp directory to store texture asset during processing.
+	static std::vector<SAsset> CreateTemp(const string& srcFile, const string& dstFile)
+	{
+		// Temporary files are created outside the asset directory primarily to avoid interference with the editor asset system.
+		// Right now, when creating a temporary folder, we copy the folder hierarchy of the asset folder to avoid naming conflicts.
+		// Example: The temporary directory for 'textures/defaults/white.dds' will be '%USER%/TextureCompiler/assets/textures/defaults/white'
+		// In the future, this should be replaced by some central system that creates temporary folders.
+		static const string tempPrefix = GetTemporaryDirectoryPath();
+
+		string dir;
+		string filename;
+		string ext;
+		PathUtil::Split(dstFile, dir, filename, ext);
+
+		// TODO : PathUtil::AbsolutePathToGamePath(dir)
+		string tempSuffix = dir;
+		tempSuffix.replace(':', '_');
+
+		string tempDir = PathUtil::Make(tempPrefix + tempSuffix, filename);
+		gEnv->pCryPak->MakeDir(tempDir.c_str());
+
+		// Several assets may be created by RC from a single source file depends on the source file options.
+		std::vector<SAsset> assets;
+		std::vector<string> suffixes = { "" };
+		const bool bCubemap = strstr(dstFile.c_str(), "_cm.") != nullptr;
+		if (bCubemap)
+		{
+			suffixes.push_back("_diff");
+		}
+		assets.reserve(suffixes.size());
+
+		for (const string& suffix : suffixes)
+		{
+			const string asset = filename + suffix;
+			const string dstPath = PathUtil::Make(dir, asset, ext);
+			const string tmpPath = PathUtil::Make(tempDir, asset, ext);
+			assets.emplace_back(srcFile, dstPath, tmpPath);
+
+			// Try to update existing ".cryasset" instead of creating a new one to keep the asset GUID.
+			const string dstCryasset = dstPath + ".cryasset";
+			const string tmpCryasset = tmpPath + ".cryasset";
+			gEnv->pCryPak->CopyFileOnDisk(dstCryasset.c_str(), tmpCryasset.c_str(), false);
+		}
+
+		return assets;
+	}
+
+	// Delete the temporary asset directory.
+	static bool DeleteTemp(const string& filepath)
+	{
+		const string tmpFolder = PathUtil::GetPathWithoutFilename(filepath);
+		return gEnv->pCryPak->RemoveDir(tmpFolder.c_str(), true);
+	}
+
+	// Returns list of asset filenames without paths.
+	static std::vector<string> GetAssetFiles(const string& srcFile)
+	{
+		// Try to read the file list form .cryasset
+		const string cryasset = srcFile + ".cryasset";
+
+		const XmlNodeRef pXml = (GetFileAttributes(cryasset) != INVALID_FILE_ATTRIBUTES) ? gEnv->pSystem->LoadXmlFromFile(cryasset) : nullptr;
+		if (!pXml)
+		{
+			return{ PathUtil::GetFile(srcFile) };
+		}
+
+		std::vector<string> files;
+
+		// Find "AssetMetadata" node. It may be either the root node or a child of the root.
+		const XmlNodeRef pMetadata = pXml->isTag("AssetMetadata") ? pXml : pXml->findChild("AssetMetadata");
+		if (pMetadata)
+		{
+			const XmlNodeRef pFiles = pMetadata->findChild("Files");
+			if (pFiles)
+			{
+				files.reserve(pFiles->getChildCount());
+				for (int i = 0, n = pFiles->getChildCount(); i < n; ++i)
+				{
+					const XmlNodeRef pFile = pFiles->getChild(i);
+					files.emplace_back(pFile->getAttr("path"));
+				}
+			}
+		}
+
+		// A fallback solution, should never happen.
+		if (files.empty())
+		{
+			CRY_ASSERT_MESSAGE(0, "Cryasset has no data files: %s", cryasset.c_str());
+			files.push_back(PathUtil::GetFile(srcFile));
+		}
+
+		files.emplace_back(PathUtil::GetFile(cryasset));
+		return files;
+	}
+
+	// Moves asset files.
+	static bool MoveAsset(const string& srcFile, const string& dstFile)
+	{
+		// Does not support rename.
+		CRY_ASSERT(stricmp(PathUtil::GetFile(srcFile), PathUtil::GetFile(dstFile)) == 0);
+
+		const string srcPath = PathUtil::GetPathWithoutFilename(srcFile);
+		const string dstPath = PathUtil::GetPathWithoutFilename(dstFile);
+		const auto files = GetAssetFiles(srcFile);
+		for (const string& file : files)
+		{
+			const string srcFile = srcPath + file;
+			const string dstFile = dstPath + file;
+			if (!MoveAssetFile(srcFile.c_str(), dstFile.c_str()))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+private:
+	std::vector<SAsset> m_assets;
+
+};
 
 /* Cases for sequence of events:
  *
@@ -435,58 +629,14 @@ void CTextureCompiler::ConsumeQueuedResourceCompiler(TProcItem* item)
 
 			// Always use a temporary file as outfile, otherwise RC may write to the
 			// file before it's even loaded as a dummy.
-			string tmpsrc = AddSuffix(item->dst, "_tmp");
-
-			iLog->Log("Compile texture from \"%s\", to \"%s\"\n", item->src.c_str(), tmpsrc.c_str());
-			item->returnval = InvokeResourceCompiler(item->src.c_str(), tmpsrc.c_str(), item->windowed, true);
-
-			// It's not a cube-map
-			if (strstr(item->dst.c_str(), "_cm.") == 0)
 			{
-				bool bSuccess = (item->returnval == eRcExitCode_Success);
-				bSuccess = bSuccess && CopyResult(tmpsrc.c_str(), item->dst.c_str());
-				if (!bSuccess)
-				{
-					if (CRenderer::CV_r_texturecompilingIndicator >= 0)
-					{
-						CopyDummy(GetFailedTexture(item->dst.c_str()), item->src.c_str(), item->dst.c_str(), COMPILE_FAILED_DELTA);
-					}
+				CTemporaryAsset tmpAsset(item->src, item->dst);
 
-					DeleteFile(tmpsrc.c_str());
-				}
-
-				// Suggest reload of the texture after success or failure.
-				if (gEnv && gEnv->pRenderer)
-				{
-					gEnv->pRenderer->EF_ReloadFile_Request(item->dst.c_str());
-				}
-			}
-			else
-			{
-				string dstdiff = AddSuffix(item->dst.c_str(), "_diff");
-				string tmpdiff = AddSuffix(tmpsrc, "_diff");
+				iLog->Log("Compile texture from \"%s\", to \"%s\"\n", item->src.c_str(), tmpAsset.GetTmpPath().c_str());
+				item->returnval = InvokeResourceCompiler(item->src.c_str(), tmpAsset.GetTmpPath().c_str(), item->windowed, true);
 
 				bool bSuccess = (item->returnval == eRcExitCode_Success);
-				bSuccess = bSuccess && CopyResult(tmpsrc.c_str(), item->dst.c_str());
-				bSuccess = bSuccess && CopyResult(tmpdiff.c_str(), dstdiff.c_str());
-				if (!bSuccess)
-				{
-					if (CRenderer::CV_r_texturecompilingIndicator >= 0)
-					{
-						CopyDummy(GetFailedTexture(item->dst.c_str()), item->src.c_str(), item->dst.c_str(), COMPILE_FAILED_DELTA);
-						CopyDummy(GetFailedTexture(dstdiff.c_str()), item->src.c_str(), dstdiff.c_str(), COMPILE_FAILED_DELTA);
-					}
-
-					DeleteFile(tmpsrc.c_str());
-					DeleteFile(tmpdiff.c_str());
-				}
-
-				// Suggest reload of the texture after success or failure.
-				if (gEnv && gEnv->pRenderer)
-				{
-					gEnv->pRenderer->EF_ReloadFile_Request(item->dst.c_str());
-					gEnv->pRenderer->EF_ReloadFile_Request(dstdiff.c_str());
-				}
+				tmpAsset.CreateDestinationAssets(bSuccess);
 			}
 
 			m_rwLockNotify.RLock();
@@ -576,10 +726,13 @@ bool CTextureCompiler::ProcessTextureIfNeeded(
 		// compare date of destination and source , recompile if needed
 		// load dds header, check hash-value of the compile settings in the dds file, recompile if needed (not done yet)
 
-		CDebugAllowFileAccess dafa;
-		FILE* pDestFile = gEnv->pCryPak->FOpen(sDestFile, "rb");
-		FILE* pSrcFile = gEnv->pCryPak->FOpen(sSrcFile, "rb");
-		dafa.End();
+		FILE* pDestFile = nullptr;
+		FILE* pSrcFile = nullptr;
+		{
+			SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+			pDestFile = gEnv->pCryPak->FOpen(sDestFile, "rb");
+			pSrcFile = gEnv->pCryPak->FOpen(sSrcFile, "rb");
+		}
 
 		// files from the pak file do not count as date comparison do not seem to work there
 		if (pDestFile)
@@ -609,7 +762,7 @@ bool CTextureCompiler::ProcessTextureIfNeeded(
 		}
 
 		// if both files exist, is the source file newer?
-		if (pSrcFile && pDestFile)
+		if (pSrcFile && pDestFile && !IsFileReadOnly(sFullDestFilename))
 		{
 			ICryPak::FileTime timeSrc = gEnv->pCryPak->GetModificationTime(pSrcFile);
 			ICryPak::FileTime timeDest = gEnv->pCryPak->GetModificationTime(pDestFile);

@@ -59,7 +59,7 @@ void CRuntimePrefab::Clear()
 		if (pNode)
 		{
 			IStatObj *pStatObj = pNode->GetEntityStatObj();
-			pNode->SetEntityStatObj(0,0,0);
+			pNode->SetEntityStatObj(0,0);
 			if (pStatObj)
 				pStatObj->Release();		
 			gEnv->p3DEngine->DeleteRenderNode(pNode);
@@ -200,7 +200,7 @@ void CRuntimePrefab::SpawnBrushes(CPrefab &pRef, const Matrix34 &matSource,AABB 
 			if (pObj)
 			{	
 				pObj->AddRef();	
-				pNode->SetEntityStatObj(0,pObj,0);		
+				pNode->SetEntityStatObj(pObj,0);		
 
 				// calc bbox for the editor because we spawn separate brushes	
 				AABB box2=pObj->GetAABB();
@@ -263,7 +263,6 @@ void	CRuntimePrefab::Spawn(CPrefab &pRef)
 		return;
 	}
 	
-	IEntityRenderProxy * pRenderProxy = (IEntityRenderProxy*)pEntity->CreateProxy( ENTITY_PROXY_RENDER ).get();	
 	AABB box(AABB::RESET);
 		
 	// expand embedded prefabs
@@ -287,7 +286,7 @@ void	CRuntimePrefab::Spawn(CPrefab &pRef)
 	if (box.min.x>box.max.x || box.min.y>box.max.y || box.min.z>box.max.z)
 		box=AABB( 1.0f ); 
 
-	pRenderProxy->SetLocalBounds(box, true);
+	pEntity->GetRenderInterface()->SetLocalBounds(box, true);
 
 	// make sure all transformations are set
 	Move(); 
@@ -327,7 +326,7 @@ void	CRuntimePrefab::Move(const Matrix34 &matOff)
 		if (!pParam.bIsDecal)			
 		{
 			IStatObj *pStatObj=pNode->GetEntityStatObj(0,0,0);		
-			pNode->SetEntityStatObj(0,pStatObj,0);				
+			pNode->SetEntityStatObj(pStatObj,0);				
 		}
 
 		Matrix34 mat=matOff*pParam.mat;		

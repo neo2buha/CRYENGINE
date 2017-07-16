@@ -46,7 +46,7 @@ public:
 #if defined (ENABLE_VARIABLE_VALUE_TYPE_CHECKINGS)
 	#define SetTypeInfoOfValue(x)    if (m_value == POS_INFINITE) m_type = eDRVT_PosInfinite; else if (m_value == NEG_INFINITE) \
 	  m_type = eDRVT_NegInfinite; else m_type = x; m_hashedText.clear();
-	#define WarnIfTypeDiffers(other) if (!DoTypesMatch(other)) { DrsLogWarning("Compared to VariableValues with different types"); }
+	#define WarnIfTypeDiffers(other) if (!DoTypesMatch(other)) { DrsLogWarning("Compared two VariableValues with different types"); }
 #else
 	#define SetTypeInfoOfValue(x)
 	#define WarnIfTypeDiffers(other)
@@ -70,20 +70,20 @@ public:
 	CVariableValue& operator-=(const CVariableValue& other);
 	CVariableValue  operator-() const;
 
-	bool                         DoTypesMatch(const CVariableValue& other) const;
 	EDynamicResponseVariableType GetType() const;
+	bool                         DoTypesMatch(const CVariableValue& other) const;
 	const char*              GetTypeAsString() const;
-	const VariableValueData& GetValue() const                  { return m_value; }
-	void                     SetValue(VariableValueData value) { m_value = value; SetTypeInfoOfValue(m_type) }
 	void                     Reset()                           { m_value = DEFAULT_VALUE; SetTypeInfoOfValue(eDRVT_Undefined) }
 
-	string        GetValueAsString() const; //should be used for debug output only
-	CHashedString GetValueAsHashedString() const;
-	int           GetValueAsInt() const;
-	float         GetValueAsFloat() const;
-	bool          GetValueAsBool() const;
+	const VariableValueData& GetValue() const                  { return m_value; }
+	void                     SetValue(VariableValueData value) { m_value = value; SetTypeInfoOfValue(m_type) }
+	CHashedString            GetValueAsHashedString() const;
+	int                      GetValueAsInt() const;
+	float                    GetValueAsFloat() const;
+	bool                     GetValueAsBool() const;
+	string                   GetValueAsString() const;                    //should be used for debug output only
 
-	void          Serialize(Serialization::IArchive & ar);
+	void                     Serialize(Serialization::IArchive & ar);
 
 private:
 	VariableValueData m_value;    //holds the converted float or the string-hash or the actual int value

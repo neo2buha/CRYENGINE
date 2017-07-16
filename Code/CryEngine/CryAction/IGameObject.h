@@ -12,12 +12,14 @@
 
 #define GAME_OBJECT_SUPPORTS_CUSTOM_USER_DATA 1
 
-#include <CryEntitySystem/IComponent.h>
+#include <CryEntitySystem/IEntityComponent.h>
 
+#include <CryNetwork/INetEntity.h>
 #include <CryNetwork/SerializeFwd.h>
 #include "IActionMapManager.h"
 #include <CryMemory/PoolAllocator.h>
 #include <CryFlowGraph/IFlowSystem.h>
+#include <CryNetwork/Rmi.h>
 
 inline void GameWarning(const char*, ...) PRINTF_PARAMS(1, 2);
 
@@ -27,47 +29,6 @@ struct IActionListener;
 struct IMovementController;
 struct IGameObjectProfileManager;
 struct IWorldQuery;
-
-enum EEntityAspects
-{
-	eEA_All               = NET_ASPECT_ALL,
-	// 0x01u                       // aspect 0
-	eEA_Script            = 0x02u, // aspect 1
-	// 0x04u                       // aspect 2
-	eEA_Physics           = 0x08u, // aspect 3
-	eEA_GameClientStatic  = 0x10u, // aspect 4
-	eEA_GameServerStatic  = 0x20u, // aspect 5
-	eEA_GameClientDynamic = 0x40u, // aspect 6
-	eEA_GameServerDynamic = 0x80u, // aspect 7
-#if NUM_ASPECTS > 8
-	eEA_GameClientA       = 0x0100u, // aspect 8
-	eEA_GameServerA       = 0x0200u, // aspect 9
-	eEA_GameClientB       = 0x0400u, // aspect 10
-	eEA_GameServerB       = 0x0800u, // aspect 11
-	eEA_GameClientC       = 0x1000u, // aspect 12
-	eEA_GameServerC       = 0x2000u, // aspect 13
-	eEA_GameClientD       = 0x4000u, // aspect 14
-	eEA_GameClientE       = 0x8000u, // aspect 15
-#endif
-#if NUM_ASPECTS > 16
-	eEA_GameClientF = 0x00010000u,       // aspect 16
-	eEA_GameClientG = 0x00020000u,       // aspect 17
-	eEA_GameClientH = 0x00040000u,       // aspect 18
-	eEA_GameClientI = 0x00080000u,       // aspect 19
-	eEA_GameClientJ = 0x00100000u,       // aspect 20
-	eEA_GameServerD = 0x00200000u,       // aspect 21
-	eEA_GameClientK = 0x00400000u,       // aspect 22
-	eEA_GameClientL = 0x00800000u,       // aspect 23
-	eEA_GameClientM = 0x01000000u,       // aspect 24
-	eEA_GameClientN = 0x02000000u,       // aspect 25
-	eEA_GameClientO = 0x04000000u,       // aspect 26
-	eEA_GameClientP = 0x08000000u,       // aspect 27
-	eEA_GameServerE = 0x10000000u,       // aspect 28
-	eEA_Aspect29    = 0x20000000u,       // aspect 29
-	eEA_Aspect30    = 0x40000000u,       // aspect 30
-	eEA_Aspect31    = 0x80000000u,       // aspect 31
-#endif
-};
 
 enum EEntityPhysicsEvents
 {
@@ -91,21 +52,6 @@ enum EEntityPhysicsEvents
 };
 
 static const int MAX_UPDATE_SLOTS_PER_EXTENSION = 5;
-
-enum ERMInvocation
-{
-	eRMI_ToClientChannel = 0x01,
-	eRMI_ToOwnClient     = 0x02,
-	eRMI_ToOtherClients  = 0x04,
-	eRMI_ToAllClients    = 0x08,
-
-	eRMI_ToServer        = 0x100,
-
-	eRMI_NoLocalCalls    = 0x10000,
-	eRMI_NoRemoteCalls   = 0x20000,
-
-	eRMI_ToRemoteClients = eRMI_NoLocalCalls | eRMI_ToAllClients
-};
 
 enum EUpdateEnableCondition
 {
@@ -145,13 +91,6 @@ enum EAutoDisablePhysicsMode
 	eADPM_COUNT_STATES,
 };
 
-enum EBindToNetworkMode
-{
-	eBTNM_Normal,
-	eBTNM_Force,
-	eBTNM_NowInitialized
-};
-
 struct SGameObjectExtensionRMI
 {
 	void GetMemoryUsage(ICrySizer* pSizer) const {}
@@ -167,46 +106,15 @@ struct SGameObjectExtensionRMI
 	ENetReliabilityType   reliability;
 };
 
-template<size_t N>
-class CRMIAllocator
-{
-public:
-	static ILINE void* Allocate()
-	{
-		ScopedSwitchToGlobalHeap useGlobalHeap;
-		if (!m_pAllocator)
-			m_pAllocator = new stl::PoolAllocator<N>;
-		return m_pAllocator->Allocate();
-	}
-	static ILINE void Deallocate(void* p)
-	{
-		CRY_ASSERT(m_pAllocator);
-		m_pAllocator->Deallocate(p);
-	}
-
-private:
-	static stl::PoolAllocator<N>* m_pAllocator;
-};
-template<size_t N> stl::PoolAllocator<N>* CRMIAllocator<N>::m_pAllocator = 0;
-
 // Summary
 //   Interface used to interact with a game object
 // See Also
 //   IGameObjectExtension
-struct IGameObject : public IActionListener
+struct IGameObject : public IEntityComponent, public IActionListener, public INetEntity
 {
 protected:
-	class CRMIBody : public IRMIMessageBody
-	{
-	public:
-		CRMIBody(const SGameObjectExtensionRMI* method, EntityId id, IRMIListener* pListener, int userId, EntityId dependentId) :
-			IRMIMessageBody(method->reliability, method->attach, id, method->pMsgDef, pListener, userId, dependentId)
-		{
-		}
-	};
-
 	template<class T>
-	class CRMIBodyImpl : public CRMIBody
+	class CRMIBodyImpl : public IRMIMessageBody
 	{
 	public:
 		void SerializeWith(TSerialize ser)
@@ -228,38 +136,26 @@ protected:
 
 		static CRMIBodyImpl* Create(const SGameObjectExtensionRMI* method, EntityId id, const T& params, IRMIListener* pListener, int userId, EntityId dependentId)
 		{
-			return new(CRMIAllocator<sizeof(CRMIBodyImpl)>::Allocate())CRMIBodyImpl(method, id, params, pListener, userId, dependentId);
+			return new(GetRMIAllocator<sizeof(CRMIBodyImpl)>().Allocate())CRMIBodyImpl(method, id, params, pListener, userId, dependentId);
 		}
 
 		void DeleteThis()
 		{
 			this->~CRMIBodyImpl();
-			CRMIAllocator<sizeof(CRMIBodyImpl)>::Deallocate(this);
+			GetRMIAllocator<sizeof(CRMIBodyImpl)>().Deallocate(this);
 		}
 
 	private:
 		T m_params;
 
 		CRMIBodyImpl(const SGameObjectExtensionRMI* method, EntityId id, const T& params, IRMIListener* pListener, int userId, EntityId dependentId) :
-			CRMIBody(method, id, pListener, userId, dependentId),
+			IRMIMessageBody(method->reliability, method->attach, id, method->pMsgDef, pListener, userId, dependentId),
 			m_params(params)
 		{
 		}
 	};
 
 public:
-	// bind this entity to the network system (it gets synchronized then...)
-	virtual bool                  BindToNetwork(EBindToNetworkMode mode = eBTNM_Normal) = 0;
-	// bind this entity to the network system, with a dependency on its parent
-	virtual bool                  BindToNetworkWithParent(EBindToNetworkMode mode, EntityId parentId) = 0;
-	// flag that we have changed the state of the game object aspect
-	virtual void                  ChangedNetworkState(NetworkAspectType aspects) = 0;
-	// enable/disable network aspects on game object
-	virtual void                  EnableAspect(NetworkAspectType aspects, bool enable) = 0;
-	// enable/disable delegatable aspects
-	virtual void                  EnableDelegatableAspect(NetworkAspectType aspects, bool enable) = 0;
-	// A one off call to never enable the physics aspect, this needs to be done *before* the BindToNetwork (typically in the GameObject's Init function)
-	virtual void                  DontSyncPhysics() = 0;
 	// query extension. returns 0 if extension is not there.
 	virtual IGameObjectExtension* QueryExtension(const char* extension) const = 0;
 	virtual IGameObjectExtension* QueryExtension(IGameObjectSystem::ExtensionID id) const = 0;
@@ -273,24 +169,15 @@ public:
 	// force the object to update even if extensions' slots are "sleeping"...
 	virtual void                  ForceUpdate(bool force) = 0;
 	virtual void                  ForceUpdateExtension(IGameObjectExtension* pGOE, int slot) = 0;
-	// get/set network channel
-	virtual uint16                GetChannelId() const = 0;
-	virtual void SetChannelId(uint16) = 0;
-	virtual INetChannel*          GetNetChannel() const = 0;
 	// serialize some aspects of the game object
 	virtual void                  FullSerialize(TSerialize ser) = 0;
-	virtual bool                  NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int pflags) = 0;
 	// in case things have to be set after serialization
 	virtual void                  PostSerialize() = 0;
 	// is the game object probably visible?
 	virtual bool                  IsProbablyVisible() = 0;
 	virtual bool                  IsProbablyDistant() = 0;
-	// change the profile of an aspect
-	virtual bool                  SetAspectProfile(EEntityAspects aspect, uint8 profile, bool fromNetwork = false) = 0;
-	virtual uint8                 GetAspectProfile(EEntityAspects aspect) = 0;
 	virtual IGameObjectExtension* GetExtensionWithRMIBase(const void* pBase) = 0;
 	virtual void                  EnablePrePhysicsUpdate(EPrePhysicsUpdate updateRule) = 0;
-	virtual void                  SetNetworkParent(EntityId id) = 0;
 	virtual void                  Pulse(uint32 pulse) = 0;
 	virtual void                  RegisterAsPredicted() = 0;
 	virtual void                  RegisterAsValidated(IGameObject* pGO, int predictionHandle) = 0;
@@ -298,6 +185,8 @@ public:
 
 	virtual void                  RegisterExtForEvents(IGameObjectExtension* piExtention, const int* pEvents, const int numEvents) = 0;
 	virtual void                  UnRegisterExtForEvents(IGameObjectExtension* piExtention, const int* pEvents, const int numEvents) = 0;
+
+	virtual void                  ChangedNetworkState(NetworkAspectType aspects) = 0;
 
 	// enable/disable sending physics events to this game object
 	virtual void EnablePhysicsEvent(bool enable, int events) = 0;
@@ -332,7 +221,9 @@ public:
 	void InvokeRMI_Primitive(const MI method, const T& params, unsigned where, IRMIListener* pListener, int userId, int channel, EntityId dependentId)
 	{
 		method.Verify(params);
-		DoInvokeRMI(CRMIBodyImpl<T>::Create(method.pMethodInfo, GetEntityId(), params, pListener, userId, dependentId), where, channel);
+		gEnv->pGameFramework->DoInvokeRMI(CRMIBodyImpl<T>::Create(
+				method.pMethodInfo, GetEntityId(), params, pListener, userId, dependentId),
+			where, channel, true);
 	}
 
 	// turn an extension on
@@ -344,12 +235,6 @@ public:
 	// release a previously acquired extension
 	ILINE void                  ReleaseExtension(const char* extension)    { ChangeExtension(extension, eCE_Release); }
 
-	// retrieve the hosting entity
-	ILINE IEntity* GetEntity() const
-	{
-		return m_pEntity;
-	}
-
 	ILINE EntityId GetEntityId() const
 	{
 		return m_entityId;
@@ -360,8 +245,6 @@ public:
 	virtual void                       ReleaseView(IGameObjectView* pGOV) = 0;
 	virtual bool                       CaptureActions(IActionListener* pAL) = 0;
 	virtual void                       ReleaseActions(IActionListener* pAL) = 0;
-	virtual bool                       CaptureProfileManager(IGameObjectProfileManager* pPH) = 0;
-	virtual void                       ReleaseProfileManager(IGameObjectProfileManager* pPH) = 0;
 	virtual void                       EnableUpdateSlot(IGameObjectExtension* pExtension, int slot) = 0;
 	virtual void                       DisableUpdateSlot(IGameObjectExtension* pExtension, int slot) = 0;
 	virtual uint8                      GetUpdateSlotEnables(IGameObjectExtension* pExtension, int slot) = 0;
@@ -392,16 +275,13 @@ protected:
 		eCE_Release
 	};
 
-	IGameObject() : m_pEntity(0), m_entityId(0), m_pMovementController(0) {}
+	IGameObject() : m_entityId(0), m_pMovementController(0) {}
 	EntityId             m_entityId;
 	IMovementController* m_pMovementController;
-	IEntity*             m_pEntity;
 
 private:
 	// change extension activation/reference somehow
 	virtual IGameObjectExtension* ChangeExtension(const char* extension, EChangeExtension change) = 0;
-	// invoke an RMI call
-	virtual void                  DoInvokeRMI(_smart_ptr<CRMIBody> pBody, unsigned where, int channel) = 0;
 };
 
 struct IRMIAtSyncItem : public INetAtSyncItem, public IRMICppLogger {};
@@ -417,7 +297,7 @@ public:
 
 	static ILINE CRMIAtSyncItem* Create(const T& params, EntityId id, const SGameObjectExtensionRMI* pRMI, CallbackFunc callback, INetChannel* pChannel)
 	{
-		return new(CRMIAllocator<sizeof(CRMIAtSyncItem)>::Allocate())CRMIAtSyncItem(params, id, pRMI, callback, pChannel);
+		return new(GetRMIAllocator<sizeof(CRMIAtSyncItem)>().Allocate())CRMIAtSyncItem(params, id, pRMI, callback, pChannel);
 	}
 
 	bool Sync()
@@ -427,9 +307,9 @@ public:
 		char msg[256];
 		msg[0] = 0;
 
-		if (IGameObject* pGameObject = gEnv->pGame->GetIGameFramework()->GetGameObject(m_id))
+		if (IGameObject* pGameObject = gEnv->pGameFramework->GetGameObject(m_id))
 		{
-			INDENT_LOG_DURING_SCOPE(true, "During game object sync: %s %s", pGameObject->GetEntity()->GetEntityTextDescription(), m_pRMI->pMsgDef->description);
+			INDENT_LOG_DURING_SCOPE(true, "During game object sync: %s %s", pGameObject->GetEntity()->GetEntityTextDescription().c_str(), m_pRMI->pMsgDef->description);
 
 			if (Obj* pGameObjectExtension = (Obj*)pGameObject->GetExtensionWithRMIBase(m_pRMI->pBase))
 			{
@@ -438,8 +318,10 @@ public:
 			}
 			else
 			{
-				cry_sprintf(msg, "Game object extension with base %.8x for entity %s for RMI %s not found", (uint32)(TRUNCATE_PTR)m_pRMI->pBase, pGameObject->GetEntity()->GetName(), m_pRMI->pMsgDef->description);
-				GameWarning("%s", msg);
+				CryWarning(VALIDATOR_MODULE_NETWORK, VALIDATOR_ERROR,
+					"Game object extension with base %.8x for entity %s for RMI %s not found",
+					(uint32)(TRUNCATE_PTR)m_pRMI->pBase, pGameObject->GetEntity()->GetName(),
+					m_pRMI->pMsgDef->description);
 			}
 		}
 		else
@@ -449,7 +331,8 @@ public:
 
 		if (!ok)
 		{
-			GameWarning("Error handling RMI %s", m_pRMI->pMsgDef->description);
+			CryWarning(VALIDATOR_MODULE_NETWORK, VALIDATOR_ERROR, 
+				"Error handling RMI %s", m_pRMI->pMsgDef->description);
 
 			if (!foundObject && !gEnv->bServer && !m_pChannel->IsInTransition())
 			{
@@ -479,7 +362,7 @@ public:
 	void DeleteThis()
 	{
 		this->~CRMIAtSyncItem();
-		CRMIAllocator<sizeof(CRMIAtSyncItem)>::Deallocate(this);
+		GetRMIAllocator<sizeof(CRMIAtSyncItem)>().Deallocate(this);
 	}
 	// ~INetAtSyncItem
 
@@ -528,7 +411,7 @@ protected:
 
 	static T_Derived* QueryExtension(EntityId id)
 	{
-		IGameObject* pGO = gEnv->pGame->GetIGameFramework()->GetGameObject(id);
+		IGameObject* pGO = gEnv->pGameFramework->GetGameObject(id);
 		if (pGO)
 		{
 			return static_cast<T_Derived*>(pGO->QueryExtension(T_Derived::ms_statics.m_extensionId));
@@ -716,25 +599,16 @@ struct IGameObjectView
 	virtual void PostUpdateView(SViewParams& params) = 0;
 };
 
-struct IGameObjectProfileManager
-{
-	virtual ~IGameObjectProfileManager(){}
-	virtual bool  SetAspectProfile(EEntityAspects aspect, uint8 profile) = 0;
-	virtual uint8 GetDefaultProfile(EEntityAspects aspect) = 0;
-};
-
 // Summary
 //   Interface used to implement a game object extension
-struct IGameObjectExtension : public IComponent
+struct IGameObjectExtension : public IEntityComponent
 {
-	virtual ~IGameObjectExtension(){}
-	virtual void GetMemoryUsage(ICrySizer* pSizer) const = 0;
+	IGameObjectExtension() : m_pGameObject(0) {}
 
-	IGameObjectExtension() : m_pGameObject(0), m_entityId(0), m_pEntity(0) {}
-
-	// IComponent
-	virtual ComponentEventPriority GetEventPriority(const int eventID) const { return(ENTITY_PROXY_LAST - ENTITY_PROXY_USER); }
-	// ~IComponent
+	// IEntityComponent
+	virtual uint64 GetEventMask() const { return ~(BIT64(ENTITY_EVENT_PREPHYSICSUPDATE)|BIT64(ENTITY_EVENT_UPDATE)|BIT64(ENTITY_EVENT_PHYS_POSTSTEP)); } // All events except expensive ones such as update are subscribed to
+	virtual void Initialize() {};
+	// ~IEntityComponent
 
 	// Summary
 	//   Initialize the extension
@@ -800,24 +674,6 @@ struct IGameObjectExtension : public IComponent
 	virtual void PostReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params) = 0;
 
 	// Summary
-	//   Builds a signature to describe the dynamic hierarchy of the parent Entity container
-	// Arguments:
-	//    signature - the object to serialize with, forming the signature
-	// Returns:
-	//    true - If the signature is thus far valid
-	// Note:
-	//    It's the responsibility of the proxy to identify its internal state which may complicate the hierarchy
-	//    of the parent Entity i.e., sub-proxies and which actually exist for this instantiation.
-	virtual bool GetEntityPoolSignature(TSerialize signature) = 0;
-
-	// Summary
-	//   Releases the resources used by the object
-	// Remarks
-	//   This function should also take care of freeing the instance once the
-	//   resource are freed.
-	virtual void Release() = 0;
-
-	// Summary
 	//   Performs the serialization the extension
 	// Parameters
 	//   ser - object used to serialize values
@@ -865,14 +721,9 @@ struct IGameObjectExtension : public IComponent
 	//   SGameObjectEvent
 	virtual void HandleEvent(const SGameObjectEvent& event) = 0;
 
-	// Summary
-	//   Processes entity specific events
-	// Parameters
-	//   event - entity event, see SEntityEvent for more information
-	virtual void ProcessEvent(SEntityEvent& event) = 0;
+	virtual void GameSerialize(TSerialize ser ){ FullSerialize(ser); };                         //!< From IEntityComponent
 
 	virtual void SetChannelId(uint16 id) = 0;
-	virtual void SetAuthority(bool auth) = 0;
 
 	// Summary
 	//   Retrieves the RMI Base pointer
@@ -899,42 +750,18 @@ struct IGameObjectExtension : public IComponent
 	//   A pointer to the game object which hold this extension
 	ILINE IGameObject* GetGameObject() const { return m_pGameObject; }
 
-	// Summary
-	//   Retrieves the pointer to the entity
-	// Returns
-	//   A pointer to the entity which hold this game object extension
-	ILINE IEntity* GetEntity() const { return m_pEntity; }
-
-	// Summary
-	//   Retrieves the EntityId
-	// Returns
-	//   An EntityId to the entity which hold this game object extension
-	ILINE EntityId GetEntityId() const { return m_entityId; }
-
 protected:
 	void SetGameObject(IGameObject* pGameObject)
 	{
 		m_pGameObject = pGameObject;
-		if (pGameObject)
-		{
-			m_pEntity = pGameObject->GetEntity();
-			m_entityId = pGameObject->GetEntityId();
-		}
 	}
 
-	void ResetGameObject()
-	{
-		m_pEntity = (m_pGameObject ? m_pGameObject->GetEntity() : 0);
-		m_entityId = (m_pGameObject ? m_pGameObject->GetEntityId() : 0);
-	}
+	// Kept around for legacy reasons
+	void ResetGameObject() {}
 
 private:
 	IGameObject* m_pGameObject;
-	EntityId     m_entityId;
-	IEntity*     m_pEntity;
 };
-
-DECLARE_COMPONENT_POINTERS(IGameObjectExtension);
 
 #define CHANGED_NETWORK_STATE(object, aspects)     do { /* IEntity * pEntity = object->GetGameObject()->GetEntity(); CryLogAlways("%s changed aspect %x (%s %d)", pEntity ? pEntity->GetName() : "NULL", aspects, __FILE__, __LINE__); */ object->GetGameObject()->ChangedNetworkState(aspects); } while (0)
 #define CHANGED_NETWORK_STATE_GO(object, aspects)  do { /* IEntity * pEntity = object->GetEntity(); CryLogAlways("%s changed aspect %x (%s %d)", pEntity ? pEntity->GetName() : "NULL", aspects, __FILE__, __LINE__); */ object->ChangedNetworkState(aspects); } while (0)

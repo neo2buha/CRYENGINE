@@ -9,6 +9,7 @@ struct IMovementActor;
 struct MovementUpdateContext;
 
 	#include <CryAISystem/MovementBlock.h>
+	#include <CryAISystem/MovementRequestID.h>
 
 namespace Movement
 {
@@ -25,18 +26,20 @@ class Plan
 {
 public:
 	static const uint32 NoBlockIndex = ~0u;
-
-	Plan()
-		: m_current(NoBlockIndex)
-	{
-	}
-
+	
 	enum Status
 	{
+		None,
 		Running,
 		Finished,
 		CantBeFinished,
 	};
+
+	Plan()
+		: m_current(NoBlockIndex)
+		, m_lastStatus(Status::Running)
+	{
+	}
 
 	template<typename BlockType>
 	void AddBlock()
@@ -49,21 +52,29 @@ public:
 		m_blocks.push_back(block);
 	}
 
-	Status       Execute(const MovementUpdateContext& context);
-	void         ChangeToIndex(const uint newIndex, IMovementActor& actor);
-	bool         HasBlocks() const { return !m_blocks.empty(); }
-	void         Clear(IMovementActor& actor);
-	void         CutOffAfterCurrentBlock();
-	bool         InterruptibleNow() const;
-	uint32       GetCurrentBlockIndex() const { return m_current; }
-	uint32       GetBlockCount() const        { return m_blocks.size(); }
-	const Block* GetBlock(uint32 index) const;
+	Status                   Execute(const MovementUpdateContext& context);
+	void                     ChangeToIndex(const uint newIndex, IMovementActor& actor);
+	bool                     HasBlocks() const { return !m_blocks.empty(); }
+	void                     Clear(IMovementActor& actor);
+	void                     CutOffAfterCurrentBlock();
+	bool                     InterruptibleNow() const;
+	uint32                   GetCurrentBlockIndex() const { return m_current; }
+	uint32                   GetBlockCount() const        { return m_blocks.size(); }
+	const Block*             GetBlock(uint32 index) const;
+
+	const MovementRequestID& GetRequestId() const                             { return m_requestId; }
+	void                     SetRequestId(const MovementRequestID& requestId) { m_requestId = requestId; }
+
+	Status                   GetLastStatus() const { return m_lastStatus; }
 
 private:
 	typedef std::vector<std::shared_ptr<Block>> Blocks;
-	Blocks m_blocks;
-	uint32 m_current;
+	Blocks            m_blocks;
+	uint32            m_current;
+	MovementRequestID m_requestId;
+	Status            m_lastStatus;
 };
+
 }
 
 #endif // MovementPlan_h

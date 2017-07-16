@@ -8,7 +8,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 29:11:2005   13:52 : Created by Márcio Martins
+   - 29:11:2005   13:52 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #ifndef __IITEM_H__
@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <IGameObject.h>
+#include "IGameObject.h"
 
 enum EViewMode
 {

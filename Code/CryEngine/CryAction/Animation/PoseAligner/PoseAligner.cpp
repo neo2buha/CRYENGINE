@@ -389,7 +389,7 @@ bool CChain::SetupTargetPoseModifiers(const QuatT& location, const Vec3& limitOf
 		return true;
 
 	if (!m_pPoseAlignerChain)
-		::CryCreateClassInstance<IAnimationPoseAlignerChain>("AnimationPoseModifier_PoseAlignerChain", m_pPoseAlignerChain);
+		CryCreateClassInstanceForInterface<IAnimationPoseAlignerChain>(cryiidof<IAnimationPoseAlignerChain>(), m_pPoseAlignerChain);
 	if (!m_pPoseAlignerChain)
 		return false;
 
@@ -418,7 +418,7 @@ void CChain::DrawDebug(const QuatT& location)
 	ComputeRootOffsetExtents(offsetMin, offsetMax);
 	offsetMin = min(offsetMin, 0.0f);
 	offsetMax = max(offsetMax, 0.0f);
-	gEnv->pRenderer->DrawLabel(m_targetPosition, 1.5f,
+	IRenderAuxText::DrawLabelF(m_targetPosition, 1.5f,
 	                           "w %.2f a: %.2f\n"
 	                           "min %.2f\n"
 	                           "max %.2f\n",
@@ -436,7 +436,7 @@ void CChain::DrawDebug(const QuatT& location)
 
 CPose::CPose()
 {
-	CryCreateClassInstance("AnimationPoseModifier_OperatorQueue", m_operatorQueue);
+	CryCreateClassInstanceForInterface(cryiidof<IAnimationOperatorQueue>(), m_operatorQueue);
 
 	Clear();
 }
@@ -482,17 +482,13 @@ void CPose::Clear()
 	m_bInitialized = false;
 }
 
-bool CPose::Initialize(IEntity& entity, int rootJointIndex)
+bool CPose::Initialize(IEntity& entity, ICharacterInstance* pCharacter, int rootJointIndex)
 {
 	Clear();
 
 	if (!m_operatorQueue)
 		return false;
 	if (rootJointIndex < 0)
-		return false;
-
-	ICharacterInstance* pCharacter = entity.GetCharacter(0);
-	if (!pCharacter)
 		return false;
 
 	m_pEntity = &entity;
@@ -523,25 +519,19 @@ void CPose::RemoveAllChains()
 
 //
 
-void CPose::Update(const QuatT& location, const float time)
+void CPose::Update(ICharacterInstance* pCharacter, const QuatT& location, const float time)
 {
 	CRY_ASSERT(m_pEntity);
 
 	if (!CVars::GetInstance().m_enable)
 		return;
 
-	ICharacterInstance* pCharacter = m_pEntity->GetCharacter(0);
-	if (!pCharacter)
-		return;
-
 	m_pSkeletonAnim = pCharacter->GetISkeletonAnim();
-	if (m_pSkeletonAnim == NULL)
-		return;
 	m_pSkeletonPose = pCharacter->GetISkeletonPose();
-	if (m_pSkeletonPose == NULL)
+	if (m_pSkeletonAnim == nullptr || m_pSkeletonPose == nullptr)
 		return;
-
-	if (!m_pSkeletonAnim->GetNumAnimsInFIFO(0))
+	
+	if (m_pSkeletonAnim->GetNumAnimsInFIFO(0) == 0)
 		return;
 
 	uint chainCount = uint(m_chains.size());
@@ -644,7 +634,7 @@ void CPose::DrawDebug(const QuatT& location, const Vec3& groundNormal)
 	gEnv->pRenderer->GetIRenderAuxGeom()->DrawCylinder(
 	  groundPosition, groundNormal, 1.0f, 0.005f, ColorB(0x00, 0x00, 0x00, 0x40), true);
 
-	gEnv->pRenderer->DrawLabel(location * m_pSkeletonPose->GetAbsJointByID(m_rootJointIndex).t, 1.5f,
+	IRenderAuxText::DrawLabelF(location * m_pSkeletonPose->GetAbsJointByID(m_rootJointIndex).t, 1.5f,
 	                           "h %.2f\n"
 	                           "w %.2f\n",
 	                           m_rootOffsetSmoothed,

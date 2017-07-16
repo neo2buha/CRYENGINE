@@ -109,8 +109,7 @@ IMaterial* CParticleEmitter::GetMaterial(Vec3*) const
 float CParticleEmitter::GetMaxViewDist()
 {
 	// Max particles/radian, modified by emitter settings.
-	return gEnv->pSystem->GetViewCamera().GetAngularResolution()
-	       * max(GetCVars()->e_ParticlesMinDrawPixels, 0.125f)
+	return CParticleManager::Instance()->GetMaxAngularDensity(gEnv->pSystem->GetViewCamera())
 	       * m_fMaxParticleSize
 	       * GetParticleScale()
 	       * m_fViewDistRatio;
@@ -176,7 +175,7 @@ void CParticleEmitter::UpdateState()
 		}
 	}
 
-	bool bUpdateState = bUpdateBounds || m_fAge >= m_fStateChangeAge;
+	bool bUpdateState = (GetRndFlags()&ERF_HIDDEN)==0 && (bUpdateBounds || m_fAge >= m_fStateChangeAge);
 	if (bUpdateState)
 	{
 		m_fStateChangeAge = fHUGE;
@@ -246,7 +245,6 @@ void CParticleEmitter::UpdateTimes(float fAgeAdjust)
 
 void CParticleEmitter::Kill()
 {
-	Reset();
 	if (m_fDeathAge >= 0.f)
 	{
 		CParticleSource::Kill();
@@ -296,7 +294,6 @@ CParticleEmitter::CParticleEmitter(const IParticleEffect* pEffect, const QuatTS&
 {
 	m_nInternalFlags |= IRenderNode::REQUIRES_FORWARD_RENDERING | IRenderNode::REQUIRES_NEAREST_CUBEMAP;
 
-	m_nEntityId = 0;
 	m_nEntitySlot = -1;
 	m_nEnvFlags = 0;
 	m_bbWorld.Reset();
@@ -381,9 +378,8 @@ string CParticleEmitter::GetDebugString(char type) const
 	if (type == 's')
 	{
 		// Serialization debugging.
-		IEntity* pEntity = GetEntity();
-		if (pEntity)
-			s += string().Format(" entity=%s slot=%d", pEntity->GetName(), m_nEntitySlot);
+		if (m_pOwnerEntity)
+			s += string().Format(" entity=%s slot=%d", m_pOwnerEntity->GetName(), m_nEntitySlot);
 		if (IsIndependent())
 			s += " Indep";
 		if (IsActive())
@@ -420,7 +416,8 @@ void CParticleEmitter::AddEffect(CParticleContainer* pParentContainer, const CPa
 			{
 				if (!c.IsUsed())
 				{
-					if (c.GetEffect() == pEffect && c.IsIndirect() == !!pEffect->GetIndirectParent())
+					if (c.GetEffect() == pEffect && 
+						(c.GetParent() ? pEffect->GetIndirectParent() && c.GetParent()->IsUsed() : !pEffect->GetIndirectParent()))
 					{
 						pContainer = &c;
 						c.SetUsed(true);
@@ -495,6 +492,7 @@ void CParticleEmitter::RefreshEffect()
 
 	for (auto& c : m_Containers)
 	{
+		c.ResetRenderObjects();
 		m_nEnvFlags |= c.GetEnvironmentFlags();
 		m_nRenObjFlags |= c.GetParams().nRenObjFlags.On;
 		m_fMaxParticleSize = max(m_fMaxParticleSize, c.GetEffect()->GetMaxParticleSize() * c.GetParams().fViewDistanceAdjust);
@@ -510,6 +508,8 @@ void CParticleEmitter::RefreshEffect()
 	m_fStateChangeAge = -fHUGE;
 	m_fDeathAge = fHUGE;
 	m_nEmitterFlags |= ePEF_NeedsEntityUpdate;
+
+	m_Vel = ZERO;
 }
 
 void CParticleEmitter::SetEffect(IParticleEffect const* pEffect)
@@ -537,7 +537,7 @@ void CParticleEmitter::CreateIndirectEmitters(CParticleSource* pSource, CParticl
 
 void CParticleEmitter::SetLocation(const QuatTS& loc)
 {
-	if (!QuatTS::IsEquivalent(GetLocation(), loc, 0.0045f, 1e-5f))
+	if (!IsEquivalent(GetLocation(), loc, 0.0045f, 1e-5f))
 	{
 		InvalidateStaticBounds();
 		m_VisEnviron.Invalidate();
@@ -657,17 +657,6 @@ void CParticleEmitter::SetSpawnParams(SpawnParams const& spawnParams)
 	m_SpawnParams = spawnParams;
 }
 
-IEntity* CParticleEmitter::GetEntity() const
-{
-	if (m_nEntityId)
-	{
-		IEntity* pEntity = gEnv->pEntitySystem->GetEntity(m_nEntityId);
-		assert(pEntity);
-		return pEntity;
-	}
-	return NULL;
-}
-
 bool GetPhysicalVelocity(Velocity3& Vel, IEntity* pEnt, const Vec3& vPos)
 {
 	if (pEnt)
@@ -689,36 +678,6 @@ bool GetPhysicalVelocity(Velocity3& Vel, IEntity* pEnt, const Vec3& vPos)
 	return false;
 }
 
-void CParticleEmitter::OnEntityEvent(IEntity* pEntity, SEntityEvent const& event)
-{
-	switch (event.event)
-	{
-	case ENTITY_EVENT_ATTACH_THIS:
-	case ENTITY_EVENT_DETACH_THIS:
-	case ENTITY_EVENT_LINK:
-	case ENTITY_EVENT_DELINK:
-	case ENTITY_EVENT_ENABLE_PHYSICS:
-	case ENTITY_EVENT_PHYSICS_CHANGE_STATE:
-		m_nEmitterFlags |= ePEF_NeedsEntityUpdate;
-		m_Vel = ZERO;
-		break;
-	case ENTITY_EVENT_HIDE:
-		for (auto& c : m_Containers)
-		{
-			c.OnHidden();
-		}
-		break;
-	case ENTITY_EVENT_UNHIDE:
-		if (m_nEnvFlags & EFF_ANY)
-			AllocEmitters();
-		for (auto& c : m_Containers)
-		{
-			c.OnUnhidden();
-		}
-		break;
-	}
-}
-
 void CParticleEmitter::UpdateFromEntity()
 {
 	FUNCTION_PROFILER(GetISystem(), PROFILE_PARTICLE);
@@ -726,7 +685,7 @@ void CParticleEmitter::UpdateFromEntity()
 	m_nEmitterFlags &= ~(ePEF_HasPhysics | ePEF_HasTarget | ePEF_HasAttachment);
 
 	// Get emitter entity.
-	IEntity* pEntity = GetEntity();
+	IEntity* pEntity = m_pOwnerEntity;
 
 	// Set external target.
 	if (!m_Target.bPriority)
@@ -783,7 +742,7 @@ void CParticleEmitter::UpdateFromEntity()
 		{
 			// If entity attached, find attached physics and geometry on parent.
 			GeomRef geom;
-			int iSlot = geom.Set(pEntity, m_nEntitySlot);
+			int iSlot = geom.Set(pEntity);
 			if (iSlot >= 0)
 			{
 				SetMatrix(pEntity->GetSlotWorldTM(iSlot));
@@ -847,7 +806,7 @@ void CParticleEmitter::Update()
 
 	// Update velocity
 	Velocity3 Vel;
-	if ((m_nEmitterFlags & ePEF_HasPhysics) && GetPhysicalVelocity(Vel, GetEntity(), GetLocation().t))
+	if ((m_nEmitterFlags & ePEF_HasPhysics) && GetPhysicalVelocity(Vel, m_pOwnerEntity, GetLocation().t))
 	{
 		// Get velocity from physics.
 		m_Vel = Vel;
@@ -897,21 +856,21 @@ void CParticleEmitter::EmitParticle(const EmitParticleData* pData)
 
 void CParticleEmitter::SetEntity(IEntity* pEntity, int nSlot)
 {
-	if (pEntity != nullptr)
-	{
-		m_nEntityId = pEntity->GetId();
-	}
-	else
-	{
-		m_nEntityId = INVALID_ENTITYID;
-	}
+	SetOwnerEntity(pEntity);
 
 	m_nEntitySlot = nSlot;
 	m_nEmitterFlags |= ePEF_NeedsEntityUpdate;
+	m_Vel = ZERO;
 
 	for (auto& c : m_Containers)
 		if (CParticleSubEmitter* e = c.GetDirectEmitter())
 			e->ResetLoc();
+}
+
+void CParticleEmitter::InvalidateCachedEntityData()
+{
+	m_nEmitterFlags |= ePEF_NeedsEntityUpdate;
+	m_Vel = ZERO;
 }
 
 void CParticleEmitter::Render(SRendParams const& RenParams, const SRenderingPassInfo& passInfo)
@@ -979,7 +938,7 @@ void CParticleEmitter::Render(SRendParams const& RenParams, const SRenderingPass
 		PartParams.m_fCamDistance = GetNearestDistance(passInfo.GetCamera().GetPosition(), PartParams.m_fMainBoundsScale);
 
 	// Compute max allowed res.
-	PartParams.m_fMaxAngularDensity = passInfo.GetCamera().GetAngularResolution() * max(GetCVars()->e_ParticlesMinDrawPixels, 0.125f);
+	PartParams.m_fMaxAngularDensity = CParticleManager::Instance()->GetMaxAngularDensity(passInfo.GetCamera()) * GetParticleScale() * m_fViewDistRatio;
 	bool bHDRModeEnabled = false;
 	GetRenderer()->EF_Query(EFQ_HDRModeEnabled, bHDRModeEnabled);
 	PartParams.m_fHDRDynamicMultiplier = bHDRModeEnabled ? HDRDynamicMultiplier : 1.f;
@@ -994,7 +953,7 @@ void CParticleEmitter::Render(SRendParams const& RenParams, const SRenderingPass
 	else
 	{
 		// Emitter in preview window, etc
-		PartParams.m_nRenObjFlags.SetState(-1, FOB_GLOBAL_ILLUMINATION | FOB_INSHADOW | FOB_SOFT_PARTICLE | FOB_MOTION_BLUR);
+		PartParams.m_nRenObjFlags.SetState(-1, FOB_INSHADOW | FOB_SOFT_PARTICLE | FOB_MOTION_BLUR);
 	}
 
 	if (!PartParams.m_nDeferredLightVolumeId)
@@ -1003,9 +962,6 @@ void CParticleEmitter::Render(SRendParams const& RenParams, const SRenderingPass
 		PartParams.m_nRenObjFlags.SetState(-1, FOB_IN_DOORS | FOB_INSHADOW);
 	if (RenParams.dwFObjFlags & FOB_NEAREST)
 		PartParams.m_nRenObjFlags.SetState(-1, FOB_SOFT_PARTICLE);
-
-	if (RenParams.m_pVisArea) //&& RenParams.m_pVisArea->IsIgnoringGI()) - ignore GI not used in most vis areas unfortunately, disable GI for any particle inside a vis area
-		PartParams.m_nRenObjFlags.SetState(-1, FOB_GLOBAL_ILLUMINATION);
 
 	if (passInfo.IsAuxWindow())
 	{
@@ -1201,7 +1157,7 @@ void CParticleEmitter::RenderDebugInfo()
 				colLabel.g = 1.f;
 				colLabel.b *= 0.5f;
 			}
-			GetRenderer()->DrawLabelEx(vLabel, 1.5f, (float*)&colLabel, true, true, sLabel);
+			IRenderAuxText::DrawLabelEx(vLabel, 1.5f, (float*)&colLabel, true, true, sLabel);
 
 			// Compare static and dynamic boxes.
 			if (!bbDyn.IsReset())
@@ -1349,6 +1305,27 @@ void CParticleEmitter::SerializeState(TSerialize ser)
 	ser.Value("PulsePeriod", m_SpawnParams.fPulsePeriod);
 }
 
+void CParticleEmitter::Hide(bool bHide)
+{
+	IParticleEmitter::Hide(bHide);
+	if (bHide)
+	{
+		for (auto& c : m_Containers)
+		{
+			c.OnHidden();
+		}
+	}
+	else
+	{
+		if (m_nEnvFlags & EFF_ANY)
+			AllocEmitters();
+		for (auto& c : m_Containers)
+		{
+			c.OnUnhidden();
+		}
+	}
+}
+
 void CParticleEmitter::GetMemoryUsage(ICrySizer* pSizer) const
 {
 	m_Containers.GetMemoryUsage(pSizer);
@@ -1375,6 +1352,13 @@ bool CParticleEmitter::UpdateStreamableComponents(float fImportance, const Matri
 	}
 
 	return true;
+}
+
+EntityId CParticleEmitter::GetAttachedEntityId()
+{
+	if (GetOwnerEntity())
+		return GetOwnerEntity()->GetId();
+	return INVALID_ENTITYID;
 }
 
 IParticleAttributes& CParticleEmitter::GetAttributes()

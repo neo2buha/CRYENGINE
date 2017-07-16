@@ -6,7 +6,8 @@
 #include "Model.h"
 #include "LoaderTCB.h"
 #include "AnimEventLoader.h"
-#include <CryString/StringUtils.h>
+
+#include <CryString/CryPath.h>
 
 #define ANIMATION_EXT  "anm"
 #define CONT_EXTENSION (0x10)
@@ -146,14 +147,15 @@ void CryCGALoader::LoadAnimations(const char* cgaFile, CDefaultSkeleton* pCGAMod
 				{
 					filename = fullpath;
 					filename.append(fd.name);
-					filename = PathUtil::ToLower(filename);
+					filename.MakeLower();
 
-					if (CryStringUtils::stristr(filename.c_str(), ".anm") != NULL)
+					const char* szFileExt = PathUtil::GetExt(filename.c_str());
+					if (strcmp(szFileExt, "anm") == 0)
 					{
 						// ModelAnimationHeader file found, load it.
 						LoadAnimationANM(filename.c_str(), pCGAModel, unique_model_id, nLoadingFlags);
 					}
-					else if (CryStringUtils::stristr(filename.c_str(), ".caf") != NULL)
+					else if (strcmp(szFileExt, "caf") == 0)
 					{
 						int prefixLen = strlen(fname) - 1;
 						stack_string animName = fd.name;
@@ -190,8 +192,8 @@ bool CryCGALoader::LoadAnimationANM(const char* animFile, CDefaultSkeleton* pCGA
 	assert(strlen(animFile) < _MAX_PATH);
 	char fname[_MAX_PATH];
 	cry_strcpy(fname, animFile);
-	CryStringUtils::StripFileExtension(fname);
-	const char* sAnimName = CryStringUtils::FindFileNameInPath(fname);
+	PathUtil::RemoveExtension(fname);
+	const char* sAnimName = PathUtil::GetFile(fname);
 
 	const char* sName = strchr(sAnimName, '_');
 	if (sName)

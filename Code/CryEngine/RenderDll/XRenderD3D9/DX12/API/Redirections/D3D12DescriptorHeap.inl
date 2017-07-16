@@ -25,12 +25,20 @@ public:
 		D3D12_GPU_DELTA_ADDRESS deltaGPUAddresses = { 0ULL, 0ULL };
 		D3D12_DESCRIPTOR_HEAP_DESC DescriptorHeapDesc = *pDescriptorHeapDesc;
 
+		DX12_ASSERT(m_Handle < DX12_MULTIGPU_NUM_DESCRIPTORHEAPS, "Too many descriptor heaps allocated, adjust the vector-size!");
 		DX12_ASSERT(pDescriptorHeapDesc->NodeMask != 0, "0 is not allowed in the broadcaster!");
 		for (int i = 0; i < numTargets; ++i)
 		{
 			m_Targets[i] = nullptr;
+
 			if (DescriptorHeapDesc.NodeMask = (pDescriptorHeapDesc->NodeMask & (1 << i)))
 			{
+#if DX12_LINKEDADAPTER_SIMULATION
+				// Always create on the first GPU, if running simulation
+				if (CRenderer::CV_r_StereoEnableMgpu < 0)
+					DescriptorHeapDesc.NodeMask = 1;
+#endif
+
 				HRESULT ret = pDevice->CreateDescriptorHeap(
 				  &DescriptorHeapDesc, riid, (void**)&m_Targets[i]);
 				DX12_ASSERT(ret == S_OK, "Failed to create descriptor heap!");

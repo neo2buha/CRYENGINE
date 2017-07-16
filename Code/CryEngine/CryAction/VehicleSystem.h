@@ -20,8 +20,6 @@
 
 #include "IVehicleSystem.h"
 
-#include <CryEntitySystem/IEntityPoolManager.h>
-
 typedef std::map<string, IGameObjectExtensionCreatorBase*> TVehicleClassMap;
 typedef std::map<EntityId, IVehicle*>                      TVehicleMap;
 typedef std::map<string, IVehicleMovement*(*)()>           TVehicleMovementClassMap;
@@ -42,8 +40,7 @@ class CVehicleCVars;
 class CVehicleSeat;
 
 class CVehicleSystem :
-	public IVehicleSystem,
-	public IEntityPoolListener
+	public IVehicleSystem
 {
 public:
 	CVehicleSystem(ISystem* pSystem, IEntitySystem* pEntitySystem);
@@ -95,11 +92,6 @@ public:
 	virtual void                             Update(float deltaTime);
 	// ~IVehicleSystem
 
-	//IEntityPoolListener
-	virtual void OnBookmarkEntitySerialize(TSerialize serialize, void* pVEntity);
-
-	//IEntityPoolListener
-
 	void                SetInitializingSeat(CVehicleSeat* pSeat) { m_pInitializingSeat = pSeat; };
 	CVehicleSeat*       GetInitializingSeat()                    { return m_pInitializingSeat; };
 
@@ -138,7 +130,7 @@ public:
 #endif
 
 private:
-	//	static IEntityProxy *CreateVehicle(IEntity *pEntity, SEntitySpawnParams &params, void *pUserData);
+	//	static IEntityComponent *CreateVehicle(IEntity *pEntity, SEntitySpawnParams &params, void *pUserData);
 	void RegisterCVars();
 
 	struct SSpawnUserData

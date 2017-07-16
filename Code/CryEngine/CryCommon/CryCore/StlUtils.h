@@ -3,7 +3,6 @@
 #ifndef _STL_UTILS_HEADER_
 #define _STL_UTILS_HEADER_
 
-#include <CryCore/Assert/CompileTimeUtils.h>
 #include "Wrapper.h"
 
 #include <map>
@@ -85,6 +84,13 @@ unsigned countElements(const std::vector<T>& arrT, const T& x)
  */
 namespace stl
 {
+//! Implementation of std::make_unique - missing from C++/11
+//! Remove when all compilers provide the default implementation.
+template<class T, class... TArgs> inline std::unique_ptr<T> make_unique(TArgs&&... args)
+{
+	return (std::unique_ptr<T>(new T(std::forward<TArgs>(args)...)));
+}
+
 //! Compare member of class/struct.
 //! e.g. Sort Vec3s by x component
 //! std::sort(vec3s.begin(), vec3s.end(), stl::member_compare<Vec3, float, &Vec3::x>());
@@ -339,6 +345,22 @@ inline bool binary_insert_unique(Container& container, const Value& value)
 	return true;
 }
 
+//! Find element in a sorted container using binary search with logarithmic efficiency.
+//! \return true if item was inserted.
+template<class Container, class Value, typename Func>
+inline bool binary_insert_unique(Container& container, const Value& value, Func order)
+{
+	typename Container::iterator it = std::lower_bound(container.begin(), container.end(), value, order);
+	if (it != container.end())
+	{
+		if (*it == value)
+			return false;
+		container.insert(it, value);
+	}
+	else
+		container.insert(container.end(), value);
+	return true;
+}
 //! Find element in a sorted container using binary search with logarithmic efficiency and erase it if found.
 //! \return true if item was erased.
 template<class Container, class Value>
@@ -574,66 +596,18 @@ private:
 	Self*        m_prev_intrusive;
 };
 
-template<class T>
-inline void reconstruct(T& t)
+//will clear the container and force the capacity to 0
+template<typename T, typename... Args>
+inline void free_container(T& container, Args&&... args)
 {
-	t.~T();
-	new(&t)T;
+	container.~T();
+	new(&container)T(std::forward<Args>(args) ...);
 }
 
-template<typename T, typename A1>
-inline void reconstruct(T& t, const A1& a1)
+template<typename T, typename... Args>
+inline void reconstruct(T& container, Args&&... args)
 {
-	t.~T();
-	new(&t)T(a1);
-}
-
-template<typename T, typename A1, typename A2>
-inline void reconstruct(T& t, const A1& a1, const A2& a2)
-{
-	t.~T();
-	new(&t)T(a1, a2);
-}
-
-template<typename T, typename A1, typename A2, typename A3>
-inline void reconstruct(T& t, const A1& a1, const A2& a2, const A3& a3)
-{
-	t.~T();
-	new(&t)T(a1, a2, a3);
-}
-
-template<typename T, typename A1, typename A2, typename A3, typename A4>
-inline void reconstruct(T& t, const A1& a1, const A2& a2, const A3& a3, const A4& a4)
-{
-	t.~T();
-	new(&t)T(a1, a2, a3, a4);
-}
-
-template<typename T, typename A1, typename A2, typename A3, typename A4, typename A5>
-inline void reconstruct(T& t, const A1& a1, const A2& a2, const A3& a3, const A4& a4, const A5& a5)
-{
-	t.~T();
-	new(&t)T(a1, a2, a3, a4, a5);
-}
-
-template<class T>
-inline void free_container(T& t)
-{
-	reconstruct(t);
-}
-
-template<class T, class A>
-inline void free_container(std::deque<T, A>& t)
-{
-	ScopedSwitchToGlobalHeap GlobalHeap;
-	reconstruct(t);
-}
-
-template<class K, class D, class H, class P, class A>
-inline void free_container(std::unordered_map<K, D, H, P, A>& t)
-{
-	ScopedSwitchToGlobalHeap GlobalHeap;
-	reconstruct(t);
+	free_container(container, std::forward<Args>(args) ...);
 }
 
 struct container_freer
@@ -691,7 +665,7 @@ struct SAllocatorConstruct
 	template<typename T, typename ... Args>
 	static void construct(T* ptr, Args&& ... args)
 	{
-		::new(static_cast<void*>(ptr))T(std::forward<Args>(args) ...);
+		::new(const_cast<void*>(static_cast<const void*>(ptr)))T(std::forward<Args>(args) ...);
 	}
 #else
 
@@ -800,6 +774,66 @@ struct indirect_container : C
 
 	iterator begin() { return C::begin(); }
 	iterator end()   { return C::end(); }
+};
+
+//! Find the biggest of multiple values at compile time.
+template<size_t...>
+struct static_max;
+
+template<size_t First>
+struct static_max<First>
+{
+	static constexpr size_t value = First;
+};
+
+template<size_t First, size_t Second>
+struct static_max<First, Second>
+{
+	static constexpr size_t value = First > Second ? First : Second;
+};
+
+template<size_t First, size_t Second, size_t... Others>
+struct static_max<First, Second, Others...>
+{
+	static constexpr size_t value = First > Second ? static_max<First, Others...>::value : static_max<Second, Others...>::value;
+};
+
+
+template<unsigned int num>
+struct static_log2
+{
+	enum
+	{
+		value = static_log2<(num >> 1)>::value + 1,
+	};
+};
+
+template<>
+struct static_log2<1>
+{
+	enum
+	{
+		value = 0,
+	};
+};
+
+template<>
+struct static_log2<0>
+{
+};
+
+
+//! Provides a member typedef with suitable size and alignment to hold any of the specified types. The size is at least \p Len.
+//! \note Can be replaced with std::aligned_union once GCC is upraded to 5.0 or later.
+template<size_t Len, class... Types>
+struct aligned_union
+{
+	static constexpr size_t alignment_value = static_max<alignof(Types)...>::value;
+
+	struct type
+	{
+		alignas(alignment_value + 0) char c[static_max<Len, sizeof(Types)...>::value]; // The '+ 0' is required due to a bug in GCC 4.8
+	};
 };
 }
 

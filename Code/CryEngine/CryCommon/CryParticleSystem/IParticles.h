@@ -13,41 +13,53 @@
 
 #pragma once
 
+#include <Cry3DEngine/I3DEngine.h>
+#include <Cry3DEngine/IRenderNode.h>
 #include <CrySerialization/IArchive.h>
+#include <CrySerialization/Enum.h>
 #include <CryMemory/IMemory.h>
-#include <CryEntitySystem/IEntityRenderState.h>
 #include <CrySystem/TimeValue.h>
 #include <CryAudio/IAudioSystem.h>
 #include <Cry3DEngine/GeomRef.h>
 
 class SmartScriptTable;
 
+SERIALIZATION_DECLARE_ENUM(EParticleSpec,
+	Default  = 0,
+	Low      = CONFIG_LOW_SPEC,
+	Medium   = CONFIG_MEDIUM_SPEC,
+	High     = CONFIG_HIGH_SPEC,
+	VeryHigh = CONFIG_VERYHIGH_SPEC,
+	XBoxOne  = CONFIG_DURANGO,
+	PS4      = CONFIG_ORBIS
+	);
+
 //! Real-time params to control particle emitters.
 //! Some parameters override emitter params.
 struct SpawnParams
 {
-	EGeomType           eAttachType;     //!< What type of object particles emitted from.
-	EGeomForm           eAttachForm;     //!< What aspect of shape emitted from.
-	bool                bCountPerUnit;   //!< Multiply particle count also by geometry extent (length/area/volume).
-	bool                bPrime;          //!< Advance emitter age to its equilibrium state.
-	bool                bRegisterByBBox; //!< Use the Bounding Box instead of Position to Register in VisArea.
-	bool                bNowhere;        //!< Exists outside of level.
-	float               fCountScale;     //!< Multiple for particle count (on top of bCountPerUnit if set).
-	float               fSizeScale;      //!< Multiple for all effect sizes.
-	float               fSpeedScale;     //!< Multiple for particle emission speed.
-	float               fTimeScale;      //!< Multiple for emitter time evolution.
-	float               fPulsePeriod;    //!< How often to restart emitter.
-	float               fStrength;       //!< Controls parameter strength curves.
+	bool                     bPrime;          //!< Advance emitter age to its equilibrium state.
+	bool                     bRegisterByBBox; //!< Use the Bounding Box instead of Position to Register in VisArea.
+	bool                     bNowhere;        //!< Exists outside of level.
+	float                    fCountScale;     //!< Multiple for particle count (on top of bCountPerUnit if set).
+	float                    fSizeScale;      //!< Multiple for all effect sizes.
+	float                    fSpeedScale;     //!< Multiple for particle emission speed.
+	float                    fTimeScale;      //!< Multiple for emitter time evolution.
+	float                    fPulsePeriod;    //!< How often to restart emitter.
+	float                    fStrength;       //!< Controls parameter strength curves.
+	int                      nSeed;           //!< Initial seed. Default is -1 which means random seed.
 
-	bool                bEnableAudio;  //!< Used by particle effect instances to indicate whether audio should be updated or not.
-	EAudioOcclusionType occlusionType; //!< Audio obstruction/occlusion calculation type.
-	string              audioRtpc;     //!< Indicates what audio RTPC this particle effect instance drives.
+	EParticleSpec            eSpec;           //!< Overrides particle spec for this emitter
+	EGeomType                eAttachType;     //!< What type of object particles emitted from.
+	EGeomForm                eAttachForm;     //!< What aspect of shape emitted from.
+	bool                     bCountPerUnit;   //!< Multiply particle count also by geometry extent (length/area/volume).
+
+	bool                     bEnableAudio;  //!< Used by particle effect instances to indicate whether audio should be updated or not.
+	CryAudio::EOcclusionType occlusionType; //!< Audio obstruction/occlusion calculation type.
+	string                   audioRtpc;     //!< Indicates what audio RTPC this particle effect instance drives.
 
 	inline SpawnParams()
 	{
-		eAttachType = GeomType_None;
-		eAttachForm = GeomForm_Surface;
-		bCountPerUnit = false;
 		bPrime = false;
 		bRegisterByBBox = false;
 		bNowhere = false;
@@ -57,8 +69,29 @@ struct SpawnParams
 		fTimeScale = 1;
 		fPulsePeriod = 0;
 		fStrength = -1;
+		nSeed = -1;
+		eSpec = EParticleSpec::Default;
+		eAttachType = GeomType_None;
+		eAttachForm = GeomForm_Surface;
+		bCountPerUnit = false;
 		bEnableAudio = true;
-		occlusionType = eAudioOcclusionType_Ignore;
+		occlusionType = CryAudio::EOcclusionType::Ignore;
+	}
+
+	void Serialize(Serialization::IArchive& ar)
+	{
+		ar(eSpec, "spec", "Particle Spec");
+		ar.doc("Overrides Particle Spec for this emitter");
+		ar(fSizeScale, "scale", "Uniform Scale");
+		ar.doc("Emitter uniform scale");
+		ar(fCountScale, "countScale", "Count Scale");
+		ar.doc("Particle count multiplier");
+		ar(fSpeedScale, "speedScale", "Speed Scale");
+		ar.doc("Particle emission speed multiplier");
+		ar(fTimeScale, "timeScale", "Time Scale");
+		ar.doc("Emitter time multiplier");
+		ar(bPrime, "prime", "Prime");
+		ar.doc("Advance emitter age to its equilibrium state");
 	}
 };
 
@@ -130,15 +163,18 @@ struct IParticleAttributes
 		ET_Boolean,
 		ET_Integer,
 		ET_Float,
-		ET_Color
+		ET_Color,
+
+		ET_Count,
 	};
 
-	virtual void         UpdateScriptTable(const SmartScriptTable& scriptTable) = 0;
-
+	virtual void         Reset(const IParticleAttributes* pCopySource = nullptr) = 0;
+	virtual void         Serialize(Serialization::IArchive& ar) = 0;
+	virtual void         TransferInto(IParticleAttributes* pReceiver) const = 0;
 	virtual TAttributeId FindAttributeIdByName(cstr name) const = 0;
 	virtual uint         GetNumAttributes() const = 0;
-	virtual cstr         GetAttributeName(uint idx) const = 0;
-	virtual EType        GetAttributeType(uint idx) const = 0;
+	virtual cstr         GetAttributeName(TAttributeId idx) const = 0;
+	virtual EType        GetAttributeType(TAttributeId idx) const = 0;
 
 	virtual bool         GetAsBoolean(TAttributeId id, bool defaultValue) const = 0;
 	virtual int          GetAsInteger(TAttributeId id, int defaultValue) const = 0;
@@ -152,6 +188,8 @@ struct IParticleAttributes
 	virtual void         SetAsColor(TAttributeId id, ColorB value) = 0;
 	virtual void         SetAsColor(TAttributeId id, ColorF value) = 0;
 };
+
+typedef std::shared_ptr<IParticleAttributes> TParticleAttributesPtr;
 
 //! Interface to control a particle effect.
 //! This interface is used by I3DEngine::CreateParticleEffect to control a particle effect.
@@ -339,15 +377,19 @@ struct IParticleEmitter : public IRenderNode, public CMultiThreadRefCount
 	}
 
 	//! Retrieves current SpawnParams.
-	virtual const SpawnParams& GetSpawnParams() const = 0;
-	void                       GetSpawnParams(SpawnParams& sp) const
+	virtual void GetSpawnParams(SpawnParams& sp) const = 0;
+	SpawnParams  GetSpawnParams() const
 	{
-		sp = GetSpawnParams();
+		SpawnParams sp;
+		GetSpawnParams(sp);
+		return sp;
 	}
 
 	//! Associates emitter with entity, for dynamic updating of positions etc.
 	//! \note Must be done when entity created or serialized, entity association is not serialized.
 	virtual void SetEntity(IEntity* pEntity, int nSlot) = 0;
+
+	virtual void InvalidateCachedEntityData() = 0;
 
 	//! Sets location with quat-based orientation.
 	//! \note IRenderNode.SetMatrix() is equivalent, but performs conversion.
@@ -697,7 +739,7 @@ struct SParticleShaderData
 	SParticleShaderData()
 	{
 		m_expansion[0] = m_expansion[1] = 1;
-		m_curvature = 1;
+		m_curvature = 0.0f;
 		m_textureFrequency = 1.0f;
 
 		m_tileSize[0] = m_tileSize[1] = 1;
@@ -709,6 +751,7 @@ struct SParticleShaderData
 		m_softnessMultiplier = 1;
 		m_sphericalApproximation = 0;
 		m_thickness = 0.0f;
+		m_axisScale = 0.0f;
 
 		m_diffuseLighting = 1.0f;
 		m_emissiveLighting = 0.0f;
@@ -756,6 +799,7 @@ struct SParticleShaderData
 			float m_softnessMultiplier;
 			float m_sphericalApproximation;
 			float m_thickness;
+			float m_axisScale;
 		};
 	};
 

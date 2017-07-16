@@ -33,10 +33,6 @@ CFirstPersonHandIKContext::CFirstPersonHandIKContext()
 {
 }
 
-CFirstPersonHandIKContext::~CFirstPersonHandIKContext()
-{
-}
-
 void CFirstPersonHandIKContext::Initialize(ICharacterInstance* pCharacterInstance)
 {
 	++m_instanceCount;
@@ -45,7 +41,7 @@ void CFirstPersonHandIKContext::Initialize(ICharacterInstance* pCharacterInstanc
 		return;
 
 	m_pCharacterInstance = pCharacterInstance;
-	CryCreateClassInstance("AnimationPoseModifier_OperatorQueue", m_pPoseModifier);
+	CryCreateClassInstanceForInterface(cryiidof<IAnimationOperatorQueue>(), m_pPoseModifier);
 	m_params = SParams(&m_pCharacterInstance->GetIDefaultSkeleton());
 }
 

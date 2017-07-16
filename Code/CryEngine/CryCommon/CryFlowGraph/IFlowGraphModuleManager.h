@@ -1,23 +1,22 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
-/********************************************************************
-   -------------------------------------------------------------------------
-   File name:   IFlowGraphModuleManager.h
-   $Id$
-   Description: IFlowGraphModuleManager interface
+/*
+ * Interfaces for the FlowGraph Modules System.
+ *
+ * A Manager (IFlowGraphModuleManager) contains Modules (IFlowGraphModule) who run instances (IModuleInstance).
+ * CryAction has an implementation of these components for runtime and the Editor contains an implementation of the ModuleListener for additional event handling.
+ *
+ * A module has its graph definition that will be cloned when creating instances.
+ * A module manages its own instances (creates, updates, destroys) without communicating with the manager.
+ * The module keeps track of the instance IDs that will be requested by parsing the graph at startup.
+ * An instance with a specific ID can be created and destroyed multiple times and reused if existing.
+ * Automatically generated IDs will never take one of the possible startup IDs.
+ *
+ * An instance is created when a module is called and instantiates the module's graph nodes, including a Start and End node.
+ * The same instance can be referenced by multiple call nodes.
+ */
 
-   -------------------------------------------------------------------------
-   History:
-   - 03/04/11   : Sascha Hoba - Kevin Kirst
-
- *********************************************************************/
-
-#ifndef FLOWGRAPHMODULEMANAGERINTERFACE_H
-#define FLOWGRAPHMODULEMANAGERINTERFACE_H
-
-#if _MSC_VER > 1000
 	#pragma once
-#endif // _MSC_VER > 1000
 
 #include <CryFlowGraph/IFlowSystem.h>
 
@@ -31,20 +30,39 @@ static const TModuleInstanceId MODULEINSTANCE_INVALID = -1;
 
 //! Parameter passing object.
 typedef DynArray<TFlowInputData>             TModuleParams;
-typedef Functor2<bool, const TModuleParams&> ModuleInstanceReturnCallback;
 
+// forward declarations
+struct IFlowGraphModule;
+
+// Module Instance Interface
 struct IModuleInstance
 {
-	IFlowGraphPtr                pGraph;
-	TFlowGraphId                 callerGraph;
-	TFlowNodeId                  callerNode;
-	ModuleInstanceReturnCallback returnCallback;
-	TModuleInstanceId            instanceId;
-	bool                         bUsed;
+	TModuleInstanceId m_instanceId;
+	IFlowGraphModule* m_pModule; //! pointer to module that this instance belongs to
+	IFlowGraphPtr     m_pGraph;
+	bool              m_bUsed;
 
-	IModuleInstance(TModuleInstanceId id) : pGraph(NULL), callerGraph(InvalidFlowGraphId), callerNode(InvalidFlowNodeId), bUsed(false), instanceId(id), returnCallback(NULL) {}
+	TFlowGraphId      m_callerGraph;
+	TFlowNodeId       m_callerNode;
+
+	IModuleInstance(IFlowGraphModule* pModule, TModuleInstanceId id)
+		: m_instanceId(id),
+		m_pModule(pModule),
+		m_pGraph(nullptr),
+		m_bUsed(false),
+		m_callerGraph(InvalidFlowGraphId),
+		m_callerNode(InvalidFlowNodeId)
+	{}
+	virtual ~IModuleInstance() {}
+
+	bool operator==(const IModuleInstance& other)
+	{
+		return (m_pGraph == other.m_pGraph && m_callerGraph == other.m_callerGraph && m_callerNode == other.m_callerNode
+		        && m_instanceId == other.m_instanceId && m_pModule == other.m_pModule && m_bUsed == other.m_bUsed);
+	}
 };
 
+// Instance Iterator
 struct IFlowGraphModuleInstanceIterator
 {
 	virtual ~IFlowGraphModuleInstanceIterator(){}
@@ -55,6 +73,7 @@ struct IFlowGraphModuleInstanceIterator
 };
 typedef _smart_ptr<IFlowGraphModuleInstanceIterator> IModuleInstanceIteratorPtr;
 
+// Module Interface
 struct IFlowGraphModule
 {
 	enum EType
@@ -82,22 +101,28 @@ struct IFlowGraphModule
 	virtual const char*                                GetName() const = 0;
 	virtual const char*                                GetPath() const = 0;
 	virtual TModuleId                                  GetId() const = 0;
+
 	virtual IFlowGraphModule::EType                    GetType() const = 0;
 	virtual void                                       SetType(IFlowGraphModule::EType type) = 0;
 
 	virtual IFlowGraph*                                GetRootGraph() const = 0;
-	virtual IFlowGraphPtr                              GetInstanceGraph(TModuleInstanceId instanceID) = 0;
+	virtual bool                                       HasInstanceGraph(IFlowGraphPtr pGraph) = 0; //! Returns true if the specified graph belongs to an instance of this module
+
+	virtual size_t                                     GetModuleInputPortCount() const = 0;
+	virtual size_t                                     GetModuleOutputPortCount() const = 0;
+	virtual const IFlowGraphModule::SModulePortConfig* GetModuleInputPort(size_t index) const = 0;
+	virtual const IFlowGraphModule::SModulePortConfig* GetModuleOutputPort(size_t index) const = 0;
+	virtual bool                                       AddModulePort(const SModulePortConfig& port) = 0;
+	virtual void                                       RemoveModulePorts() = 0;
 
 	virtual IModuleInstanceIteratorPtr                 CreateInstanceIterator() = 0;
+	virtual size_t                                     GetRunningInstancesCount() const = 0;
 
-	virtual void                                       RemoveModulePorts() = 0;
-	virtual bool                                       AddModulePort(const SModulePortConfig& port) = 0;
-	virtual size_t                                     GetModulePortCount() const = 0;
-	virtual const IFlowGraphModule::SModulePortConfig* GetModulePort(size_t index) const = 0;
+	virtual void                                       CallDefaultInstanceForEntity(IEntity* pEntity) = 0;
 };
-
 typedef _smart_ptr<IFlowGraphModule> IFlowGraphModulePtr;
 
+// Module Iterator
 struct IFlowGraphModuleIterator
 {
 	virtual ~IFlowGraphModuleIterator(){}
@@ -108,30 +133,35 @@ struct IFlowGraphModuleIterator
 };
 typedef _smart_ptr<IFlowGraphModuleIterator> IModuleIteratorPtr;
 
+// Module Listener
 struct IFlowGraphModuleListener
 {
+	enum class ERootGraphChangeReason
+	{
+		ScanningForModules,
+		LoadModuleFile
+	};
+
 	//! Called once a new module instance was created.
 	virtual void OnModuleInstanceCreated(IFlowGraphModule* module, TModuleInstanceId instanceID) = 0;
 
 	//! Called once a new module instance was destroyed.
 	virtual void OnModuleInstanceDestroyed(IFlowGraphModule* module, TModuleInstanceId instanceID) = 0;
 
-	//! Called once a module was destroyed.
+	//! Called just before a module is destroyed and deleted.
 	virtual void OnModuleDestroyed(IFlowGraphModule* module) = 0;
 
-	//! Called right after a module was destroyed.
-	virtual void OnPostModuleDestroyed() = 0;
+	//! Called once a module's root graph has changed.
+	virtual void OnRootGraphChanged(IFlowGraphModule* module, ERootGraphChangeReason reason) = 0;
 
-	//! Called once a modules root graph has changed.
-	virtual void OnRootGraphChanged(IFlowGraphModule* module) = 0;
-
-	//! Called once the system scanned for new modules.
-	virtual void OnScannedForModules() = 0;
+	//! Called after new all modules are reloaded
+	virtual void OnModulesScannedAndReloaded() = 0;
 
 protected:
 	virtual ~IFlowGraphModuleListener() {};
 };
 
+// Module Manager
 struct IFlowGraphModuleManager
 {
 	virtual ~IFlowGraphModuleManager() {}
@@ -139,26 +169,43 @@ struct IFlowGraphModuleManager
 	virtual bool               RegisterListener(IFlowGraphModuleListener* pListener, const char* name) = 0;
 	virtual void               UnregisterListener(IFlowGraphModuleListener* pListener) = 0;
 
-	virtual bool               DeleteModuleXML(const char* moduleName) = 0;
-	virtual bool               RenameModuleXML(const char* moduleName, const char* newName) = 0;
-	virtual IModuleIteratorPtr CreateModuleIterator() = 0;
 
-	virtual const char*        GetStartNodeName(const char* moduleName) const = 0;
-	virtual const char*        GetReturnNodeName(const char* moduleName) const = 0;
-	virtual const char*        GetCallerNodeName(const char* moduleName) const = 0;
-	virtual void               ScanForModules() = 0;
+	//! Delete a module definition from disk and the internal registry
+	virtual bool               DeleteModuleXML(const char* moduleName) = 0;
+
+	//! Rename a module definition in disk and in the internal registry
+	virtual bool               RenameModuleXML(const char* moduleName, const char* newName) = 0;
+
+	//! Get the path on disk were the module definition is saved
 	virtual const char*        GetModulePath(const char* name) = 0;
+	        const char*        GetGlobalModulesPath() const { return s_globalModulesFolder; }
+	        const char*        GetLevelModulesPath() const { return s_levelModulesFolder; }
 
 	virtual bool               SaveModule(const char* moduleName, XmlNodeRef saveTo) = 0;
 	virtual IFlowGraphModule*  LoadModuleFile(const char* moduleName, const char* fileName, bool bGlobal) = 0;
 
+	//! Getter methods
 	virtual IFlowGraphModule*  GetModule(IFlowGraphPtr pFlowgraph) const = 0;
 	virtual IFlowGraphModule*  GetModule(const char* moduleName) const = 0;
 	virtual IFlowGraphModule*  GetModule(TModuleId id) const = 0;
 
-	virtual TModuleInstanceId  CreateModuleInstance(TModuleId moduleId, const TModuleParams& params, const ModuleInstanceReturnCallback& returnCallback) = 0;
-	virtual TModuleInstanceId  CreateModuleInstance(TModuleId moduleId, TFlowGraphId callerGraphId, TFlowNodeId callerNodeId, const TModuleParams& params, const ModuleInstanceReturnCallback& returnCallback) = 0;
-	virtual bool               CreateModuleNodes(const char* moduleName, TModuleId moduleId) = 0;
-};
+	virtual const char*        GetStartNodeName(const char* moduleName) const = 0;
+	virtual const char*        GetReturnNodeName(const char* moduleName) const = 0;
+	virtual const char*        GetCallerNodeName(const char* moduleName) const = 0;
 
-#endif //FLOWGRAPHMODULEMANAGERINTERFACE_H
+
+	//! Unload all loaded modules
+	virtual void               ClearModules() = 0;
+	//! Unload only the loaded level modules, not the global ones
+	virtual void               ClearLevelModules() = 0;
+
+	virtual void               ScanAndReloadModules(bool bScanGlobalModules, bool bScanLevelModules) = 0;
+
+	virtual bool               CreateModuleNodes(const char* moduleName, TModuleId moduleId) = 0;
+
+	virtual IModuleIteratorPtr CreateModuleIterator() = 0;
+
+private:
+	static constexpr const char* s_globalModulesFolder = "Libs/FlowgraphModules";
+	static constexpr const char* s_levelModulesFolder = "FlowgraphModules";
+};

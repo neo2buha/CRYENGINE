@@ -221,7 +221,6 @@ extern "C"
 		return _LuaRealloc(ptr, nsize);
 #else
 		MEMSTAT_CONTEXT(EMemStatContextTypes::MSC_LUA, 0, "Lua");
-		ScopedSwitchToGlobalHeap toGlobalHeap;
 
 		if (g_dumpStackOnAlloc)
 			DumpCallStack(g_LStack);
@@ -266,7 +265,7 @@ extern "C"
 
 	void script_randseed(unsigned int seed)
 	{
-		cry_random_seed(seed);
+		gEnv->pSystem->GetRandomGenerator().Seed(seed);
 	}
 }
 
@@ -734,7 +733,7 @@ bool CScriptSystem::Init(ISystem* pSystem, bool bStdLibs, int nStackSize)
 	m_pSystem = pSystem;
 	m_pScriptTimerMgr = new CScriptTimerMgr(this);
 
-	m_pSystem->GetISystemEventDispatcher()->RegisterListener(this);
+	m_pSystem->GetISystemEventDispatcher()->RegisterListener(this, "CScriptSystem");
 
 	//L = lua_open();
 	L = lua_newstate(custom_lua_alloc, NULL);
@@ -920,7 +919,7 @@ void CScriptSystem::LogStackTrace()
 //////////////////////////////////////////////////////////////////////
 int CScriptSystem::ErrorHandler(lua_State* L)
 {
-	if (!GetISystem()->GetIGame() || !lua_isstoredebuginfo(L))
+	if (!lua_isstoredebuginfo(L))
 		return 0; // ignore script errors if engine is running without game
 
 	// Handle error
@@ -1169,15 +1168,11 @@ void CScriptSystem::DumpLoadedScripts()
 //////////////////////////////////////////////////////////////////////
 void CScriptSystem::AddFileToList(const char* sName)
 {
-	ScopedSwitchToGlobalHeap globalHeap;
-
 	m_dqLoadedFiles.insert(sName);
 }
 
 void CScriptSystem::RemoveFileFromList(const ScriptFileListItor& itor)
 {
-	ScopedSwitchToGlobalHeap globalHeap;
-
 	m_dqLoadedFiles.erase(itor);
 }
 
@@ -2619,7 +2614,7 @@ void CScriptSystem::DumpStateToFile(const char* filename)
 					EntityId id = handle.n;
 					IEntity* pEntity = gEnv->pEntitySystem->GetEntity(id);
 					char str[256];
-					cry_sprintf(str, "*Entity: %s", pEntity->GetEntityTextDescription());
+					cry_sprintf(str, "*Entity: %s", pEntity->GetEntityTextDescription().c_str());
 					sink.OnBeginTable(0, str, 0);
 				}
 				else

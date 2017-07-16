@@ -11,7 +11,6 @@ class CD3D9Renderer;
 
 //////////////////////////////////////////////////////////////////////////
 // LIQUID VR
-//#include<d3d11.h>
 enum GpuMask
 {
 	GPUMASK_LEFT  = 0x1,
@@ -19,7 +18,7 @@ enum GpuMask
 	GPUMASK_BOTH  = (GPUMASK_LEFT | GPUMASK_RIGHT)
 };
 
-#if defined(AMD_LIQUID_VR) && !defined(OPENGL)
+#if defined(AMD_LIQUID_VR) && !CRY_RENDERER_OPENGL
 	#include <LiquidVR/public_mgpu/inc/AmdExtMgpuAppControl.h>
 	#include <LiquidVR/public_mgpu/inc/AmdDxExtMgpuAppControlApi.h>
 
@@ -59,6 +58,7 @@ public:
 	void              CreateResources();
 	void              ReleaseResources();
 
+	bool              IsQuadLayerEnabled() const           { return m_pHmdRenderer != nullptr && m_device != STEREO_DEVICE_NONE && m_mode == STEREO_MODE_DUAL_RENDERING && m_output == STEREO_OUTPUT_HMD && m_pVrQuadLayerTex[0]; }
 	bool              IsStereoEnabled() const              { return m_device != STEREO_DEVICE_NONE && m_mode != STEREO_MODE_NO_STEREO; }
 	bool              IsPostStereoEnabled() const          { return m_device != STEREO_DEVICE_NONE && m_mode == STEREO_MODE_POST_STEREO; }
 	bool              RequiresSequentialSubmission() const { return m_submission == STEREO_SUBMISSION_SEQUENTIAL; }
@@ -83,15 +83,15 @@ public:
 	void              ProcessScene(int sceneFlags, const SRenderingPassInfo& passInfo);
 	void              ReleaseBuffers();
 	void              OnResolutionChanged();
-	void              CalculateBackbufferResolution(int eyeWidth, int eyeHeight, int* pBackbufferWidth, int* pBackbufferHeight);
+	void              CalculateBackbufferResolution(int nativeWidth, int nativeHeight, int* pRenderWidth, int *pRenderHeight);
 
-	void              CopyToStereo(int channel);
 	void              SubmitFrameToHMD();
 	void              DisplayStereo();
 
 	void              BeginRenderingMRT(bool disableClear);
 	void              EndRenderingMRT(bool bResolve = true);
 
+	void              SkipEyeTargetClears() { m_needClearLeft = m_needClearRight = false; }
 	void              NotifyFrameFinished();
 
 	void              BeginRenderingTo(StereoEye eye);
@@ -108,6 +108,8 @@ public:
 	// If HMD device present, will read latest tracking data and update current rendering camera.
 	// This is called from the render thread
 	void TryInjectHmdCameraAsync(CRenderView* pRenderView);
+
+	CTexture* WrapD3DRenderTarget(D3DTexture* d3dTexture, uint32 width, uint32 height, DXGI_FORMAT format, const char* name, bool shaderResourceView);
 
 public:
 	// IStereoRenderer Interface
@@ -148,14 +150,15 @@ private:
 	CTexture*     m_pVrQuadLayerTex[RenderLayer::eQuadLayers_Total];
 	CTexture*     m_pSideTexs[2];
 
+	CCamera       m_previousCamera[2];
+	bool          m_bPreviousCameraValid;
+
 	void*         m_nvStereoHandle;
 	float         m_nvStereoStrength;
 	uint8         m_nvStereoActivated;
 
 	StereoEye     m_curEye;
 	CCryNameR     m_SourceSizeParamName;
-
-	uint32        m_frontBufWidth, m_frontBufHeight;
 
 	float         m_stereoStrength;
 	float         m_zeroParallaxPlaneDist;
@@ -186,7 +189,6 @@ private:
 	void          DisableStereo();
 	void          ChangeOutputFormat();
 	void          HandleNVControl();
-	bool          InitializeHmdRenderer();
 	void          ShutdownHmdRenderer();
 
 	void          RenderScene(int sceneFlags, const SRenderingPassInfo& passInfo);
@@ -194,7 +196,6 @@ private:
 	void          SelectShaderTechnique();
 
 	bool          IsRenderThread() const;
-	void          CopyToStereoFromMainThread(int channel);
 
 	void          PushRenderTargets();
 	void          PopRenderTargets(bool bResolve);
@@ -203,7 +204,7 @@ private:
 
 	bool          IsDriver(DriverType driver) { return m_device == STEREO_DEVICE_DRIVER && m_driver == driver; }
 
-	IHmdRenderer* CreateHmdRenderer(EStereoOutput stereoOutput, struct IHmdDevice* pDevice, CD3D9Renderer* pRenderer, CD3DStereoRenderer* pStereoRenderer);
+	IHmdRenderer* CreateHmdRenderer(struct IHmdDevice& device, CD3D9Renderer* pRenderer, CD3DStereoRenderer* pStereoRenderer);
 };
 
 #endif

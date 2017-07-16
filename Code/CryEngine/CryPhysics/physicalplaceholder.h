@@ -15,15 +15,16 @@ struct CRY_ALIGN(4) pe_gridthunk {
 	uint64 iSimClass : 3;
 	uint64 bFirstInCell : 1;
 	unsigned char BBox[4];
-	class CPhysicalPlaceholder *pent;
 	int BBoxZ0 : 16;
 	int BBoxZ1 : 16;
+	class CPhysicalPlaceholder *pent;
 };
 #pragma pack(pop)
 
 class CPhysicalEntity;
 const int NO_GRID_REG = -1<<14;
 const int GRID_REG_PENDING = NO_GRID_REG+1;
+const int GRID_REG_LAST = NO_GRID_REG+2;
 
 class CPhysicalPlaceholder : public IPhysicalEntity {
 public:
@@ -39,16 +40,17 @@ public:
 		, m_iSimClass(0)
 		, m_lockUpdate(0)
 	{ 
-		COMPILE_TIME_ASSERT(CRY_ARRAY_COUNT(m_BBox) == 2);
+		static_assert(CRY_ARRAY_COUNT(m_BBox) == 2, "Invalid array size!");
 		m_BBox[0].zero();
 		m_BBox[1].zero();
 
-		COMPILE_TIME_ASSERT(CRY_ARRAY_COUNT(m_ig) == 2);
+		static_assert(CRY_ARRAY_COUNT(m_ig) == 2, "Invalid array size!");
 		m_ig[0].x=m_ig[1].x=m_ig[0].y=m_ig[1].y = GRID_REG_PENDING;
 	}
 
 	virtual CPhysicalEntity *GetEntity();
 	virtual CPhysicalEntity *GetEntityFast() { return (CPhysicalEntity*)m_pEntBuddy; }
+	virtual bool IsPlaceholder() const { return true; };
 
 	virtual int AddRef() { return 0; }
 	virtual int Release() { return 0; }
@@ -96,6 +98,9 @@ public:
 	};
 	vec2dpacked m_ig[2];
 	int m_iGThunk0;
+#ifdef MULTI_GRID
+	struct SEntityGrid *m_pGrid = nullptr;
+#endif
 
 	CPhysicalPlaceholder *m_pEntBuddy;
 	volatile unsigned int m_bProcessed;

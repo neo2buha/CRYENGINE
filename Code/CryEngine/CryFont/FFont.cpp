@@ -146,6 +146,7 @@ void CFFont::Free()
 
 void CFFont::DrawString(float x, float y, const char* pStr, const bool asciiMultiLine, const STextDrawContext& ctx)
 {
+<<<<<<< HEAD
 	IF (!pStr, 0)
 		return;
 
@@ -156,19 +157,26 @@ void CFFont::DrawString(float x, float y, float z, const char* pStr, const bool 
 {
 	IF (!pStr, 0)
 		return;
-
-	DrawStringUInternal(x, y, z, pStr, asciiMultiLine, ctx);
+=======
+	CFFont::DrawString(x, y, 1.0f, pStr, asciiMultiLine, ctx);
 }
 
-void CFFont::DrawStringUInternal(float x, float y, float z, const char* pStr, const bool asciiMultiLine, const STextDrawContext& ctx)
+#include <CryRenderer/IRenderAuxGeom.h>
+>>>>>>> upstream/stabilisation
+
+void CFFont::DrawString(float x, float y, float z, const char* pStr, const bool asciiMultiLine, const STextDrawContext& ctx)
 {
+<<<<<<< HEAD
 	IF (!pStr || !m_pFontTexture || ctx.m_fxIdx >= m_effects.size() || m_effects[ctx.m_fxIdx].m_passes.empty(), 0)
 		return;
 
 	IRenderer* pRenderer = gEnv->pRenderer;
 	assert(pRenderer);
+=======
+	IF(!pStr, 0) return;
+>>>>>>> upstream/stabilisation
 
-	pRenderer->DrawStringU(this, x, y, z, pStr, asciiMultiLine, ctx);
+	IRenderAuxText::DrawString(this, x, y, 1.0f, pStr, asciiMultiLine, ctx);
 }
 
 ILINE DWORD COLCONV(DWORD clr)
@@ -201,8 +209,6 @@ void CFFont::RenderCallback(float x, float y, float z, const char* pStr, const b
 	IRenderer* pRenderer = gEnv->pRenderer;
 	assert(pRenderer);
 
-	pRenderer->FontSetTexture(m_texID, FILTER_TRILINEAR);
-	pRenderer->FontSetRenderingState(0, 0);
 
 	Vec2 size = ctx.m_size; // in pixel
 	if (ctx.m_sizeIn800x600)
@@ -288,10 +294,6 @@ void CFFont::RenderCallback(float x, float y, float z, const char* pStr, const b
 		ColorB color = passColor;
 
 		bool drawFrame = ctx.m_framed && i == numPasses - 1;
-
-		pRenderer->FontSetBlending(pPass->m_blendSrc, pPass->m_blendDest);
-		//pVertex = (SVF_P3F_C4B_T2F*) pRenderer->GetDynVBPtr(textLength * 6 + (drawFrame ? 6 : 0), vertexOffset, 0); //vertex buffer size: text length + additional vertices for the frame when necessary
-		//assert(pVertex);
 
 		SVF_P3F_C4B_T2F* pVertex = m_pDrawVB;
 
@@ -581,24 +583,20 @@ void CFFont::RenderCallback(float x, float y, float z, const char* pStr, const b
 
 			IF (vbOffset == MaxDrawVBQuads * 6, 0)
 			{
-				pRenderer->DrawDynVB(m_pDrawVB, 0, vbOffset, 0, prtTriangleList);
+				pRenderer->GetIRenderAuxGeom()->DrawBufferRT(m_pDrawVB, vbOffset, pPass->m_blendSrc | pPass->m_blendDest, nullptr, m_texID);
 				vbOffset = 0;
 			}
-
-			//if (vbLen >= 682)
-			//	break;
-
-			//++vbLen;
 
 			charX += advance;
 		}
 
 		IF (vbOffset, 1)
+<<<<<<< HEAD
 			pRenderer->DrawDynVB(m_pDrawVB, 0, vbOffset, 0, prtTriangleList);
+=======
+			pRenderer->GetIRenderAuxGeom()->DrawBufferRT(m_pDrawVB, vbOffset, pPass->m_blendSrc | pPass->m_blendDest, nullptr, m_texID);
+>>>>>>> upstream/stabilisation
 	}
-
-	// restore the old states
-	pRenderer->FontRestoreRenderingState();
 }
 
 Vec2 CFFont::GetTextSize(const char* pStr, const bool asciiMultiLine, const STextDrawContext& ctx)
@@ -937,7 +935,6 @@ unsigned int CFFont::GetEffectId(const char* pEffectName) const
 
 bool CFFont::InitTexture()
 {
-	ScopedSwitchToGlobalHeap globalHeap;
 	m_texID = gEnv->pRenderer->FontCreateTexture(m_pFontTexture->GetWidth(), m_pFontTexture->GetHeight(), (uint8*)m_pFontTexture->GetBuffer(), eTF_A8);
 	return m_texID >= 0;
 }

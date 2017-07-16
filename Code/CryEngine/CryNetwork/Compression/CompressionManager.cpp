@@ -9,6 +9,7 @@
 #include "SerializationChunk.h"
 #include "RangedIntPolicy.h"
 #include "OwnChannelCompressionPolicy.h"
+#include "ErrorDistributionEncoding.h"
 #include <queue>
 
 bool CCompressionManager::CCompareChunks::operator()(CSerializationChunk* p0, CSerializationChunk* p1) const
@@ -50,12 +51,20 @@ void CCompressionRegistry::Create()
 
 CCompressionManager::CCompressionManager()
 {
+	m_manageIntervalSeconds = 0;
+
+	m_timeValue = gEnv->pTimer->GetAsyncTime();
+
 	m_pDefaultPolicy = 0;
 	m_pTemporaryChunk = new CSerializationChunk;
+
+	m_threadRunning = false;
+	m_threadRequestQuit = false;
 }
 
 CCompressionManager::~CCompressionManager()
 {
+	TerminateThread();
 	ClearCompressionPolicies(true);
 }
 
@@ -66,6 +75,8 @@ void CCompressionManager::ClearCompressionPolicies(bool includingDefault)
 	m_compressionPolicies.clear();
 	if (includingDefault)
 		m_pDefaultPolicy = NULL;
+
+	m_policiesManageList.clear();
 }
 
 void CCompressionManager::Reset(bool useCompression, bool unloading)
@@ -86,96 +97,197 @@ void CCompressionManager::Reset(bool useCompression, bool unloading)
 		m_compressionPolicies.insert(std::make_pair(defaultNameKey, m_pDefaultPolicy));
 		m_compressionPolicies.insert(std::make_pair(0, m_pDefaultPolicy));
 
-		string filename = "Scripts/Network/CompressionPolicy.xml";
-		XmlNodeRef config = gEnv->pSystem->LoadXmlFromFile(filename);
+		// Start by loading the engine defaults
+		const char* fileName = "%engine%/Config/DefaultScripts/CompressionPolicy.xml";
+		XmlNodeRef config = gEnv->pSystem->LoadXmlFromFile(fileName);
 		if (config)
 		{
-			std::queue<XmlNodeRef> waitingToLoad;
-			for (int i = 0; i < config->getChildCount(); i++)
-				waitingToLoad.push(config->getChild(i));
-
-			uint32 skipCount = 0;
-			while (!waitingToLoad.empty() && skipCount < waitingToLoad.size())
+			LoadCompressionPolicy(fileName, config, useCompression);
+		}
+		
+		// Now load the game specific compression policy, if it exists
+		fileName = "Scripts/Network/CompressionPolicy.xml";
+		if (gEnv->pCryPak->IsFileExist(fileName))
+		{
+			XmlNodeRef config = gEnv->pSystem->LoadXmlFromFile(fileName);
+			if (config)
 			{
-				XmlNodeRef loading = waitingToLoad.front();
-				waitingToLoad.pop();
+				LoadCompressionPolicy(fileName, config, useCompression);
+			}
+		}
+	}
+}
 
-				string name = loading->getAttr("name");
-				bool processed = true;
-				if (name.empty())
+
+void CCompressionManager::LoadCompressionPolicy(const char* fileName, XmlNodeRef rootNode, bool bUseCompression)
+{
+	std::queue<XmlNodeRef> waitingToLoad;
+	for (int i = 0; i < rootNode->getChildCount(); i++)
+		waitingToLoad.push(rootNode->getChild(i));
+
+	uint32 skipCount = 0;
+	while (!waitingToLoad.empty() && skipCount < waitingToLoad.size())
+	{
+		XmlNodeRef loading = waitingToLoad.front();
+		waitingToLoad.pop();
+
+		string name = loading->getAttr("name");
+		bool processed = true;
+
+		if (0 == strcmp("Distributions", loading->getTag()))
+		{
+			m_useDirectory = loading->getAttr("use");
+			m_accumulateDirectory = loading->getAttr("accumulate");
+
+			uint32 manageInterval = 0;
+			if (loading->getAttr("manageInterval", manageInterval))
+			{
+				m_manageIntervalSeconds = manageInterval;
+				StartManageThread();
+			}
+		}
+		else if (name.empty())
+		{
+			NetWarning("Policy with no name at %s:%d", fileName, loading->getLine());
+		}
+		else
+		{
+			uint32 nameKey;
+			if (!StringToKey(name.c_str(), nameKey))
+			{
+				NetWarning("Unable to convert policy name '%s' to a four character code; ignoring it (found at %s:%d)", name.c_str(), fileName, loading->getLine());
+			}
+			else
+			{
+				if (0 == strcmp("Alias", loading->getTag()))
 				{
-					NetWarning("Policy with no name at %s:%d", filename.c_str(), loading->getLine());
-				}
-				else
-				{
-					uint32 nameKey;
-					if (!StringToKey(name.c_str(), nameKey))
+					string is = loading->getAttr("is");
+					if (is.empty())
 					{
-						NetWarning("Unable to convert policy name '%s' to a four character code; ignoring it (found at %s:%d)", name.c_str(), filename.c_str(), loading->getLine());
+						NetWarning("Alias with no basis found at %s:%d", fileName, loading->getLine());
 					}
 					else
 					{
-						if (m_compressionPolicies.find(nameKey) != m_compressionPolicies.end())
+						uint32 isKey;
+						if (!StringToKey(is.c_str(), isKey))
 						{
-							NetWarning("Duplicate policy %s found at %s:%d; skipping", name.c_str(), filename.c_str(), loading->getLine());
+							NetWarning("Unable to convert alias basis '%s' to a four character code; ignoring it (found at %s:%d)", is.c_str(), fileName, loading->getLine());
 						}
-						if (0 == strcmp("Alias", loading->getTag()))
+						else
 						{
-							string is = loading->getAttr("is");
-							if (is.empty())
+							TCompressionPoliciesMap::iterator iter = m_compressionPolicies.find(isKey);
+							if (iter == m_compressionPolicies.end())
 							{
-								NetWarning("Alias with no basis found at %s:%d", filename.c_str(), loading->getLine());
+								processed = false;
 							}
 							else
 							{
-								uint32 isKey;
-								if (!StringToKey(is.c_str(), isKey))
-								{
-									NetWarning("Unable to convert alias basis '%s' to a four character code; ignoring it (found at %s:%d)", is.c_str(), filename.c_str(), loading->getLine());
-								}
-								else
-								{
-									TCompressionPoliciesMap::iterator iter = m_compressionPolicies.find(isKey);
-									if (iter == m_compressionPolicies.end())
-									{
-										processed = false;
-									}
-									else
-									{
-										m_compressionPolicies.insert(std::make_pair(nameKey, iter->second));
-									}
-								}
+								m_compressionPolicies[nameKey] = iter->second;
 							}
-						}
-						else if (0 == strcmp("Policy", loading->getTag()))
-						{
-							ICompressionPolicyPtr pPolicy;
-							if (useCompression)
-								pPolicy = CreatePolicy(loading, filename, nameKey);
-							else if (nameKey == 'eid')
-								pPolicy = CCompressionRegistry::Get()->CreatePolicyOfType("SimpleEntityId", 'eid');
-							else
-								pPolicy = m_pDefaultPolicy;
-							if (!pPolicy)
-							{
-								NetWarning("Failed to create policy %s at %s:%d; reverting to default", name.c_str(), filename.c_str(), loading->getLine());
-								pPolicy = m_pDefaultPolicy;
-							}
-							m_compressionPolicies.insert(std::make_pair(nameKey, pPolicy));
 						}
 					}
 				}
+				else if (0 == strcmp("Policy", loading->getTag()))
+				{
+					ICompressionPolicyPtr pPolicy;
+					if (bUseCompression)
+						pPolicy = CreatePolicy(loading, fileName, nameKey);
+					else if (nameKey == 'eid')
+						pPolicy = CCompressionRegistry::Get()->CreatePolicyOfType("SimpleEntityId", 'eid');
+					else
+						pPolicy = m_pDefaultPolicy;
+					if (!pPolicy)
+					{
+						NetWarning("Failed to create policy %s at %s:%d; reverting to default", name.c_str(), fileName, loading->getLine());
+						pPolicy = m_pDefaultPolicy;
+					}
 
-				if (processed)
-				{
-					skipCount = 0;
-				}
-				else
-				{
-					waitingToLoad.push(loading);
-					skipCount++;
+					pPolicy->Init(this);
+
+					if (m_manageIntervalSeconds != 0)
+						pPolicy->Manage(this);
+
+					m_compressionPolicies[nameKey] = pPolicy;
+					m_policiesManageList.push_back(nameKey);
+
 				}
 			}
+		}
+
+		if (processed)
+		{
+			skipCount = 0;
+		}
+		else
+		{
+			waitingToLoad.push(loading);
+			skipCount++;
+		}
+	}
+}
+
+void CCompressionManager::TerminateThread()
+{
+	if (!m_threadRunning)
+		return;
+
+	RequestTerminate();
+	gEnv->pThreadManager->JoinThread(this, eJM_Join);
+	m_threadRunning = false;
+}
+
+void CCompressionManager::RequestTerminate()
+{
+	m_threadRequestQuit = true;
+}
+
+void CCompressionManager::StartManageThread()
+{
+	if (m_threadRunning)
+		return;
+
+	m_threadRequestQuit = false;
+	m_threadRunning = true;
+
+	gEnv->pThreadManager->SpawnThread(this, "CompressionManager");
+}
+
+void CCompressionManager::ThreadEntry()
+{
+	while (!m_threadRequestQuit)
+	{
+		CrySleep(60);
+
+		ManagePolicies();
+	}
+}
+
+void CCompressionManager::ManagePolicies()
+{
+	if (m_manageIntervalSeconds == 0)
+		return;
+
+	CTimeValue val = gEnv->pTimer->GetAsyncTime();
+
+	if (val.GetDifferenceInSeconds(m_timeValue) < m_manageIntervalSeconds)
+		return;
+
+	CErrorDistribution::LogPerformance();
+
+	m_timeValue = val;
+
+	while (!m_policiesManageList.empty())
+	{
+		uint32 name = m_policiesManageList.front();
+		m_policiesManageList.pop_front();
+
+		NetLogAlways("ManagePolicies: %i", name);
+
+		TCompressionPoliciesMap::iterator iter = m_compressionPolicies.find(name);
+		if (iter != m_compressionPolicies.end() && iter->second->Manage(this))
+		{
+			m_policiesManageList.push_back(name);
+			break;
 		}
 	}
 }
@@ -282,7 +394,6 @@ void CCompressionManager::StreamToBuffer(ChunkID chunk, uint8 profile, CNetInput
 
 ICompressionPolicyPtr CCompressionManager::CreateRangedInt(int nMax, uint32 key)
 {
-	ScopedSwitchToGlobalHeap scope;
 	CRangedIntPolicy pol;
 	pol.SetValues(0, nMax);
 	return new CCompressionPolicy<CRangedIntPolicy>(key, pol);
@@ -304,4 +415,13 @@ void CCompressionManager::GetMemoryStatistics(ICrySizer* pSizer)
 
 	for (TCompressionPoliciesMap::const_iterator it = m_compressionPolicies.begin(); it != m_compressionPolicies.end(); ++it)
 		it->second->GetMemoryStatistics(pSizer);
+}
+const string& CCompressionManager::GetAccDirectory() const
+{
+	return m_accumulateDirectory;
+}
+
+const string& CCompressionManager::GetUseDirectory() const
+{
+	return m_useDirectory;
 }

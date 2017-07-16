@@ -69,7 +69,7 @@
 			"Navigation/MNM/CompactSpanGrid.cpp",
 			"Navigation/MNM/DynamicSpanGrid.cpp",
 			"Navigation/MNM/IslandConnections.cpp",
-			"Navigation/MNM/MeshGrid.cpp",
+			"Navigation/MNM/NavMesh.cpp",
 			"Navigation/MNM/OffGridLinks.cpp",
 			"Navigation/MNM/Tile.cpp",
 			"Navigation/MNM/TileGenerator.cpp",
@@ -78,12 +78,9 @@
 			"Navigation/MNM/BoundingVolume.h",
 			"Navigation/MNM/CompactSpanGrid.h",
 			"Navigation/MNM/DynamicSpanGrid.h",
-			"Navigation/MNM/FixedAABB.h",
-			"Navigation/MNM/FixedVec2.h",
-			"Navigation/MNM/FixedVec3.h",
 			"Navigation/MNM/HashComputer.h",
 			"Navigation/MNM/IslandConnections.h",
-			"Navigation/MNM/MeshGrid.h",
+			"Navigation/MNM/NavMesh.h",
 			"Navigation/MNM/MNM.h",
 			"Navigation/MNM/OffGridLinks.h",
 			"Navigation/MNM/MNMProfiler.h",
@@ -96,11 +93,13 @@
 		[
 			"Navigation/NavigationSystem/IslandConnectionsManager.cpp",
 			"Navigation/NavigationSystem/NavigationSystem.cpp",
+			"Navigation/NavigationSystem/NavigationUpdatesManager.cpp",
 			"Navigation/NavigationSystem/OffMeshNavigationManager.cpp",
 			"Navigation/NavigationSystem/VolumesManager.cpp",
 			"Navigation/NavigationSystem/WorldMonitor.cpp",
 			"Navigation/NavigationSystem/IslandConnectionsManager.h",
 			"Navigation/NavigationSystem/NavigationSystem.h",
+			"Navigation/NavigationSystem/NavigationUpdatesManager.h",
 			"Navigation/NavigationSystem/OffMeshNavigationManager.h",
 			"Navigation/NavigationSystem/VolumesManager.h",
 			"Navigation/NavigationSystem/WorldMonitor.h"
@@ -187,14 +186,13 @@
 			"AIRecorder.h",
 			"DebugDrawContext.h",
 			"NullAIDebugRenderer.h",
-			"StatsManager.h",
-			"ValueHistory.h"
+			"StatsManager.h"
 		],
 		"Helpers/Debug/AIBubblesSystem":
 		[
-			"AIBubblesSystem/AIBubblesSystem.cpp",
-			"AIBubblesSystem/AIBubblesSystem.h",
-			"AIBubblesSystem/IAIBubblesSystem.h"
+			"AIBubblesSystem/AIBubblesSystemImpl.cpp",
+			"AIBubblesSystem/AIBubblesSystemImpl.h",
+			"AIBubblesSystem/AIBubblesSystem.h"
 		],
 		"Helpers/PID":
 		[
@@ -250,8 +248,6 @@
 		],
 		"Perception":
 		[
-			"PerceptionManager.cpp",
-			"PerceptionManager.h",
 			"GlobalPerceptionScaleHandler.cpp",
 			"VisionMap.cpp",
 			"GlobalPerceptionScaleHandler.h",
@@ -345,29 +341,6 @@
 	},
 	"CryAISystem_uber_3.cpp":
 	{
-		"Selection Tree":
-		[
-			"SelectionTree/SelectionCondition.cpp",
-			"SelectionTree/SelectionSignalVariables.cpp",
-			"SelectionTree/SelectionVariables.cpp",
-			"SelectionTree/SelectionCondition.h",
-			"SelectionTree/SelectionSignalVariables.h",
-			"SelectionTree/SelectionVariables.h",
-			"SelectionTree/SelectionTranslator.h",
-			"SelectionTree/SelectionTranslator.cpp",
-			"SelectionTree/SelectionTree.h",
-			"SelectionTree/SelectionTree.cpp",
-			"SelectionTree/SelectionTreeManager.h",
-			"SelectionTree/SelectionTreeManager.cpp",
-			"SelectionTree/SelectionTreeNode.h",
-			"SelectionTree/SelectionTreeNode.cpp",
-			"SelectionTree/SelectionTreeTemplate.h",
-			"SelectionTree/SelectionTreeTemplate.cpp",
-			"SelectionTree/SelectionTreeDebugger.h",
-			"SelectionTree/SelectionTreeDebugger.cpp",
-			"SelectionTree/BlockyXml.h",
-			"SelectionTree/BlockyXml.cpp"
-		],
 		"Tactical Point System":
 		[
 			"TacticalPointSystem/TacticalPointQuery.cpp",
@@ -453,11 +426,6 @@
 			"Sequence/SequenceAgent.h",
 			"Sequence/SequenceFlowNodes.h",
 			"Sequence/SequenceManager.h"
-		],
-		"FlowNodes":
-		[
-			"FlowNodes/AIFlowBaseNode.cpp",
-			"FlowNodes/AIFlowBaseNode.h"
 		],
 		"Behavior Tree":
 		[
@@ -570,7 +538,6 @@
 			"FlyHelpers_Tactical.h",
 			"WorldOctree.h",
 			"AIObjectIterators.h",
-			"SelectionTree/SelectionContext.h",
 			"NavRegion.h"
 		]
 	}

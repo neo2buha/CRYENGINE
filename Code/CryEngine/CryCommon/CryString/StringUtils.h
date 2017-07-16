@@ -6,9 +6,11 @@
 #include "CryString.h"
 #include "UnicodeFunctions.h"
 
-#if !defined(RESOURCE_COMPILER)
-	#include <CryCore/CryCrc32.h>
+#ifndef NOT_USE_CRY_STRING
+#include <CryCore/Platform/CryWindows.h>
 #endif
+
+#include <CryCore/CryCrc32.h>
 
 #if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE
 	#include <ctype.h>
@@ -23,64 +25,6 @@ enum
 {
 	CRY_DEFAULT_HASH_SEED = 40503,    //!< This is a large 16 bit prime number (perfect for seeding).
 };
-
-//! Removes the extension from the file path by truncating the string.
-//! This function is Unicode agnostic and locale agnostic.
-//! \note If the file has multiple extensions, only the last extension is removed.
-//! \return A pointer to the removed extension (if found, without the .), or NULL otherwise.
-inline char* StripFileExtension(char* szFilePath)
-{
-	for (char* p = szFilePath + (int)strlen(szFilePath) - 1; p >= szFilePath; --p)
-	{
-		switch (*p)
-		{
-		case ':':
-		case '/':
-		case '\\':
-			// we've reached a path separator - it means there's no extension in this name
-			return NULL;
-		case '.':
-			// there's an extension in this file name
-			*p = '\0';
-			return p + 1;
-		}
-	}
-	// it seems the file name is a pure name, without path or extension
-	return NULL;
-}
-
-//! The returned path is WITHOUT the trailing slash.
-//! If the input path has a trailing slash, it's ignored.
-//! This function is Unicode agnostic and locale agnostic.
-//! \param nGeneration - is the number of parents to scan up.
-//! \note A drive specifier (if any) will always be kept (Windows-specific).
-//! \note If the specified path does not contain enough folders to satisfy the request, an empty string is returned.
-//! \return The parent directory of the given file or directory.
-template<class StringCls>
-StringCls GetParentDirectory(const StringCls& strFilePath, int nGeneration = 1)
-{
-	// -2 is for the possible trailing slash: there always must be some trailing symbol which is the file/directory name for which we should get the parent
-	for (const char* p = strFilePath.c_str() + strFilePath.length() - 2;
-	     p >= strFilePath.c_str();
-	     --p)
-	{
-		switch (*p)
-		{
-		case ':':
-			return StringCls(strFilePath.c_str(), p);
-			break;
-		case '/':
-		case '\\':
-			// we've reached a path separator - return everything before it.
-			if (!--nGeneration)
-				return StringCls(strFilePath.c_str(), p);
-			break;
-		}
-	}
-	;
-	// it seems the file name is a pure name, without path or extension
-	return StringCls();
-}
 
 //! Converts all ASCII characters to lower case.
 //! This function is ASCII-only and locale agnostic.
@@ -114,31 +58,6 @@ inline string toUpper(const string& str)
 	return temp;
 }
 
-//! Searches and returns the pointer to the extension of the given file.
-//! If no extension is found, the function returns a pointer to the terminating NULL (ie, empty string).
-//! This function is Unicode agnostic and locale agnostic.
-//! \note Do not pass a full path, since the function does not account for drives and directories.
-inline const char* FindExtension(const char* szFileName)
-{
-	const char* szEnd = szFileName + (int)strlen(szFileName);
-	for (const char* p = szEnd - 1; p >= szFileName; --p)
-		if (*p == '.')
-			return p + 1;
-
-	return szEnd;
-}
-
-//! Searches and returns the pointer to the file name in the given file path.
-//! This function is Unicode agnostic and locale agnostic.
-//! \note This function assumes the provided path contains a filename, if it doesn't it returns the parent directory (or an empty string if the path ends with a slash).
-inline const char* FindFileNameInPath(const char* szFilePath)
-{
-	for (const char* p = szFilePath + (int)strlen(szFilePath) - 1; p >= szFilePath; --p)
-		if (*p == '\\' || *p == '/')
-			return p + 1;
-	return szFilePath;
-}
-
 //! Works like strstr, but is case-insensitive.
 //! This function does not perform Unicode collation and uses the current CRT locale to perform case conversion.
 inline const char* stristr(const char* szString, const char* szSubstring)
@@ -153,31 +72,6 @@ inline const char* stristr(const char* szString, const char* szSubstring)
 	}
 	return NULL;
 }
-
-#ifndef NOT_USE_CRY_STRING
-
-//! Converts \ to / and replaces ASCII characters to lower-case (A-Z only).
-//! This function is ASCII-only and Unicode agnostic.
-inline void UnifyFilePath(stack_string& strPath)
-{
-	strPath.replace('\\', '/');
-	strPath.MakeLower();
-}
-
-template<size_t SIZE>
-inline void UnifyFilePath(CryStackStringT<char, SIZE>& strPath)
-{
-	strPath.replace('\\', '/');
-	strPath.MakeLower();
-}
-
-inline void UnifyFilePath(string& strPath)
-{
-	strPath.replace('\\', '/');
-	strPath.MakeLower();
-}
-
-#endif
 
 //! Converts the number to a string.
 //! These functions are Unicode agnostic and locale agnostic (integral) or uses the current CRT locale (float, vector, quat, matrix).
@@ -256,31 +150,6 @@ inline const char* strnstr(const char* szString, const char* szSubstring, int nS
 	return NULL;
 }
 
-//! Finds the string in the array of strings.
-//! Comparison is case-sensitive.
-//! The string array end is demarked by the NULL value.
-//! This function is Unicode agnostic (but no Unicode collation is performed for equality test) and locale agnostic.
-//! \return 0-based index, or -1 if not found.
-inline int findString(const char* szString, const char* arrStringList[])
-{
-	for (const char** p = arrStringList; *p; ++p)
-	{
-		if (0 == strcmp(*p, szString))
-			return (int)(p - arrStringList);
-	}
-	return -1; // string was not found
-}
-
-// Cuts the string and adds leading ... if it's longer than specified maximum length.
-// This function is ASCII-only and locale agnostic.
-inline string cutString(const string& strPath, unsigned nMaxLength)
-{
-	if (strPath.length() > nMaxLength && nMaxLength > 3)
-		return string("...") + string(strPath.c_str() + strPath.length() - (nMaxLength - 3));
-	else
-		return strPath;
-}
-
 //! Supports wildcard ? (matches one code-point) and * (matches zero or more code-points).
 //! This function is Unicode aware and locale agnostic.
 //! \note ANSI input is not supported, ASCII is fine since it's a subset of UTF-8.
@@ -298,8 +167,6 @@ inline bool MatchWildcardIgnoreCase(const char* szString, const char* szWildcard
 {
 	return CryStringUtils_Internal::MatchesWildcards_Tpl<CryStringUtils_Internal::SCharComparatorCaseInsensitive>(szString, szWildcard);
 }
-
-#if !defined(RESOURCE_COMPILER)
 
 //! Calculates a hash value for a given string.
 inline uint32 CalculateHash(const char* str)
@@ -362,7 +229,6 @@ inline uint32 HashStringLower(const char* string)
 {
 	return HashStringLowerSeed(string, CRY_DEFAULT_HASH_SEED);
 }
-#endif
 
 //! Converts all ASCII characters in a string to lower case - avoids memory allocation.
 //! This function is ASCII-only (Unicode remains unchanged) and uses the "C" locale for case conversion (A-Z only).
@@ -424,6 +290,28 @@ inline wstring UTF8ToWStr(const char* str)
 {
 	return Unicode::Convert<wstring>(str);
 }
+
+
+//! Converts an UTF-8 string to wide string (can be UTF-16 or UTF-32 depending on platform).
+//! This function is Unicode aware and locale agnostic.
+inline wstring UTF8ToWStrSafe(const char* szString)
+{
+	return Unicode::ConvertSafe<Unicode::eErrorRecovery_FallbackWin1252ThenReplace, wstring>(szString);
+}
+
+#ifdef CRY_PLATFORM_WINAPI
+//! Converts a string from the local Windows codepage to UTF-8.
+inline string ANSIToUTF8(const char* str)
+{
+	int wideLen = MultiByteToWideChar(CP_ACP, 0, str, -1, 0, 0);
+	wchar_t* unicode = (wchar_t*)malloc(wideLen * sizeof(wchar_t));
+	MultiByteToWideChar(CP_ACP, 0, str, -1, unicode, wideLen);
+	string utf = CryStringUtils::WStrToUTF8(unicode);
+	free(unicode);
+	return utf;
+}
+#endif
+
 
 #endif // NOT_USE_CRY_STRING
 
@@ -723,239 +611,292 @@ ILINE void portable_makepath(char* path, const char* drive, const char* dir, con
 	}
 }
 
-enum EPathStyle
+namespace Wildcards
 {
-	//! Allows Posix paths:
-	//! - absolute path (/foo/bar)
-	//! - relative path (foo, ../bar) paths
-	//! Output slashes are '/'
-	ePathStyle_Posix,
-
-	//! Allows Posix paths as well as these Windows specific paths:
-	//! - UNC path (\\server\foo\bar)
-	//! - drive-absolute path (c:\foo\bar)
-	//! - drive-relative path (c:foo, c:..\bar)
-	//! Output slashes are '\'
-	ePathStyle_Windows,
-
-#if CRY_PLATFORM_WINAPI
-	ePathStyle_Native = ePathStyle_Windows,
-#elif CRY_PLATFORM_POSIX
-	ePathStyle_Native = ePathStyle_Posix,
-#else
-	#error Native path style is not supported
-#endif
+enum class EConstraintType : int32
+{
+	Invalid = -1,
+	Literal,
+	WildCardStar,
+	WildCardQuestionMark,
 };
 
-//! Simplifies a given file path, such that . and .. are removed (if possible).
-//! Slashes are unified according to the path style and redundant and trailing slashes are removed.
-//! The path-style also determines what inputs are accepted by the function. See EPathStyle enumeration values for more information.
-//! If an error occurs or if the buffer is too small, the buffer will contain an empty string and the function returns false.
-//! \note The output will always be shorter or equal length to the input, so a buffer of the same size as the input will always work.
-inline bool SimplifyFilePath(const char* const szInput, char* const szBuf, const size_t bufLength, const EPathStyle pathStyle)
+struct SConstraintDesc
 {
-
-#define CRY_SIMPLIFY_REJECT { *szBuf = 0; return false; \
-  }
-#define CRY_SIMPLIFY_EMIT(expr) { if (--pOut < szBuf) { *szBuf = 0; return false; } *pOut = expr; }
-
-	if (szBuf == nullptr || bufLength == 0)
+	inline SConstraintDesc(EConstraintType constraintType = EConstraintType::Invalid)
+		: constraintType(constraintType)
+		, literalLength(0)
+		, szLiteral(nullptr)
 	{
-		return false;
 	}
-	if (szInput == nullptr || (*szInput == 0))
+	inline SConstraintDesc(const char* szLiteralStart, const char* szLiteralEnd)
+		: constraintType(EConstraintType::Literal)
+		, literalLength(static_cast<uint32>(szLiteralEnd - szLiteralStart))
+		, szLiteral(szLiteralStart)
 	{
-		CRY_SIMPLIFY_REJECT;
 	}
+	EConstraintType constraintType;
+	uint32          literalLength;
+	const char*     szLiteral;
+};
 
-	const bool bWinApi = pathStyle == ePathStyle_Windows;
-	const char kSlash = bWinApi ? '\\' : '/';
-	const char* pIn = szInput + strlen(szInput);
-	const char* pLast = pIn - 1;
-	const char* pLastSlash = pIn;
-	char* pOut = szBuf + bufLength;
-	size_t skipElements = 0;
-	bool bDots = true;
-	char driveRelative = 0;
+typedef std::vector<SConstraintDesc> TConstraintDescs;
 
-	CRY_SIMPLIFY_EMIT(0); // null-terminator
-	while (pIn != szInput)
+struct SDescriptor
+{
+	inline SDescriptor() {}
+	inline SDescriptor(const char* szPattern) { Build(szPattern); }
+	inline void   Build(const char* szPattern);
+	inline size_t GetWildCardCount() const;
+
+private:
+	inline void ProcessPendingLiteral(const char* pCurrentPos, const char* pLastPos);
+
+public:
+	TConstraintDescs constraintDescs;
+};
+
+struct SConstraintMatch
+{
+	inline SConstraintMatch()
+		: szStart(nullptr)
+		, size(0)
 	{
-		assert(pIn >= szInput);
-		const char c = *--pIn;
-		switch (c)
+	}
+	const char* szStart;
+	uint32      size;
+};
+
+typedef std::vector<SConstraintMatch> TConstraintMatches;
+
+class CEvaluationResult
+{
+public:
+	inline bool                      Process(const SDescriptor& desc, const char* const szString, const bool bCaseSensitive);
+	inline bool                      Process(const SDescriptor& desc, const char* const szString, const size_t stringSize, const bool bCaseSensitive);
+
+	inline void                      Clear()            { m_matches.clear(); }
+	inline const TConstraintMatches& GetMatches() const { return m_matches; }
+
+private:
+	inline bool MatchWithFollowers(const SDescriptor& desc, const char* const szString, const int index, const size_t stringSize, const bool bCaseSensitive);
+	inline bool CheckLiteral(const char* const szLiteral, const uint32 literalLength, const char* const szString, const bool bCaseSensitive);
+
+	TConstraintMatches m_matches;
+};
+
+template<typename TPatternStringStorage>
+class CProcessor
+{
+public:
+	inline void Reset(const char* szPattern)
+	{
+		if (m_pattern != szPattern)
 		{
-		case '\\':
-		case '/':
-			if ((pIn == szInput + 1) && ((szInput[0] == '\\') || (szInput[0] == '/'))) // UNC path
-			{
-				if (!bWinApi || bDots || skipElements != 0)
-				{
-					CRY_SIMPLIFY_REJECT;
-				}
-				CRY_SIMPLIFY_EMIT(kSlash);
-				CRY_SIMPLIFY_EMIT(kSlash);
-				pIn = szInput;
-				continue;
-			}
-			else if (bDots) // handle redundant slashes and . and .. elements
-			{
-				const size_t numDots = pLastSlash - pIn - 1;
-				if (numDots == 2)
-				{
-					++skipElements;
-				}
-				else if ((numDots != 0) && (numDots != 1) && (pIn != pLast))
-				{
-					CRY_SIMPLIFY_REJECT;
-				}
-			}
-			else if (skipElements != 0) // mark eaten element
-			{
-				--skipElements;
-			}
-			if ((*pOut != kSlash) && (skipElements == 0))
-			{
-				if (*pOut != '\0') // don't emit trailing slashes
-				{
-					CRY_SIMPLIFY_EMIT(kSlash);
-				}
-				else if (pIn == szInput || (bWinApi && pIn[-1] == ':')) // exception for single slash input '/' and 'c:\'
-				{
-					CRY_SIMPLIFY_EMIT(kSlash);
-				}
-			}
-			pLastSlash = pIn;
-			bDots = true;
-			continue;
+			m_pattern = szPattern;
+			m_descriptor.Build(m_pattern.c_str());
+		}
+	}
 
-		case '.':
-			if (bDots) // count dots
-			{
-				continue;
-			}
+	inline bool Process(CEvaluationResult& outResult, const char* szStr, const bool bCaseSensitive) const
+	{
+		outResult.Clear();
+		return outResult.Process(m_descriptor, szStr, bCaseSensitive);
+	}
+
+	inline bool Process(CEvaluationResult& outResult, const char* szStr, const size_t stringSize, const bool bCaseSensitive) const
+	{
+		outResult.Clear();
+		return outResult.Process(m_descriptor, szStr, stringSize, bCaseSensitive);
+	}
+
+	inline const SDescriptor& GetDescriptor() const { return m_descriptor; }
+
+	template<typename TFunc>
+	inline void ForEachWildCardResult(const CEvaluationResult& result, const TFunc& func);
+
+private:
+	TPatternStringStorage m_pattern;
+	SDescriptor           m_descriptor;
+};
+
+// SDescriptor implementation
+void SDescriptor::Build(const char* szPattern)
+{
+	constraintDescs.clear();
+	const char* pCurrentPos = szPattern;
+	const char* pLastPos = pCurrentPos;
+	while (*pCurrentPos)
+	{
+		switch (*pCurrentPos)
+		{
+		case '?':
+			ProcessPendingLiteral(pCurrentPos, pLastPos);
+			constraintDescs.emplace_back(EConstraintType::WildCardQuestionMark);
+			pLastPos = ++pCurrentPos;
 			break;
-
-		case ':':
-			if (bWinApi) // ':' should belong to a drive, otherwise it is not an allowed char in win
-			{
-				if ((pIn != szInput + 1) || ((pLastSlash == szInput + 2) && (skipElements != 0)))
-				{
-					CRY_SIMPLIFY_REJECT;
-				}
-				else // handle drive identifier
-				{
-					const char driveLetter = pIn[-1];
-					if (!(driveLetter >= 'a' && driveLetter <= 'z') && !(driveLetter >= 'A' && driveLetter <= 'Z'))
-					{
-						CRY_SIMPLIFY_REJECT;
-					}
-					if (pLastSlash == szInput + 2)
-					{
-						if (skipElements != 0)
-						{
-							CRY_SIMPLIFY_REJECT;
-						}
-					}
-					else if (bDots)
-					{
-						const size_t numDots = pLastSlash - pIn - 1;
-						if (numDots == 2)
-						{
-							CRY_SIMPLIFY_EMIT('.');
-							CRY_SIMPLIFY_EMIT('.');
-						}
-						else if (numDots != 1)
-						{
-							CRY_SIMPLIFY_REJECT;
-						}
-					}
-					else if (skipElements != 0)
-					{
-						--skipElements;
-					}
-					driveRelative = driveLetter;
-					pIn = szInput;
-					bDots = false;
-					continue;
-				}
-			}
-		// fall-through
+		case '*':
+			ProcessPendingLiteral(pCurrentPos, pLastPos);
+			constraintDescs.emplace_back(EConstraintType::WildCardStar);
+			pLastPos = ++pCurrentPos;
+			break;
 		default:
-			if (bDots)
-			{
-				if (skipElements == 0)
-				{
-					const size_t numDots = pLastSlash - pIn - 1;
-					for (size_t i = 0; i < numDots; ++i)
-					{
-						CRY_SIMPLIFY_EMIT('.');
-					}
-				}
-				bDots = false;
-			}
+			++pCurrentPos;
 			break;
 		}
-		if (!skipElements)
+	}
+	ProcessPendingLiteral(pCurrentPos, pLastPos);
+}
+
+size_t SDescriptor::GetWildCardCount() const
+{
+	size_t result = 0;
+	for (const SConstraintDesc& desc : constraintDescs)
+	{
+		if ((desc.constraintType == EConstraintType::WildCardStar) || (desc.constraintType == EConstraintType::WildCardQuestionMark))
 		{
-			CRY_SIMPLIFY_EMIT(c);
+			++result;
 		}
 	}
+	return result;
+}
 
-	if (bDots) // record remaining dots
+void SDescriptor::ProcessPendingLiteral(const char* pCurrentPos, const char* pLastPos)
+{
+	if (pCurrentPos != pLastPos)
 	{
-		const size_t numDots = pLastSlash - szInput;
-		if (numDots == 2)
+		constraintDescs.emplace_back(pLastPos, pCurrentPos);
+	}
+}
+
+// CEvaluationResult implementation
+bool CEvaluationResult::Process(const SDescriptor& desc, const char* const szString, const bool bCaseSensitive)
+{
+	size_t stringSize = strlen(szString);
+	return Process(desc, szString, stringSize, bCaseSensitive);
+}
+
+bool CEvaluationResult::Process(const SDescriptor& desc, const char* const szString, const size_t stringSize, const bool bCaseSensitive)
+{
+	m_matches.clear();
+	m_matches.resize(desc.constraintDescs.size());
+
+	const bool bSuccess = MatchWithFollowers(desc, szString, 0, stringSize, bCaseSensitive);
+	if (!bSuccess)
+	{
+		m_matches.clear();
+	}
+	return bSuccess;
+}
+
+bool CEvaluationResult::MatchWithFollowers(const SDescriptor& desc, const char* const szString, const int index, const size_t stringSize, const bool bCaseSensitive)
+{
+	bool bSuccess = false;
+	if (index >= static_cast<int>(m_matches.size()))
+	{
+		bSuccess = (stringSize == 0);   // only succeed if the constraint matched perfectly with the end of the string
+	}
+	else
+	{
+		const SConstraintDesc& currentDesc = desc.constraintDescs[index];
+		SConstraintMatch& currentMatchResult = m_matches[index];
+		currentMatchResult.szStart = szString;
+
+		const int nextIndex = index + 1;
+		switch (currentDesc.constraintType)
 		{
-			++skipElements;
-		}
-		else if (numDots == 1)
-		{
-			if ((*pOut == kSlash) && (skipElements == 0))
+		case EConstraintType::Literal:
+			if ((currentDesc.literalLength <= stringSize)
+			    && CheckLiteral(currentDesc.szLiteral, currentDesc.literalLength, szString, bCaseSensitive))
 			{
-				++pOut; // leading dot should eat a slash
+				const size_t remainingSize = stringSize - currentDesc.literalLength;
+				currentMatchResult.size = currentDesc.literalLength;
+				bSuccess = MatchWithFollowers(desc, szString + currentDesc.literalLength, nextIndex, remainingSize, bCaseSensitive);
 			}
-			else if (*pOut == 0)
+			break;
+		case EConstraintType::WildCardStar:
+			currentMatchResult.size = 0;
+			if (index >= static_cast<int>(desc.constraintDescs.size()))
 			{
-				CRY_SIMPLIFY_EMIT('.'); // special case, the input is only a dot, keep it
+				currentMatchResult.size = strlen(szString);
+			}
+			else
+			{
+				size_t remainingSize = stringSize;
+				while ((!(bSuccess = MatchWithFollowers(desc, &szString[currentMatchResult.size], nextIndex, remainingSize, bCaseSensitive)))
+				       && (szString[currentMatchResult.size]))
+				{
+					++currentMatchResult.size;
+					--remainingSize;
+				}
+			}
+			break;
+		case EConstraintType::WildCardQuestionMark:
+			if (*szString)
+			{
+				currentMatchResult.size = 1;
+				bSuccess = MatchWithFollowers(desc, szString + 1, nextIndex, stringSize - 1, bCaseSensitive);
+			}
+			break;
+		default:
+			break;
+		}
+	}
+	return bSuccess;
+}
+
+bool CEvaluationResult::CheckLiteral(const char* const szLiteral, const uint32 literalLength, const char* const szString, const bool bCaseSensitive)
+{
+	bool bResult = true;
+	if (bCaseSensitive)
+	{
+		for (uint32 i = 0; i < literalLength; ++i)
+		{
+			if (szLiteral[i] != szString[i])
+			{
+				bResult = false;
+				break;
 			}
 		}
-		else if (skipElements != 0)
+	}
+	else
+	{
+		for (uint32 i = 0; i < literalLength; ++i)
 		{
-			CRY_SIMPLIFY_REJECT;
+			if (CryStringUtils::toLowerAscii(szLiteral[i]) != CryStringUtils::toLowerAscii(szString[i]))
+			{
+				bResult = false;
+				break;
+			}
 		}
 	}
-	else if (skipElements && !driveRelative) // if not bDots, then we read a relative element that needs to be discounted, e.g. a/..
-	{
-		--skipElements;
-	}
+	return bResult;
+}
 
-	for (size_t i = 0; i < skipElements; ++i) // flush all pending dots
+// CProcessor implementation
+template<typename TPatternStringStorage>
+template<typename TFunc>
+void CProcessor<TPatternStringStorage >::ForEachWildCardResult(const CEvaluationResult& result, const TFunc& func)
+{
+	const TConstraintMatches& matches = result.GetMatches();
+	const size_t count = matches.size();
+	CRY_ASSERT_MESSAGE(count == m_descriptor.constraintDescs.size(), "Descriptor and result are out of sync. Either the last Process call failed or the result structure has already been reused after it.");
+	if (count == m_descriptor.constraintDescs.size())
 	{
-		CRY_SIMPLIFY_EMIT('.');
-		CRY_SIMPLIFY_EMIT('.');
-		if (i != skipElements - 1)
+		for (size_t i = 0; i < count; ++i)
 		{
-			CRY_SIMPLIFY_EMIT(kSlash);
+			switch (m_descriptor.constraintDescs[i].constraintType)
+			{
+			case EConstraintType::WildCardStar:
+			case EConstraintType::WildCardQuestionMark:
+				func(matches[i]);
+				break;
+			default:
+				break;
+			}
 		}
 	}
-
-	if (driveRelative != 0) // Fix up non-absolute but drive-relative paths.
-	{
-		CRY_SIMPLIFY_EMIT(':');
-		CRY_SIMPLIFY_EMIT(driveRelative);
-	}
-
-	if (pOut != szBuf) // left-align in the buffer
-	{
-		const size_t resultLength = szBuf + bufLength - pOut;
-		assert(resultLength > 0);
-		memmove(szBuf, pOut, resultLength);
-	}
-	return true;
-
-#undef CRY_SIMPLIFY_REJECT
-#undef CRY_SIMPLIFY_EMIT
+}
 }
 
 } // namespace CryStringUtils

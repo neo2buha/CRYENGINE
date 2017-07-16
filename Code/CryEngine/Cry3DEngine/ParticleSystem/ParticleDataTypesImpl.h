@@ -18,8 +18,9 @@ namespace pfx2
 // GPU Random number generators based on this article:
 //		http://www.reedbeta.com/blog/2013/01/12/quick-and-easy-gpu-random-numbers-in-d3d11/
 
-template<typename T> ILINE T ToType(uint32 i)          { return i; }
-template<> ILINE uint32v     ToType<uint32v>(uint32 i) { return ToUint32v(i); }
+
+static const float g_MaxU32toF = 1.0f / float(0xFFFFFFFF);
+static const float g_MaxI32toF = 1.0f / float(0x80000000);
 
 // Works for both scalar and SSE
 template<typename T>
@@ -35,10 +36,10 @@ template<typename T>
 ILINE T Jumble(T seed)
 {
 	seed = RngXorShift(seed);
-	seed = (seed ^ ToType<T>(61)) ^ (seed >> Scalar(16));
+	seed = (seed ^ convert<T>(61)) ^ (seed >> Scalar(16));
 	seed += seed << Scalar(3);
 	seed ^= seed >> Scalar(4);
-	seed *= ToType<T>(0x27d4eb2d);
+	seed *= convert<T>(0x27d4eb2d);
 	seed ^= seed >> Scalar(15);
 	return seed;
 }
@@ -56,7 +57,7 @@ ILINE SChaosKey::SChaosKey(SChaosKey key1, SChaosKey key2, SChaosKey key3)
 ILINE uint32 SChaosKey::Rand()
 {
 	++m_key;
-	uint result = Jumble(m_key);
+	uint32 result = Jumble(m_key);
 	return result;
 }
 
@@ -67,12 +68,12 @@ ILINE uint32 SChaosKey::Rand(uint32 range)
 
 ILINE float SChaosKey::RandUNorm()
 {
-	return float(Rand()) * (1.0f / 4294967296.0f);
+	return float(Rand()) * g_MaxU32toF;
 }
 
 ILINE float SChaosKey::RandSNorm()
 {
-	return RandUNorm() * 2.0f - 1.0f;
+	return float(int32(Rand())) * g_MaxI32toF;  // Cast rand as signed to generate signed float
 }
 ILINE float SChaosKey::Rand(Range range)
 {
@@ -80,7 +81,7 @@ ILINE float SChaosKey::Rand(Range range)
 }
 ILINE SChaosKey::Range::Range(float lo, float hi)
 {
-	scale = (hi - lo) * (1.0f / 4294967296.0f);
+	scale = (hi - lo) * g_MaxU32toF;
 	bias = lo;
 }
 
@@ -88,13 +89,13 @@ ILINE Vec2 SChaosKey::RandCircle()
 {
 	float c, s;
 	const float theta = RandUNorm() * 2.0f * gf_PI;
-	sincos_tpl(theta, &s, &c);
+	sincos(theta, &s, &c);
 	return Vec2(c, s);
 }
 
 ILINE Vec2 SChaosKey::RandDisc()
 {
-	const float dist = sqrtf(RandUNorm());
+	const float dist = sqrt(RandUNorm());
 	return RandCircle() * dist;
 }
 
@@ -103,49 +104,60 @@ ILINE Vec3 SChaosKey::RandSphere()
 	float c, s;
 	const float z = RandSNorm();
 	const float theta = RandSNorm() * gf_PI;
-	const float z2 = sqrtf(1.0f - z * z);
-	sincos_tpl(theta, &s, &c);
+	const float z2 = sqrt(1.0f - z * z);
+	sincos(theta, &s, &c);
 	return Vec3(c * z2, s * z2, z);
 }
 
 #ifdef CRY_PFX2_USE_SSE
 
-ILINE SChaosKeyV::SChaosKeyV()
+ILINE SChaosKeyV::SChaosKeyV(SChaosKey key)
 {
-	m_keys = _mm_set_epi32(cry_random_uint32(), cry_random_uint32(), cry_random_uint32(), cry_random_uint32());
+	m_keys = convert<uint32v>(key.Rand(), key.Rand(), key.Rand(), key.Rand());
+}
+
+ILINE SChaosKeyV::SChaosKeyV(uint32 key)
+{
+	SChaosKey chaosKey(key);
+	m_keys = convert<uint32v>(key, chaosKey.Rand(), chaosKey.Rand(), chaosKey.Rand());
 }
 
 ILINE uint32v SChaosKeyV::Rand()
 {
 	m_keys = m_keys + ToUint32v(1);
 	return Jumble(m_keys);
-
 }
+
 ILINE uint32v SChaosKeyV::Rand(uint32 range)
 {
 	return Rand() % ToUint32v(range);
 }
+
 ILINE floatv SChaosKeyV::RandUNorm()
 {
-	uint32v iv = Rand();
+	// Cast rand as signed, as only signed SIMD int-to-float conversions are available
+	int32v iv = Rand();
 	floatv fv = ToFloatv(iv);
-	return MAdd(fv, ToFloatv(1.0f / 4294967296.0f), ToFloatv(0.5f));
+	return MAdd(fv, ToFloatv(g_MaxU32toF), ToFloatv(0.5f));
 }
+
 ILINE floatv SChaosKeyV::RandSNorm()
 {
 	int32v iv = Rand();
 	floatv fv = ToFloatv(iv);
-	return Mul(fv, ToFloatv(1.0f / 2147483648.0f));
+	return fv * ToFloatv(g_MaxI32toF);
 }
+
 ILINE floatv SChaosKeyV::Rand(Range range)
 {
-	uint32v iv = Rand();
+	int32v iv = Rand();
 	floatv fv = ToFloatv(iv);
 	return MAdd(fv, range.scale, range.bias);
 }
+
 ILINE SChaosKeyV::Range::Range(float lo, float hi)
 {
-	scale = ToFloatv((hi - lo) * (1.0f / 4294967296.0f));
+	scale = ToFloatv((hi - lo) * g_MaxU32toF);
 	bias = ToFloatv((hi + lo) * 0.5f);
 }
 

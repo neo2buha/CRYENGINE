@@ -46,6 +46,8 @@ public:
 	virtual void                DrawTriangles(const Vec3* v, uint32 numPoints, const vtx_idx* ind, uint32 numIndices, const ColorB& col);
 	virtual void                DrawTriangles(const Vec3* v, uint32 numPoints, const vtx_idx* ind, uint32 numIndices, const ColorB* col);
 
+	virtual void                DrawBuffer(const SAuxVertex* inVertices, uint32 numVertices, bool textured) {};
+
 	virtual void                DrawAABB(const AABB& aabb, bool bSolid, const ColorB& col, const EBoundingBoxDrawStyle& bbDrawStyle)                           {}
 	virtual void                DrawAABBs(const AABB* aabb, uint32 aabbCount, bool bSolid, const ColorB& col, const EBoundingBoxDrawStyle& bbDrawStyle)        {}
 	virtual void                DrawAABB(const AABB& aabb, const Matrix34& matWorld, bool bSolid, const ColorB& col, const EBoundingBoxDrawStyle& bbDrawStyle) {}
@@ -59,7 +61,12 @@ public:
 
 	virtual void                DrawBone(const Vec3& rParent, const Vec3& rBone, ColorB col)                                                          {}
 
-	virtual void                RenderText(Vec3 pos, SDrawTextInfo& ti, const char* forma, va_list args)                                              {}
+	virtual void                RenderTextQueued(Vec3 pos, const SDrawTextInfo& ti, const char* text)                                              {}
+	virtual void                DrawBufferRT(const SAuxVertex* data, int numVertices, int blendMode, const Matrix44* matViewProj, int texID)                  {}
+
+	virtual int32               PushMatrix(const Matrix34& mat)                                                                                             { return -1; }
+	virtual Matrix34*           GetMatrix()                                                                                                           { return nullptr; }
+	virtual void                SetMatrixIndex(int32 matID)                                                                                           {}
 
 public:
 	static CNULLRenderAuxGeom* Create()

@@ -9,15 +9,22 @@
 #define c_MergedMeshChunkVersion (0xcafebab6)
 
 #if MMRM_USE_VECTORIZED_SSE_INSTRUCTIONS
-	#pragma warning(disable:4700)
-	#if !CRY_PLATFORM_ORBIS && !CRY_PLATFORM_MAC && !CRY_PLATFORM_LINUX && !CRY_PLATFORM_ANDROID
-		#include <intrin.h>
-	#endif
-	#include <immintrin.h>
-	#include <pmmintrin.h>
-	#include <nmmintrin.h>
-	#include <smmintrin.h>
 	#include <xmmintrin.h>
+	#if CRY_PLATFORM_SSE3 || CRY_PLATFORM_SSE4 || CRY_PLATFORM_AVX
+		#include <pmmintrin.h> // SSE3
+	#endif
+	#if CRY_PLATFORM_SSE4 || CRY_PLATFORM_AVX
+		#include <smmintrin.h> // SSE4.1
+		#include <nmmintrin.h> // SSE4.2
+	#endif
+	#if CRY_PLATFORM_AVX || CRY_PLATFORM_F16C
+		#include <immintrin.h> // AVX, F16C
+
+		#pragma warning(disable:4700)
+		#if CRY_COMPILER_MSVC
+			#include <intrin.h>
+		#endif
+	#endif
 typedef      CRY_ALIGN (16) Vec3 aVec3;
 typedef      CRY_ALIGN (16) Quat aQuat;
 #else
@@ -246,7 +253,7 @@ struct CRY_ALIGN(SMMRMSkinVertex_ALIGN) SMMRMSkinVertex
 	}
 
 };
-COMPILE_TIME_ASSERT(sizeof(SMMRMSkinVertex) == SMMRMSkinVertex_SIZE);
+static_assert(sizeof(SMMRMSkinVertex) == SMMRMSkinVertex_SIZE, "Invalid type size!");
 
 struct CRY_ALIGN(16) SMMRMChunk
 {
@@ -718,7 +725,7 @@ inline void DecompressQuat(Quat& q, const SMMRMInstance& i)
 	q.v.y = qy / (float)(1 << 7);
 	q.v.z = qz / (float)(1 << 7);
 	q.w = qw / (float)(1 << 7);
-	q.NormalizeFast();
+	q.Normalize();
 }
 
 inline void ConvertInstanceAbsolute(Vec3& abs, const uint16 (&pos)[3], const Vec3& origin, const Vec3& rotationOrigin, float zRotation, const float fExtents)

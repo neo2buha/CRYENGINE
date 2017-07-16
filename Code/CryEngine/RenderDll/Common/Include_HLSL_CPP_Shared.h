@@ -32,13 +32,6 @@
 
 // TODO: include in shaders
 
-hlsl_cbuffer(PerPassConstantBuffer_GBuffer)
-{
-	hlsl_float4(g_VS_WorldViewPos);
-	hlsl_matrix44(g_VS_ViewProjMatr);
-	hlsl_matrix44(g_VS_ViewProjZeroMatr);
-};
-
 hlsl_cbuffer(PerPassConstantBuffer_ShadowGen)
 {
 	hlsl_float4(CP_ShadowGen_LightPos);
@@ -50,20 +43,29 @@ hlsl_cbuffer(PerPassConstantBuffer_ShadowGen)
 	hlsl_float4(CP_ShadowGen_VegetationAlphaClamp);
 };
 
+hlsl_cbuffer(PerPassConstantBuffer_Custom)
+{
+	hlsl_float4(CP_Custom_ViewMode);
+};
+
 hlsl_cbuffer_register(PerInstanceConstantBuffer_Base, register (b12), 12) // eConstantBufferShaderSlot_PerInstance
 {
-	hlsl_matrix34(SPIObjWorldMat);
-	hlsl_matrix34(SPIPrevObjWorldMat);
-	hlsl_float4(SPIBendInfo);
-	hlsl_float4(SPIAlphaTest);
+	hlsl_matrix34(PerInstanceWorldMatrix);
+	hlsl_matrix34(PerInstancePrevWorldMatrix);
+	hlsl_float4(PerInstanceCustomData);
+	hlsl_float4(PerInstanceCustomData1);
+	hlsl_float4(PerInstanceCustomData2);
 };
 
 hlsl_cbuffer_register(PerInstanceConstantBuffer_TerrainVegetation, register (b12), 12) // eConstantBufferShaderSlot_PerInstance
 {
-	hlsl_matrix34(SPIObjWorldMat);
-	hlsl_matrix34(SPIPrevObjWorldMat);
-	hlsl_float4(SPIBendInfo);
-	hlsl_float4(SPIAlphaTest);
+	hlsl_matrix34(PerInstanceWorldMatrix);
+	hlsl_matrix34(PerInstancePrevWorldMatrix);
+	hlsl_float4(PerInstanceCustomData);
+	hlsl_float4(PerInstanceCustomData1);
+	// TODO: customdata2 should be added after terrainlayerinfo, make sure a vegetation shader is correctly detected when uploading data to
+	// constant buffer
+	hlsl_float4(PerInstanceCustomData2);
 
 	hlsl_float4(BlendTerrainColInfo);
 	hlsl_matrix44(TerrainLayerInfo);
@@ -71,10 +73,12 @@ hlsl_cbuffer_register(PerInstanceConstantBuffer_TerrainVegetation, register (b12
 
 hlsl_cbuffer_register(PerInstanceConstantBuffer_Skin, register (b12), 12) // eConstantBufferShaderSlot_PerInstance
 {
-	hlsl_matrix34(SPIObjWorldMat);
-	hlsl_matrix34(SPIPrevObjWorldMat);
-	hlsl_float4(SPIBendInfo);
-	hlsl_float4(SPIAlphaTest);
+	hlsl_matrix34(PerInstanceWorldMatrix);
+	hlsl_matrix34(PerInstancePrevWorldMatrix);
+	hlsl_float4(PerInstanceCustomData);
+	hlsl_float4(PerInstanceCustomData1);
+	// TODO: customdata2 should be added after WrinklesMask2. Since constant buffer definition is shared with vegetation, we need this here as well
+	hlsl_float4(PerInstanceCustomData2);
 
 	hlsl_float4(SkinningInfo);
 	hlsl_float4(WrinklesMask0);
@@ -84,7 +88,6 @@ hlsl_cbuffer_register(PerInstanceConstantBuffer_Skin, register (b12), 12) // eCo
 
 hlsl_cbuffer_register(PerViewGlobalConstantBuffer, register (b13), 13) //eConstantBufferShaderSlot_PerView
 {
-	hlsl_float4(CV_WorldViewPos);
 	hlsl_matrix44(CV_ViewProjZeroMatr);
 	hlsl_float4(CV_AnimGenParams);
 
@@ -93,8 +96,12 @@ hlsl_cbuffer_register(PerViewGlobalConstantBuffer, register (b13), 13) //eConsta
 	hlsl_matrix44(CV_InvViewProj);
 	hlsl_matrix44(CV_PrevViewProjMatr);
 	hlsl_matrix44(CV_PrevViewProjNearestMatr);
+	hlsl_matrix34(CV_ScreenToWorldBasis);
 	hlsl_float4(CV_TessInfo);
+	hlsl_float4(CV_WorldViewPosition); // TODO: remove me, data is already available in CV_ScreenToWorldBasis, via GetWorldViewPos
+	hlsl_float4(CV_CamRightVector);
 	hlsl_float4(CV_CamFrontVector);
+	hlsl_float4(CV_CamUpVector);
 
 	hlsl_float4(CV_ScreenSize);
 	hlsl_float4(CV_HPosScale);
@@ -112,10 +119,17 @@ hlsl_cbuffer_register(PerViewGlobalConstantBuffer, register (b13), 13) //eConsta
 
 	hlsl_matrix44(CV_FrustumPlaneEquation);
 
-	hlsl_float4(CV_ShadowLightPos);
-	hlsl_float4(CV_ShadowViewPos);
-
 	hlsl_float4(CV_WindGridOffset);
+
+	hlsl_matrix44(CV_ViewMatr);
+	hlsl_matrix44(CV_InvViewMatr);
+};
+
+hlsl_cbuffer_register(VrProjectionConstantBuffer, register (b11), 11) // eConstantBufferShaderSlot_VrProjection
+{
+	hlsl_float4(CVP_GeometryShaderParams)[2];
+	hlsl_float4(CVP_ProjectionParams)[12];
+	hlsl_float4(CVP_ProjectionParamsOtherEye)[12];
 };
 
 struct SLightVolumeInfo

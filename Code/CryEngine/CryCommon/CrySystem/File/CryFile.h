@@ -123,6 +123,13 @@ public:
 		return nRead;
 	}
 
+	//! Template version, for automatic size support.
+	template<typename T>
+	inline size_t WriteType(const T* pData, const size_t nCount = 1)
+	{
+		return Write(pData, sizeof(T) * nCount);
+	}
+
 	//! Retrieves the length of the file.
 	size_t GetLength();
 
@@ -213,7 +220,8 @@ inline bool CCryFile::Open(const char* filename, const char* mode, int nOpenFlag
 			const int lowercasePaths = pCvar->GetIVal();
 			if (lowercasePaths)
 			{
-				const string lowerString = PathUtil::ToLower(tempfilename);
+				string lowerString = tempfilename;
+				lowerString.MakeLower();
 				cry_strcpy(tempfilename, lowerString.c_str());
 			}
 		}

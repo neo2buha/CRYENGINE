@@ -6,8 +6,6 @@
 
 CRY_PFX2_DBG
 
-volatile bool gFeatureRenderGpuSprites = false;
-
 namespace pfx2
 {
 
@@ -22,6 +20,7 @@ CFeatureRenderGpuSprites::CFeatureRenderGpuSprites()
 	, m_sortMode(EGpuSpritesSortMode::None)
 	, m_facingMode(EGpuSpritesFacingMode::Screen)
 	, m_axisScale(1.0f)
+	, m_sortBias(0.0f)
 {
 }
 
@@ -29,6 +28,8 @@ void CFeatureRenderGpuSprites::AddToComponent(CParticleComponent* pComponent, SC
 {
 	CParticleRenderBase::AddToComponent(pComponent, pParams);
 	pParams->m_renderObjectFlags |= FOB_POINT_SPRITE;
+	pParams->m_renderObjectSortBias = m_sortBias;
+	pParams->m_shaderData.m_axisScale = m_axisScale;
 }
 
 void CFeatureRenderGpuSprites::Serialize(Serialization::IArchive& ar)
@@ -41,6 +42,8 @@ void CFeatureRenderGpuSprites::Serialize(Serialization::IArchive& ar)
 
 	if (m_facingMode == EGpuSpritesFacingMode::Velocity)
 		ar(m_axisScale, "AxisScale", "Axis Scale");
+
+	ar(m_sortBias, "SortBias", "Sort Bias");
 }
 
 void CFeatureRenderGpuSprites::ResolveDependency(CParticleComponent* pComponent)
@@ -51,7 +54,6 @@ void CFeatureRenderGpuSprites::ResolveDependency(CParticleComponent* pComponent)
 	params.maxNewBorns = m_maxNewBorns;
 	params.sortMode = static_cast<EGpuSortMode>(m_sortMode);
 	params.facingMode = static_cast<EGpuFacingMode>(m_facingMode);
-	params.axisScale = m_axisScale;
 	auto& compParams = pComponent->GetComponentParams();
 	params.isSecondGen = compParams.IsSecondGen();
 	params.parentId = compParams.m_parentId;
@@ -60,6 +62,7 @@ void CFeatureRenderGpuSprites::ResolveDependency(CParticleComponent* pComponent)
 	pComponent->SetRuntimeInitializationParameters(params);
 }
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureRenderGpuSprites, "Render", "GPU Sprites", "Editor/Icons/Particles/sprites.png", renderFeatureColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureRenderGpuSprites, "GPU Particles", "Sprites", colorGPU);
+CRY_PFX2_LEGACY_FEATURE(CParticleFeature, CFeatureRenderGpuSprites, "RenderGPU Sprites");
 
 }

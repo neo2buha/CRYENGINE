@@ -17,6 +17,8 @@
 #include <Cry3DEngine/IMaterial.h>
 
 #include "UIManager.h"
+#include "UI/HUD/HUDEventDispatcher.h"
+
 #include "Game.h"
 #include "GameCVars.h"
 #include "Actor.h"
@@ -48,7 +50,7 @@ void CUIHUD3D::InitEventSystem()
 {
 	assert(gEnv->pSystem);
 	if (gEnv->pSystem)
-		gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener( this );
+		gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener( this, "CUIHUD3D");
 
 	if(gEnv->pFlashUI)
 		gEnv->pFlashUI->RegisterModule(this, "CUIHUD3D");
@@ -115,7 +117,13 @@ void CUIHUD3D::UpdateView(const SViewParams &viewParams)
 
 	// When you die we destroy the HUD, so this will make sure it re-spawns when you respawned
 	if (!gEnv->IsEditor() && !m_pHUDRootEntity)
+	{
+		// ignore invalid file access when reloading HUD after dying
+		// this is not ideal - better try to load all resources in the beginning
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+
 		SpawnHudEntities();
+	}
 	
 	const CUICVars* pCVars = g_pGame->GetUI()->GetCVars();
 	if (m_pHUDRootEntity && pLocalPlayer)
@@ -129,6 +137,10 @@ void CUIHUD3D::UpdateView(const SViewParams &viewParams)
 		const Quat& cameraRotation = cameraTran.q;
 		const Quat& hudRotation = hudTran.q;
 		Quat deltaHudRotation = cameraRotation.GetInverted() * hudRotation;
+
+		//If third person is active don't use the deltaHudRotation to avoid strange HUD behavior
+		if (pLocalPlayer->IsThirdPerson())
+			deltaHudRotation.SetIdentity();
 
 		if(pCVars->hud_bobHud > 0.0f && !pLocalPlayer->IsDead())
 		{
@@ -271,7 +283,7 @@ void CUIHUD3D::SpawnHudEntities()
 		return;
 
 	const char* hudprefab = NULL;
-	IGameRules* pGameRules = gEnv->pGame->GetIGameFramework()->GetIGameRulesSystem()->GetCurrentGameRules();
+	IGameRules* pGameRules = gEnv->pGameFramework->GetIGameRulesSystem()->GetCurrentGameRules();
 	if (pGameRules)
 	{
 		IScriptTable* pTable = pGameRules->GetEntity()->GetScriptTable();
@@ -406,6 +418,8 @@ void CUIHUD3D::SpawnHudEntities()
 	}
 
 	OnVisCVarChange( NULL );
+
+	CHUDEventDispatcher::CallEvent(SHUDEvent(eHUDEvent_OnHUDLoadDone));
 }
 
 ////////////////////////////////////////////////////////////////////////////

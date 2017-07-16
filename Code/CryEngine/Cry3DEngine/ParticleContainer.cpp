@@ -45,6 +45,10 @@ CParticleContainer::CParticleContainer(CParticleContainer* pParent, CParticleEmi
 	, m_fAgeStaticBoundsStable(0.f)
 	, m_fContainerLife(0.f)
 {
+	ZeroStruct(m_pBeforeWaterRO);
+	ZeroStruct(m_pAfterWaterRO);
+	ZeroStruct(m_pRecursiveRO);
+
 	assert(pEffect);
 	assert(pEffect->IsActive() || gEnv->IsEditing());
 	m_pParams = &m_pEffect->GetParams();
@@ -84,6 +88,7 @@ CParticleContainer::CParticleContainer(CParticleContainer* pParent, CParticleEmi
 
 CParticleContainer::~CParticleContainer()
 {
+	ResetRenderObjects();
 }
 
 uint32 CParticleContainer::GetEnvironmentFlags() const
@@ -642,20 +647,6 @@ void CParticleContainer::UpdateEffects()
 	}
 }
 
-/* Water sorting / filtering:
-
-                  Effect:::::::::::::::::::::::::::
-   Emitter	Camera		above					both					below
-   -------	------		-----					----					-----
-   above		above			AFTER					AFTER					skip
-        below			BEFORE				BEFORE				skip
-
-   both		above			AFTER\below		AFTER[\below]	BEFORE\above
-        below			BEFORE\below	AFTER[\above]	AFTER\above
-
-   below		above			skip					BEFORE				BEFORE
-        below			skip					AFTER					AFTER
- */
 void CParticleContainer::Render(SRendParams const& RenParams, SPartRenderParams const& PRParams, const SRenderingPassInfo& passInfo)
 {
 	FUNCTION_PROFILER_CONTAINER(this);
@@ -762,12 +753,25 @@ void CParticleContainer::Render(SRendParams const& RenParams, SPartRenderParams 
 			}
 		}
 
-		SAddParticlesToSceneJob& job = CParticleManager::Instance()->GetParticlesToSceneJob(passInfo);
-		job.pPVC = this;
-		job.pRenderObject = gEnv->pRenderer->EF_GetObject_Temp(passInfo.ThreadID());
-		SRenderObjData* pOD = job.pRenderObject->GetObjData();
+		const uint threadId = passInfo.ThreadID();
+		CRenderObject** pCachedRO = nullptr;
+		if (passInfo.IsRecursivePass())
+			pCachedRO = m_pRecursiveRO;
+		else if (nObjFlags & FOB_AFTER_WATER)
+			pCachedRO = m_pAfterWaterRO;
+		else
+			pCachedRO = m_pBeforeWaterRO;
+		CRenderObject* pRenderObject = pCachedRO[threadId];
+		if (!pRenderObject)
+		{
+			pRenderObject = CreateRenderObject(nObjFlags);
+			pCachedRO[threadId] = pRenderObject;
+		}
 
-		float fEmissive = pParams->fEmissiveLighting * PRParams.m_fHDRDynamicMultiplier; // Assume HDRDynamic = 1.0f
+		SAddParticlesToSceneJob& job = CParticleManager::Instance()->GetParticlesToSceneJob(passInfo);
+		job.pVertexCreator = this;
+		job.pRenderObject = pRenderObject;
+		SRenderObjData* pOD = job.pRenderObject->GetObjData();
 
 		if (nObjFlags & FOB_OCTAGONAL)
 		{
@@ -777,24 +781,20 @@ void CParticleContainer::Render(SRendParams const& RenParams, SPartRenderParams 
 			    < sqr(fOCTAGONAL_PIX_THRESHOLD * passInfo.GetCamera().GetFov()) * fDistSq)
 				nObjFlags &= ~FOB_OCTAGONAL;
 		}
-
-		job.pRenderObject->m_RState = uint8(nObjFlags);
-		job.pRenderObject->m_ObjFlags |= (nObjFlags & ~0xFF) | RenParams.dwFObjFlags;
-
-		job.pRenderObject->m_II.m_Matrix.SetIdentity();
+		
+		job.pRenderObject->m_ObjFlags = (nObjFlags & ~0xFF) | RenParams.dwFObjFlags;
 
 		pOD->m_FogVolumeContribIdx = PRParams.m_nFogVolumeContribIdx;
 
 		pOD->m_LightVolumeId = PRParams.m_nDeferredLightVolumeId;
 
-		pOD->m_pParticleShaderData = &GetEffect()->GetParams().ShaderData;
-
 		if (GetMain().m_pTempData)
-			*((Vec4*)&pOD->m_fTempVars[0]) = GetMain().m_pTempData->userData.vEnvironmentProbeMults;
+			*((Vec4f*)&pOD->m_fTempVars[0]) = (const Vec4f&)(GetMain().m_pTempData->userData.vEnvironmentProbeMults);
 		else
-			*((Vec4*)&pOD->m_fTempVars[0]) = Vec4(1.0f, 1.0f, 1.0f, 1.0f);
+			*((Vec4f*)&pOD->m_fTempVars[0]) = Vec4f(1.0f, 1.0f, 1.0f, 1.0f);
 		;
 
+<<<<<<< HEAD
 		IF (!!pParams->fHeatScale, 0)
 		{
 			pOD->m_nVisionScale = MAX_HEATSCALE;
@@ -802,14 +802,14 @@ void CParticleContainer::Render(SRendParams const& RenParams, SPartRenderParams 
 			pOD->m_nVisionParams = (nHeatAmount << 24) | (nHeatAmount << 16) | (nHeatAmount << 8) | (0);
 		}
 
+=======
+>>>>>>> upstream/stabilisation
 		// Set sort distance based on params and bounding box.
 		if (pParams->fSortBoundsScale == PRParams.m_fMainBoundsScale)
 			job.pRenderObject->m_fDistance = PRParams.m_fCamDistance;
 		else
 			job.pRenderObject->m_fDistance = GetMain().GetNearestDistance(passInfo.GetCamera().GetPosition(), pParams->fSortBoundsScale);
 		job.pRenderObject->m_fDistance += pParams->fSortOffset;
-		job.pRenderObject->m_ParticleObjFlags = (pParams->bHalfRes ? CREParticle::ePOF_HALF_RES : 0)
-		                                        | (pParams->bVolumeFog ? CREParticle::ePOF_VOLUME_FOG : 0);
 
 		//
 		// Set remaining SAddParticlesToSceneJob data.
@@ -822,6 +822,63 @@ void CParticleContainer::Render(SRendParams const& RenParams, SPartRenderParams 
 			non_const(*m_pParams).UpdateTextureAspect();
 
 		job.nCustomTexId = RenParams.nTextureID;
+
+		passInfo.GetIRenderView()->AddPermanentObject(
+			pRenderObject,
+			passInfo);
+	}
+}
+
+CRenderObject* CParticleContainer::CreateRenderObject(uint64 nObjFlags)
+{
+	const ResourceParticleParams* pParams = m_pParams;
+	CRenderObject* pRenderObject = gEnv->pRenderer->EF_GetObject();
+	SRenderObjData* pOD = pRenderObject->GetObjData();
+
+	pRenderObject->m_pRE = gEnv->pRenderer->EF_CreateRE(eDATA_Particle);
+	pRenderObject->m_II.m_Matrix.SetIdentity();
+	pRenderObject->m_RState = uint8(nObjFlags);
+	pRenderObject->m_pCurrMaterial = pParams->pMaterial;
+	pOD->m_pParticleShaderData = &GetEffect()->GetParams().ShaderData;
+
+	IF(!!pParams->fHeatScale, 0)
+	{
+		pOD->m_nVisionScale = MAX_HEATSCALE;
+		uint32 nHeatAmount = pParams->fHeatScale.GetStore();
+		pOD->m_nVisionParams = (nHeatAmount << 24) | (nHeatAmount << 16) | (nHeatAmount << 8) | (0);
+	}
+
+	pRenderObject->m_ParticleObjFlags = (pParams->bHalfRes ? CREParticle::ePOF_HALF_RES : 0)
+		| (pParams->bVolumeFog ? CREParticle::ePOF_VOLUME_FOG : 0);
+
+	return pRenderObject;
+}
+
+void CParticleContainer::ResetRenderObjects()
+{
+	for (uint threadId = 0; threadId < RT_COMMAND_BUF_COUNT; ++threadId)
+	{
+		if (m_pAfterWaterRO[threadId])
+		{
+			if (m_pAfterWaterRO[threadId]->m_pRE)
+				m_pAfterWaterRO[threadId]->m_pRE->Release();
+			gEnv->pRenderer->EF_FreeObject(m_pAfterWaterRO[threadId]);
+		}
+		if (m_pBeforeWaterRO[threadId])
+		{
+			if (m_pBeforeWaterRO[threadId]->m_pRE)
+				m_pBeforeWaterRO[threadId]->m_pRE->Release();
+			gEnv->pRenderer->EF_FreeObject(m_pBeforeWaterRO[threadId]);
+		}
+		if (m_pRecursiveRO[threadId])
+		{
+			if (m_pRecursiveRO[threadId]->m_pRE)
+				m_pRecursiveRO[threadId]->m_pRE->Release();
+			gEnv->pRenderer->EF_FreeObject(m_pRecursiveRO[threadId]);
+		}
+		m_pAfterWaterRO[threadId] = nullptr;
+		m_pBeforeWaterRO[threadId] = nullptr;
+		m_pRecursiveRO[threadId] = nullptr;
 	}
 }
 

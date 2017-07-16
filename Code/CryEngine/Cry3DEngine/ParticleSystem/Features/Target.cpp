@@ -6,12 +6,8 @@
 
 CRY_PFX2_DBG
 
-volatile bool gPfx2Target = false;
-
 namespace pfx2
 {
-
-SERIALIZATION_ENUM_IMPLEMENT(ETargetSource);
 
 CTargetSource::CTargetSource(ETargetSource source)
 	: m_offset(ZERO)

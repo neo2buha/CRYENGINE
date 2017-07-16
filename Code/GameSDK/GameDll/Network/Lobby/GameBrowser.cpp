@@ -86,6 +86,10 @@ void CGameBrowser::Init( void )
 //--------------------------------------------------------------------------
 CGameBrowser::~CGameBrowser()
 {
+#ifdef CODECHECKPOINT_ENABLED
+	gEnv->pCodeCheckpointMgr->UnRegisterCheckpoint("GameLobby_StartSearchingForServers");
+#endif // CODECHECKPOINT_ENABLED
+
 #if defined(USE_SESSION_SEARCH_SIMULATOR)
 	SAFE_DELETE( m_pSessionSearchSimulator );
 #endif //defined(USE_SESSION_SEARCH_SIMULATOR)
@@ -144,11 +148,11 @@ void CGameBrowser::StartSearchingForServers(CryMatchmakingSessionSearchCallback 
 
 		param.m_numData = curData;
 
-		CRY_ASSERT_MESSAGE(m_searchingTask==CryLobbyInvalidTaskID,"CGameBrowser Trying to search for sessions when you think you are already searching.");
+		//CRY_ASSERT_MESSAGE(m_searchingTask==CryLobbyInvalidTaskID,"CGameBrowser Trying to search for sessions when you think you are already searching.");
 
 		ECryLobbyError error = StartSearchingForServers(&param, cb, this, false);
 
-		CRY_ASSERT_MESSAGE(error==eCLE_Success,"CGameBrowser searching for sessions failed.");
+		//CRY_ASSERT_MESSAGE(error==eCLE_Success,"CGameBrowser searching for sessions failed.");
 
 		if (error == eCLE_Success)
 		{
@@ -947,7 +951,7 @@ void CGameBrowser::InitLobbyServiceType()
 void CGameBrowser::StartFavouriteIdSearch( const CGameServerLists::EGameServerLists serverList, uint32 *pFavouriteIds, uint32 numFavouriteIds )
 {
 	CRY_ASSERT(numFavouriteIds <= CGameServerLists::k_maxServersStoredInList);
-	numFavouriteIds = MIN(numFavouriteIds, CGameServerLists::k_maxServersStoredInList);
+	numFavouriteIds = std::min(numFavouriteIds, (uint32)CGameServerLists::k_maxServersStoredInList);
 	if (numFavouriteIds <= CGameServerLists::k_maxServersStoredInList)
 	{
 		memset(m_searchFavouriteIds, INVALID_SESSION_FAVOURITE_ID, sizeof(m_searchFavouriteIds));

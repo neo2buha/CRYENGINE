@@ -146,6 +146,8 @@
 
 #include "UI/UIMultiPlayer.h"
 
+#include <IPerceptionManager.h>
+
 #if NUM_ASPECTS > 8
 	#define GAMERULES_LIMITS_ASPECT				eEA_GameServerC
 	#define GAMERULES_TEAMS_SCORE_ASPECT	eEA_GameServerA
@@ -370,7 +372,7 @@ CGameRules::CGameRules()
 	s_pSmartMineClass = gEnv->pEntitySystem->GetClassRegistry()->FindClass("SmartMine");
 	s_pTurretClass = gEnv->pEntitySystem->GetClassRegistry()->FindClass("Turret");
 		
-	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener( this );
+	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener( this, "CGameRules" );
 }
 
 //------------------------------------------------------------------------
@@ -412,7 +414,7 @@ CGameRules::~CGameRules()
 	if( gEnv->IsClient() )
 	{
 		// Stop force feedback
-		IForceFeedbackSystem* pForceFeedbackSystem = gEnv->pGame->GetIGameFramework()->GetIForceFeedbackSystem();
+		IForceFeedbackSystem* pForceFeedbackSystem = gEnv->pGameFramework->GetIForceFeedbackSystem();
 		if(pForceFeedbackSystem)
 		{
 			pForceFeedbackSystem->StopAllEffects();
@@ -680,7 +682,7 @@ bool CGameRules::Init( IGameObject * pGameObject )
 #endif
 	}
 
-	if (!gEnv->IsEditor() && !gEnv->IsDedicated())
+	if (!gEnv->IsEditor() && gEnv->pRenderer)
 	{
 		SHUDEvent initGameRules;
 		initGameRules.eventType = eHUDEvent_OnInitGameRules;
@@ -1038,17 +1040,7 @@ bool CGameRules::GetEntityPoolSignature( TSerialize signature )
 }
 
 //------------------------------------------------------------------------
-void CGameRules::Release()
-{
-	CCCPOINT(GameRules_Release);
-
-	UnregisterConsoleCommands(gEnv->pConsole);
-	UnregisterConsoleVars(gEnv->pConsole);
-	delete this;
-}
-
-//------------------------------------------------------------------------
-void CGameRules::FullSerialize( TSerialize ser )
+void CGameRules::FullSerialize(TSerialize ser)
 {
 }
 
@@ -1206,7 +1198,7 @@ void CGameRules::Update( SEntityUpdateContext& ctx, int updateSlot )
 		CGameLobby *pGameLobby = g_pGame->GetGameLobby();
 		if (pGameLobby && pGameLobby->UseLobbyTeamBalancing())
 		{
-			int localTeamId = GetTeam(g_pGame->GetClientActorId());
+			int localTeamId = GetTeam(gEnv->pGameFramework->GetClientActorId());
 			if ((localTeamId == 1) || (localTeamId == 2))
 			{
 				int otherTeamId = 3 - localTeamId;
@@ -1531,7 +1523,6 @@ void CGameRules::ApplyLoadoutChange()
 	IActor *pClientActor = g_pGame->GetIGameFramework()->GetClientActor();
 	CEquipmentLoadout *pEquipmentLoadout = g_pGame->GetEquipmentLoadout();
 
-	CRY_ASSERT(pClientActor);
 	if (pClientActor != NULL && pEquipmentLoadout != NULL)
 	{
 		uint16 gameChannelId = pClientActor->GetChannelId();
@@ -1703,22 +1694,26 @@ void CGameRules::ProcessEvent( SEntityEvent& event)
 		if(gEnv->IsClient())
 		{
 			// Enabling of game type specific action maps must be done here instead of the Init() as it needs to happen after the CCET_DisableActionMap context task
-			IActionMapManager *pActionMapMan = g_pGame->GetIGameFramework()->GetIActionMapManager();
-			IActionMap *pAM = NULL;
-			pActionMapMan->EnableActionMap("multiplayer",bIsMultiplayer);
-			pActionMapMan->EnableActionMap("singleplayer",!bIsMultiplayer);
+			IActionMapManager* pActionMapManager = g_pGame->GetIGameFramework()->GetIActionMapManager();
+			IActionMap* pGameRulesActionMap = nullptr;
+
+			pActionMapManager->SetDefaultActionEntity(gEnv->pGameFramework->GetClientActorId(), true);
+
+			pActionMapManager->EnableActionMap("multiplayer", bIsMultiplayer);
+			pActionMapManager->EnableActionMap("singleplayer",!bIsMultiplayer);
+
 			if(bIsMultiplayer)
 			{
-				pAM=pActionMapMan->GetActionMap("multiplayer");
+				pGameRulesActionMap = pActionMapManager->GetActionMap("multiplayer");
 			}
 			else
 			{
-				pAM=pActionMapMan->GetActionMap("singleplayer");
+				pGameRulesActionMap = pActionMapManager->GetActionMap("singleplayer");
 			}
 
-			if(pAM)
+			if(pGameRulesActionMap)
 			{
-				pAM->SetActionListener(GetEntity()->GetId());
+				pGameRulesActionMap->SetActionListener(GetEntity()->GetId());
 			}
 		}
 
@@ -1766,7 +1761,7 @@ void CGameRules::ProcessEvent( SEntityEvent& event)
 		m_clientStateScript=0;
 		m_serverStateScript=0;
 
-		IEntityScriptProxy *pScriptProxy=static_cast<IEntityScriptProxy *>(GetEntity()->GetProxy(ENTITY_PROXY_SCRIPT));
+		IEntityScriptComponent *pScriptProxy=static_cast<IEntityScriptComponent *>(GetEntity()->GetProxy(ENTITY_PROXY_SCRIPT));
 		if (pScriptProxy)
 		{
 			const char *stateName=pScriptProxy->GetState();
@@ -1777,11 +1772,6 @@ void CGameRules::ProcessEvent( SEntityEvent& event)
 		break;
 	}
 
-}
-
-//------------------------------------------------------------------------
-void CGameRules::SetAuthority( bool auth )
-{
 }
 
 //------------------------------------------------------------------------
@@ -2146,7 +2136,7 @@ void CGameRules::PrecacheList(XmlNodeRef precacheListNode)
 					}
 				case Precache_ADB:
 					{
-						IMannequin &mannequinSys = gEnv->pGame->GetIGameFramework()->GetMannequinInterface();
+						IMannequin &mannequinSys = gEnv->pGameFramework->GetMannequinInterface();
 						if( mannequinSys.GetAnimationDatabaseManager().Load(precacheItem) == NULL )
 						{
 							GameWarning("Unable to precache ADB %s", precacheItem);
@@ -2155,7 +2145,7 @@ void CGameRules::PrecacheList(XmlNodeRef precacheListNode)
 					break;
 				case Precache_ADBTagDefs:
 					{
-						IMannequin &mannequinSys = gEnv->pGame->GetIGameFramework()->GetMannequinInterface();
+						IMannequin &mannequinSys = gEnv->pGameFramework->GetMannequinInterface();
 						if( mannequinSys.GetAnimationDatabaseManager().LoadTagDefs(precacheItem, true) == NULL )
 						{
 							GameWarning("Unable to precache ADB tag defs %s", precacheItem);
@@ -2319,7 +2309,7 @@ void CGameRules::PrecacheLevelResource(const char* resourceName, EGameResourceTy
 {
 	LOADING_TIME_PROFILE_SECTION;
 
-	INDENT_LOG_DURING_SCOPE(true, "While %s is precaching level resource '%s' (resourceType=%d)...", GetEntity()->GetEntityTextDescription(), resourceName, resourceType);
+	INDENT_LOG_DURING_SCOPE(true, "While %s is precaching level resource '%s' (resourceType=%d)...", GetEntity()->GetEntityTextDescription().c_str(), resourceName, resourceType);
 
 	switch(resourceType)
 	{
@@ -2345,7 +2335,7 @@ XmlNodeRef CGameRules::LoadLevelXml()
 	string levelName = pGameFramework->GetLevelName();
 	levelName = PathUtil::GetFileName(levelName);	// ensure we don't have anything like !testmap/ in the path
 
-	INDENT_LOG_DURING_SCOPE(true, "While %s is loading level XML '%s'", GetEntity()->GetEntityTextDescription(), levelName.c_str());
+	INDENT_LOG_DURING_SCOPE(true, "While %s is loading level XML '%s'", GetEntity()->GetEntityTextDescription().c_str(), levelName.c_str());
 
 	if(!IsValidName(levelName))
 	{
@@ -2952,7 +2942,7 @@ void CGameRules::OnKill(IActor *pActor, const HitInfo &hitInfo, bool winningKill
   if ( gEnv->bServer && winningKill )
     GetVictoryConditionsModule()->SetWinningKillVictimShooter(hitInfo.targetId,hitInfo.shooterId);
 
-	IActor *pShooterActor=gEnv->pGame->GetIGameFramework()->GetIActorSystem()->GetActor(hitInfo.shooterId);
+	IActor *pShooterActor=gEnv->pGameFramework->GetIActorSystem()->GetActor(hitInfo.shooterId);
 	
 	if (pShooterActor != NULL && pShooterActor->IsPlayer())
 	{
@@ -2969,7 +2959,7 @@ void CGameRules::OnKill(IActor *pActor, const HitInfo &hitInfo, bool winningKill
 			g_pGame->GetPersistantStats()->UpdateMultiKillStreak(hitInfo.shooterId, hitInfo.targetId);
 		}
 
-		bool isShooterClient = (hitInfo.shooterId == gEnv->pGame->GetIGameFramework()->GetClientActorId());
+		bool isShooterClient = (hitInfo.shooterId == gEnv->pGameFramework->GetClientActorId());
 		if(isShooterClient)
 		{
 			CPlayerProgression::GetInstance()->SkillKillEvent(this, pActor, pShooterActor, hitInfo, firstKill);
@@ -3579,7 +3569,7 @@ void CGameRules::RenamePlayer(IActor *pActor, const char *name)
 
 		GetGameObject()->InvokeRMIWithDependentObject(ClRenameEntity(), params, eRMI_ToAllClients, params.entityId);
 
-		if (INetChannel* pNetChannel = pActor->GetGameObject()->GetNetChannel())
+		if (INetChannel* pNetChannel = gEnv->pGameFramework->GetNetChannel(pActor->GetChannelId()))
 			pNetChannel->SetNickname(fixed.c_str());
 
 		m_pGameplayRecorder->Event(pActorEntity, GameplayEvent(eGE_Renamed, fixed));
@@ -4254,7 +4244,7 @@ void CGameRules::Vote(IActor* pActor, bool yes)
     {
       m_pVotingSystem->Vote(id,GetTeam(id), yes);
 
-			if (id == g_pGame->GetClientActorId())
+			if (id == gEnv->pGameFramework->GetClientActorId())
 			{
 				// For if the client voting is the server - non-dedicated
 				m_bClientKickVotedFor = yes;
@@ -4570,7 +4560,7 @@ void CGameRules::ClientTeamScoreFeedback(int teamId, int prevScore, int newScore
 	}
 
 	//Should this go into scoring module so the module determines if there should be an 'in the lead' announcement?
-	int clientTeam = GetTeam(gEnv->pGame->GetIGameFramework()->GetClientActorId());
+	int clientTeam = GetTeam(gEnv->pGameFramework->GetClientActorId());
 
 	if(teamId == clientTeam)
 	{
@@ -5633,7 +5623,7 @@ bool CGameRules::OnCollision(const SGameCollision& event)
 		return true;
 
 	static IEntityClass* s_pBasicEntityClass = gEnv->pEntitySystem->GetClassRegistry()->FindClass("BasicEntity");
-	static IEntityClass* s_pDefaultClass = gEnv->pEntitySystem->GetClassRegistry()->FindClass("Default");
+	static IEntityClass* s_pDefaultClass = gEnv->pEntitySystem->GetClassRegistry()->GetDefaultClass();
 	bool srcClassFilter = false;
 	bool trgClassFilter = false;
 
@@ -5684,11 +5674,15 @@ void CGameRules::OnCollision_NotifyAI( const EventPhys * pEvent )
 {
 	FUNCTION_PROFILER(GetISystem(), PROFILE_GAME);
 	// Skip the collision handling if there is no AI system or when in multi-player.
-	if (!gEnv->pAISystem || (gEnv->bMultiplayer && !gEnv->bServer)) // Márcio: Enabling AI in Multiplayer!
+	if (!gEnv->pAISystem || (gEnv->bMultiplayer && !gEnv->bServer)) // MÃ¡rcio: Enabling AI in Multiplayer!
 		return;
 
 	IActorSystem* pActorSystem = g_pGame->GetIGameFramework()->GetIActorSystem();
 	IF_UNLIKELY (!pActorSystem)
+		return;
+
+	IPerceptionManager* pPerceptionManager = IPerceptionManager::GetInstance();
+	if (!pPerceptionManager)
 		return;
 
 	const EventPhysCollision* pCEvent = (const EventPhysCollision *) pEvent;
@@ -5785,11 +5779,11 @@ void CGameRules::OnCollision_NotifyAI( const EventPhys * pEvent )
 					assert(colliderId != 0);
 					
 					SAIStimulus stim(AISTIM_COLLISION, type, colliderId, targetId, pCEvent->pt, ZERO, reactionRadius);
-					gEnv->pAISystem->RegisterStimulus(stim);
+					pPerceptionManager->RegisterStimulus(stim);
 
 					SAIStimulus stimSound(AISTIM_SOUND, type == AICOL_SMALL ? AISOUND_COLLISION : AISOUND_COLLISION_LOUD, colliderId, 0,
 						pCEvent->pt, ZERO, soundRadius, AISTIMPROC_FILTER_LINK_WITH_PREVIOUS);
-					gEnv->pAISystem->RegisterStimulus(stimSound);
+					pPerceptionManager->RegisterStimulus(stimSound);
 				}
 			}
 		}
@@ -5877,6 +5871,15 @@ void CGameRules::StoreMigratingPlayer(IActor* pActor)
 	{
 		GameWarning("Too many migrating players!");
 	}
+}
+
+//------------------------------------------------------------------------
+void CGameRules::OnShutDown()
+{
+	CCCPOINT(GameRules_Release);
+
+	UnregisterConsoleCommands(gEnv->pConsole);
+	UnregisterConsoleVars(gEnv->pConsole);
 }
 
 //------------------------------------------------------------------------
@@ -6298,7 +6301,8 @@ void CGameRules::Restart()
 	CGameMechanismManager::GetInstance()->Inform(kGMEvent_GameRulesRestart);
 
 #if defined(USE_PERFHUD)
-	CDebugAllowFileAccess afa;
+	SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+
 	ICryPerfHUD* pPerfHud = gEnv->pSystem->GetPerfHUD();
 	if (pPerfHud)
 	{
@@ -6396,7 +6400,7 @@ void CGameRules::OnEndGame()
 
 	if(gEnv->IsClient())
 	{
-		IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+		IGameFramework* pGameFramework = gEnv->pGameFramework;
 
 		// Stop force feedback
 		IForceFeedbackSystem* pForceFeedbackSystem = pGameFramework->GetIForceFeedbackSystem();
@@ -6984,7 +6988,7 @@ void CGameRules::FreezeInput(bool freeze)
 			pVehicleClient->Reset();
 		}
 
-		CPlayer *pPlayer = static_cast<CPlayer *>(gEnv->pGame->GetIGameFramework()->GetClientActor());
+		CPlayer *pPlayer = static_cast<CPlayer *>(gEnv->pGameFramework->GetClientActor());
 		if(pPlayer)
 		{
 			IPlayerInput* pPlayerInput = pPlayer->GetPlayerInput();
@@ -7465,7 +7469,7 @@ void CGameRules::SetAllPlayerVisibility( const bool bVisible, const bool bInclud
 	{
 		CGameRules::TPlayers players;
 		GetPlayers(players);
-		EntityId localPlayerId = gEnv->pGame->GetIGameFramework()->GetClientActorId();
+		EntityId localPlayerId = gEnv->pGameFramework->GetClientActorId();
 
 		CGameRules::TPlayers::const_iterator iter = players.begin();
 		CGameRules::TPlayers::const_iterator end = players.end();
@@ -8130,8 +8134,6 @@ IHostMigrationEventListener::EHostMigrationReturn CGameRules::OnFinalise(SHostMi
 		pSpawningModule->HostMigrationResumeAddingPlayers();
 	}
 
-	g_pGame->PlayerIdSet(g_pGame->GetIGameFramework()->GetClientActorId());
-
 	CryLogAlways("[Host Migration]: CGameRules::OnFinalise() finished - success");
 	return IHostMigrationEventListener::Listener_Done;
 }
@@ -8567,7 +8569,7 @@ void CGameRules::SPlayerEndGameStatsParams::SerializeWith( TSerialize ser )
 		if (pPlayerStatsModule)
 		{
 			int numPlayerStats = pPlayerStatsModule->GetNumPlayerStats();
-			numPlayerStats = MIN(numPlayerStats, k_maxPlayerStats);
+			numPlayerStats = std::min<int>(numPlayerStats, MAX_PLAYER_LIMIT);
 
 			m_numPlayerStats = numPlayerStats;
 			ser.Value("numStats", m_numPlayerStats, 'ui5');
@@ -8807,7 +8809,7 @@ bool CGameRules::IsInsideForbiddenArea(const Vec3& pos, bool doResetCheck, IEnti
 		IEntity* pEntity = gEnv->pEntitySystem->GetEntity(shapeId);
 		if(pEntity)
 		{
-			IEntityAreaProxy *pAreaProxy = (IEntityAreaProxy*)pEntity->GetProxy(ENTITY_PROXY_AREA);
+			IEntityAreaComponent *pAreaProxy = (IEntityAreaComponent*)pEntity->GetProxy(ENTITY_PROXY_AREA);
 			if(pAreaProxy)
 			{
 				bool inside = pAreaProxy->CalcPointWithin(INVALID_ENTITYID, pos);
@@ -8969,7 +8971,8 @@ void CGameRules::OnSystemEvent( ESystemEvent event,UINT_PTR wparam,UINT_PTR lpar
 	switch(event)
 	{
 		case	ESYSTEM_EVENT_LEVEL_LOAD_END:
-			{ 				
+			{
+				LOADING_TIME_PROFILE_SECTION_NAMED("CGameRules::OnSystemEvent() ESYSTEM_EVENT_LEVEL_LOAD_END");
 				if(IGameRulesSpectatorModule * pSpectatorModule = GetSpectatorModule())
 				{
 					EntityId spectatorPositionId = pSpectatorModule->GetSpectatorLocation(0);

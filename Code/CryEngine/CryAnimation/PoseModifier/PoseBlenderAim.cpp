@@ -13,13 +13,6 @@
 #include <CryExtension/CryCreateClassInstance.h>
 
 CRYREGISTER_CLASS(CPoseBlenderAim)
-CPoseBlenderAim::CPoseBlenderAim()
-{
-}
-
-CPoseBlenderAim::~CPoseBlenderAim()
-{
-}
 
 //
 bool CPoseBlenderAim::Prepare(const SAnimationPoseModifierParams& params)
@@ -221,7 +214,7 @@ bool CPoseBlenderAim::Execute(const SAnimationPoseModifierParams& params)
 				if (angle < 0.001f)
 					continue;
 
-				f32 blend = 1 - MIN(fabsf(angle), 1.0f);
+				f32 blend = 1 - std::min(fabsf(angle), 1.0f);
 
 				//	float fColDebug[4] = {1,1,0,1};
 				//	g_pAuxGeom->Draw2dLabel( 1,g_YLine, 1.3f, fColDebug, false,"angle: %f   blend: %f  fDistribution: %f wR: %f",angle,blend,fDistribution,wR );

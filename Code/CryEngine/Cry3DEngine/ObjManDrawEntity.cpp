@@ -41,7 +41,7 @@ void CObjManager::RenderDecalAndRoad(IRenderNode* pEnt, PodArray<CDLight*>* pAff
 #endif // _DEBUG
 
 	// do not draw if marked to be not drawn or already drawn in this frame
-	unsigned int nRndFlags = pEnt->GetRndFlags();
+	auto nRndFlags = pEnt->GetRndFlags();
 
 	if (nRndFlags & ERF_HIDDEN)
 		return;
@@ -90,40 +90,17 @@ void CObjManager::RenderDecalAndRoad(IRenderNode* pEnt, PodArray<CDLight*>* pAff
 	DrawParams.fDistance = fEntDistance;
 	DrawParams.AmbientColor = vAmbColor;
 	DrawParams.pRenderNode = pEnt;
-
-	// set lights bit mask
-	if (bSunOnly)
-	{
-		DrawParams.nDLightMask = 1;
-	}
-	else if (pAffectingLights)
-	{
-		//DrawParams.restLightInfo.refPoint = m_p3DEngine->GetEntityRegisterPoint( pEnt );
-		DrawParams.nDLightMask = m_p3DEngine->BuildLightMask(objBox, pAffectingLights, pVisArea, (nRndFlags & ERF_OUTDOORONLY) != 0, passInfo);//, &DrawParams.restLightInfo);
-	}
-
 	DrawParams.nAfterWater = IsAfterWater(objBox.GetCenter(), vCamPos, passInfo) ? 1 : 0;
 
 	// draw bbox
 	if (GetCVars()->e_BBoxes)// && eERType != eERType_Light)
 	{
-		RenderObjectDebugInfo(pEnt, fEntDistance, DrawParams.nDLightMask, passInfo);
+		RenderObjectDebugInfo(pEnt, fEntDistance, passInfo);
 	}
 
 	DrawParams.dwFObjFlags |= FOB_TRANS_MASK;
 
 	DrawParams.m_pVisArea = pVisArea;
-
-	if (GetCVars()->e_DebugLights && (nRndFlags & ERF_SELECTED) && eERType != eERType_Light)
-	{
-		int nLightCount = 0;
-		for (int i = 0; i < 32; i++)
-			if (DrawParams.nDLightMask & (1 << i))
-				nLightCount++;
-
-		if (nLightCount >= GetCVars()->e_DebugLights)
-			GetRenderer()->DrawLabel(objBox.GetCenter(), 2, "%d lights", nLightCount);
-	}
 
 	DrawParams.nMaterialLayers = pEnt->GetMaterialLayers();
 
@@ -157,14 +134,22 @@ void CObjManager::RenderVegetation(CVegetation* pEnt, PodArray<CDLight*>* pAffec
 		                                   pEnt->m_pOcNode->m_pVisArea != NULL, eoot_OBJECT, passInfo))
 			return;
 
-	uint32 nDynLMMask = 0;
-	if (bSunOnly)
-		nDynLMMask = 1;
-	else if (pAffectingLights)
-		nDynLMMask = m_p3DEngine->BuildLightMask(objBox, pAffectingLights, NULL, true, passInfo);
-
 	const CLodValue lodValue = pEnt->ComputeLod(pEnt->m_pTempData->userData.nWantedLod, passInfo);
-	pEnt->Render(passInfo, lodValue, pTerrainTexInfo, nDynLMMask);
+
+	if (GetCVars()->e_LodTransitionTime && passInfo.IsGeneralPass())
+	{
+		// Render current lod and (if needed) previous lod and perform time based lod transition using dissolve
+
+		CLodValue arrlodVals[2];
+		int nLodsNum = ComputeDissolve(lodValue, pEnt, fEntDistance, &arrlodVals[0]);
+
+		for (int i = 0; i < nLodsNum; i++)
+			pEnt->Render(passInfo, arrlodVals[i], pTerrainTexInfo);
+	}
+	else
+	{
+		pEnt->Render(passInfo, lodValue, pTerrainTexInfo);
+	}
 }
 
 void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<CDLight*>* pAffectingLights,
@@ -183,12 +168,14 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<CDLight*>* pAffecting
 #endif // _DEBUG
 
 	// do not draw if marked to be not drawn or already drawn in this frame
-	unsigned int nRndFlags = pEnt->GetRndFlags();
+	auto nRndFlags = pEnt->GetRndFlags();
 
 	if (nRndFlags & ERF_HIDDEN)
 		return;
 
 #ifndef _RELEASE
+	if (!passInfo.RenderEntities() && pEnt->GetOwnerEntity()) 
+		return;
 	// check cvars
 	switch (eERType)
 	{
@@ -211,14 +198,13 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<CDLight*>* pAffecting
 		if (!passInfo.RenderWaterVolumes()) return;
 		break;
 	case eERType_Light:
-	case eERType_LightPropagationVolume:
 		if (!GetCVars()->e_DynamicLights || !passInfo.RenderEntities()) return;
 		break;
 	case eERType_Road:
 		if (!passInfo.RenderRoads()) return;
 		break;
-	case eERType_Cloud:
 	case eERType_DistanceCloud:
+	case eERType_CloudBlocker:
 		if (!passInfo.RenderClouds()) return;
 		break;
 	case eERType_MergedMesh:
@@ -294,6 +280,7 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<CDLight*>* pAffecting
 	DrawParams.fDistance = fEntDistance;
 	DrawParams.AmbientColor = vAmbColor;
 	DrawParams.pRenderNode = pEnt;
+	DrawParams.nEditorSelectionID = pEnt->m_nEditorSelectionID;
 	//DrawParams.pInstance = pEnt;
 
 	if (eERType != eERType_Light && (pEnt->m_nInternalFlags & IRenderNode::REQUIRES_NEAREST_CUBEMAP))
@@ -313,26 +300,6 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<CDLight*>* pAffecting
 		DrawParams.nTextureID = nCubemapTexId;
 	}
 
-	// set lights bit mask
-	if (bSunOnly)
-	{
-		DrawParams.nDLightMask = 1;
-	}
-	else if (pAffectingLights)
-	{
-		DrawParams.nDLightMask = m_p3DEngine->BuildLightMask(objBox, pAffectingLights, pVisArea, (nRndFlags & ERF_OUTDOORONLY) != 0, passInfo);
-	}
-
-	if (pCVars->e_Dissolve && eERType != eERType_Light && passInfo.IsGeneralPass())
-	{
-		if (DrawParams.nDissolveRef = GetDissolveRef(fEntDistance, pEnt->m_fWSMaxViewDist))
-		{
-			DrawParams.dwFObjFlags |= FOB_DISSOLVE | FOB_DISSOLVE_OUT;
-			if (DrawParams.nDissolveRef == 255)
-				return;
-		}
-	}
-
 	DrawParams.nAfterWater = IsAfterWater(objBox.GetCenter(), vCamPos, passInfo) ? 1 : 0;
 
 	if (nRndFlags & ERF_SELECTED)
@@ -342,7 +309,7 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<CDLight*>* pAffecting
 #if !defined(_RELEASE)
 	if (pCVars->e_BBoxes)// && eERType != eERType_Light)
 	{
-		RenderObjectDebugInfo(pEnt, fEntDistance, DrawParams.nDLightMask, passInfo);
+		RenderObjectDebugInfo(pEnt, fEntDistance, passInfo);
 	}
 #endif
 
@@ -351,29 +318,45 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<CDLight*>* pAffecting
 	if (pEnt->m_dwRndFlags & ERF_NO_DECALNODE_DECALS)
 		DrawParams.dwFObjFlags |= FOB_DYNAMIC_OBJECT;
 
+	if (pEnt->GetRndFlags() & ERF_HUD_REQUIRE_DEPTHTEST)
+	{
+		DrawParams.nCustomFlags |= COB_HUD_REQUIRE_DEPTHTEST;
+	}
+	if (pEnt->GetRndFlags() & ERF_DISABLE_MOTION_BLUR)
+	{
+		DrawParams.nCustomFlags |= COB_DISABLE_MOTIONBLUR;
+	}
+	if (pEnt->GetRndFlags() & ERF_FORCE_POST_3D_RENDER)
+	{
+		DrawParams.nCustomFlags |= COB_POST_3D_RENDER;
+	}
+
 	DrawParams.m_pVisArea = pVisArea;
 
 	DrawParams.nClipVolumeStencilRef = 0;
 	if (pEnt->m_pTempData && pEnt->m_pTempData->userData.m_pClipVolume)
 		DrawParams.nClipVolumeStencilRef = pEnt->m_pTempData->userData.m_pClipVolume->GetStencilRef();
 
-#if !defined(_RELEASE)
-	if (pCVars->e_DebugLights && (nRndFlags & ERF_SELECTED) && eERType != eERType_Light)
-	{
-		int nLightCount = 0;
-		for (int i = 0; i < 32; i++)
-			if (DrawParams.nDLightMask & (1 << i))
-				nLightCount++;
-
-		if (nLightCount >= pCVars->e_DebugLights)
-			GetRenderer()->DrawLabel(objBox.GetCenter(), 2, "%d lights", nLightCount);
-	}
-#endif
-
 	DrawParams.nMaterialLayers = pEnt->GetMaterialLayers();
 	DrawParams.lodValue = pEnt->ComputeLod(pEnt->m_pTempData->userData.nWantedLod, passInfo);
 
-	pEnt->Render(DrawParams, passInfo);
+	if (GetCVars()->e_LodTransitionTime && passInfo.IsGeneralPass() && pEnt->GetRenderNodeType() == eERType_MovableBrush)
+	{
+		// Render current lod and (if needed) previous lod and perform time based lod transition using dissolve
+
+		CLodValue arrlodVals[2];
+		int nLodsNum = ComputeDissolve(DrawParams.lodValue, pEnt, fEntDistance, &arrlodVals[0]);
+
+		for (int i = 0; i < nLodsNum; i++)
+		{
+			DrawParams.lodValue = arrlodVals[i];
+			pEnt->Render(DrawParams, passInfo);
+		}
+	}
+	else
+	{
+		pEnt->Render(DrawParams, passInfo);
+	}
 }
 
 void CObjManager::RenderAllObjectDebugInfo()
@@ -383,7 +366,7 @@ void CObjManager::RenderAllObjectDebugInfo()
 	{
 		SObjManRenderDebugInfo& rRenderDebugInfo = m_arrRenderDebugInfo[i];
 		if (rRenderDebugInfo.pEnt)
-			RenderObjectDebugInfo_Impl(rRenderDebugInfo.pEnt, rRenderDebugInfo.fEntDistance, rRenderDebugInfo.nDLightMask);
+			RenderObjectDebugInfo_Impl(rRenderDebugInfo.pEnt, rRenderDebugInfo.fEntDistance);
 	}
 	m_arrRenderDebugInfo.resize(0);
 }
@@ -401,7 +384,7 @@ void CObjManager::RemoveFromRenderAllObjectDebugInfo(IRenderNode* pEnt)
 	}
 }
 
-void CObjManager::RenderObjectDebugInfo_Impl(IRenderNode* pEnt, float fEntDistance, int nDLightMask)
+void CObjManager::RenderObjectDebugInfo_Impl(IRenderNode* pEnt, float fEntDistance)
 {
 
 	if (GetCVars()->e_BBoxes > 0)
@@ -416,11 +399,9 @@ void CObjManager::RenderObjectDebugInfo_Impl(IRenderNode* pEnt, float fEntDistan
 			string sLabel = pEnt->GetDebugString();
 			if (sLabel.empty())
 			{
-				sLabel.Format("%s/%s %d/%d",
-				              pEnt->GetName(), pEnt->GetEntityClassName(),
-				              nDLightMask, 0);
+				sLabel.Format("%s/%s", pEnt->GetName(), pEnt->GetEntityClassName());
 			}
-			GetRenderer()->DrawLabelEx(pEnt->GetBBox().GetCenter(), fFontSize, (float*)&color, true, true, "%s", sLabel.c_str());
+			IRenderAuxText::DrawLabelEx(pEnt->GetBBox().GetCenter(), fFontSize, (float*)&color, true, true, sLabel.c_str());
 		}
 
 		IRenderAuxGeom* pRenAux = GetRenderer()->GetIRenderAuxGeom();

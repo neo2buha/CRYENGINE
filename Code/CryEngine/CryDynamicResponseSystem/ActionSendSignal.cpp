@@ -23,14 +23,18 @@ void CActionSendSignal::Serialize(Serialization::IArchive& ar)
 {
 	ar(m_signalName, "signal", "^ Signal");
 #if defined(HASHEDSTRING_STORES_SOURCE_STRING)
-	if (ar.isEdit() && !m_signalName.IsValid())
+	if (ar.isEdit())
 	{
-		ar.warning(m_signalName.m_textCopy, "No signal to send specified");
+		if (!m_signalName.IsValid())
+		{
+			ar.warning(m_signalName.m_textCopy, "No signal to send specified");
+		}
+		else if (CResponseSystem::GetInstance()->GetResponseManager()->GetResponse(m_signalName) == nullptr)
+		{
+			ar.warning(m_signalName.m_textCopy, "No response exists for the specified signal");
+		}
 	}
 #endif
 	ar(m_bCopyContextVariables, "copyContextVar", "^Copy Context Variable");
 }
 
-//--------------------------------------------------------------------------------------------------
-
-REGISTER_DRS_ACTION(CActionSendSignal, "SendSignal", DEFAULT_DRS_ACTION_COLOR);

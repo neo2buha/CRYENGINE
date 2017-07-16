@@ -582,14 +582,14 @@ bool CServiceNetworkConnection::TryReconnect()
 	if (m_socket == 0)
 	{
 		m_socket = CrySock::socketinet();
-		if (m_socket < 0)
+		if (m_socket == CRY_INVALID_SOCKET)
 		{
 			// We sent the initialization message
 			LOG_VERBOSE(1, "Connection local='%s', remote='%s', this=%p: failed to recreate socket",
 			            m_localAddress.ToString().c_str(),
 			            m_remoteAddress.ToString().c_str(),
 			            (UINT_PTR) this);
-
+			m_socket = 0;
 			return false;
 		}
 	}
@@ -1546,11 +1546,11 @@ CServiceNetwork::CServiceNetwork()
 	, m_bufferID(1)
 {
 	// Create the CVAR
-	m_pVerboseLevel = gEnv->pConsole->RegisterInt("net_debugVerboseLevel", 0, VF_DEV_ONLY);
+	m_pVerboseLevel = REGISTER_INT("net_debugVerboseLevel", 0, VF_DEV_ONLY, "");
 
 	// Send/receive Queue size limits
-	m_pReceiveDataQueueLimit = gEnv->pConsole->RegisterInt("net_receiveQueueSize", 20 << 20, VF_DEV_ONLY);
-	m_pSendDataQueueLimit = gEnv->pConsole->RegisterInt("net_sendQueueSize", 5 << 20, VF_DEV_ONLY);
+	m_pReceiveDataQueueLimit = REGISTER_INT("net_receiveQueueSize", 20 << 20, VF_DEV_ONLY, "");
+	m_pSendDataQueueLimit = REGISTER_INT("net_sendQueueSize", 5 << 20, VF_DEV_ONLY, "");
 
 	// Reinitialize the random number generator with independent seed value
 	m_guidGenerator.Seed((uint32)GetNetworkTime());

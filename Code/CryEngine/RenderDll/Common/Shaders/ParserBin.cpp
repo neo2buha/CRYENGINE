@@ -217,29 +217,61 @@ void CParserBin::Init()
 	FX_REGISTER_TOKEN(Texture3D);
 	FX_REGISTER_TOKEN(RWTexture3D);
 
+	FX_REGISTER_TOKEN(unorm);
+	FX_REGISTER_TOKEN(snorm);
 	FX_REGISTER_TOKEN(float);
 	FX_REGISTER_TOKEN(float2);
 	FX_REGISTER_TOKEN(float3);
 	FX_REGISTER_TOKEN(float4);
-	FX_REGISTER_TOKEN(float4x4);
-	FX_REGISTER_TOKEN(float3x4);
 	FX_REGISTER_TOKEN(float2x4);
+	FX_REGISTER_TOKEN(float3x4);
+	FX_REGISTER_TOKEN(float4x4);
 	FX_REGISTER_TOKEN(float3x3);
 	FX_REGISTER_TOKEN(half);
 	FX_REGISTER_TOKEN(half2);
 	FX_REGISTER_TOKEN(half3);
 	FX_REGISTER_TOKEN(half4);
-	FX_REGISTER_TOKEN(half4x4);
-	FX_REGISTER_TOKEN(half3x4);
 	FX_REGISTER_TOKEN(half2x4);
+	FX_REGISTER_TOKEN(half3x4);
+	FX_REGISTER_TOKEN(half4x4);
 	FX_REGISTER_TOKEN(half3x3);
 	FX_REGISTER_TOKEN(bool);
 	FX_REGISTER_TOKEN(int);
 	FX_REGISTER_TOKEN(int2);
+	FX_REGISTER_TOKEN(int3);
 	FX_REGISTER_TOKEN(int4);
 	FX_REGISTER_TOKEN(uint);
 	FX_REGISTER_TOKEN(uint2);
+	FX_REGISTER_TOKEN(uint3);
 	FX_REGISTER_TOKEN(uint4);
+	FX_REGISTER_TOKEN(min16float);
+	FX_REGISTER_TOKEN(min16float2);
+	FX_REGISTER_TOKEN(min16float3);
+	FX_REGISTER_TOKEN(min16float4);
+	FX_REGISTER_TOKEN(min16float4x4);
+	FX_REGISTER_TOKEN(min16float3x4);
+	FX_REGISTER_TOKEN(min16float2x4);
+	FX_REGISTER_TOKEN(min16float3x3);
+	FX_REGISTER_TOKEN(min10float);
+	FX_REGISTER_TOKEN(min10float2);
+	FX_REGISTER_TOKEN(min10float3);
+	FX_REGISTER_TOKEN(min10float4);
+	FX_REGISTER_TOKEN(min10float4x4);
+	FX_REGISTER_TOKEN(min10float3x4);
+	FX_REGISTER_TOKEN(min10float2x4);
+	FX_REGISTER_TOKEN(min10float3x3);
+	FX_REGISTER_TOKEN(min16int);
+	FX_REGISTER_TOKEN(min16int2);
+	FX_REGISTER_TOKEN(min16int3);
+	FX_REGISTER_TOKEN(min16int4);
+	FX_REGISTER_TOKEN(min12int);
+	FX_REGISTER_TOKEN(min12int2);
+	FX_REGISTER_TOKEN(min12int3);
+	FX_REGISTER_TOKEN(min12int4);
+	FX_REGISTER_TOKEN(min16uint);
+	FX_REGISTER_TOKEN(min16uint2);
+	FX_REGISTER_TOKEN(min16uint3);
+	FX_REGISTER_TOKEN(min16uint4);
 
 	FX_REGISTER_TOKEN(inout);
 	FX_REGISTER_TOKEN(asm);
@@ -509,10 +541,7 @@ void CParserBin::Init()
 	FX_REGISTER_TOKEN(cbuffer);
 	FX_REGISTER_TOKEN(PER_BATCH);
 	FX_REGISTER_TOKEN(PER_INSTANCE);
-	FX_REGISTER_TOKEN(PER_FRAME);
 	FX_REGISTER_TOKEN(PER_MATERIAL);
-	FX_REGISTER_TOKEN(PER_LIGHT);
-	FX_REGISTER_TOKEN(PER_SHADOWGEN);
 	FX_REGISTER_TOKEN(SKIN_DATA);
 	FX_REGISTER_TOKEN(INSTANCE_DATA);
 
@@ -679,6 +708,7 @@ void CParserBin::Init()
 	FX_REGISTER_TOKEN(DURANGO);
 	FX_REGISTER_TOKEN(PCDX11);
 	FX_REGISTER_TOKEN(OPENGL);
+	FX_REGISTER_TOKEN(VULKAN);
 
 	FX_REGISTER_TOKEN(STANDARDSGLOBAL);
 
@@ -689,6 +719,10 @@ void CParserBin::Init()
 	FX_REGISTER_TOKEN(GatherGreen);
 	FX_REGISTER_TOKEN(GatherBlue);
 	FX_REGISTER_TOKEN(GatherAlpha);
+
+	FX_REGISTER_TOKEN($AutoGS_MultiRes);
+	FX_REGISTER_TOKEN(Billboard);
+	FX_REGISTER_TOKEN(DebugHelper);
 
 	FXMacroItor it;
 	for (it = sStaticMacros.begin(); it != sStaticMacros.end(); it++)
@@ -723,10 +757,12 @@ void CParserBin::Init()
 		SetupForOrbis();
 #elif CRY_PLATFORM_DURANGO
 		SetupForDurango();
-#elif defined(OPENGL_ES) && DXGL_INPUT_GLSL
+#elif CRY_RENDERER_OPENGLES && DXGL_INPUT_GLSL
 		SetupForGLES3();
-#elif defined(OPENGL) && DXGL_INPUT_GLSL
+#elif CRY_RENDERER_OPENGL && DXGL_INPUT_GLSL
 		SetupForGL4();
+#elif CRY_RENDERER_VULKAN
+		SetupForVulkan();
 #else
 		SetupForD3D11();
 #endif
@@ -737,7 +773,7 @@ void CParserBin::SetupForD3D11()
 {
 	CleanPlatformMacros();
 	uint32 nMacro[1] = { eT_1 };
-#if CRY_PLATFORM_WINDOWS || defined(OPENGL)
+#if CRY_PLATFORM_WINDOWS || CRY_RENDERER_OPENGL
 	AddMacro(CParserBin::fxToken("PCDX11"), nMacro, 1, 0, m_StaticMacros);
 #endif
 	m_nPlatform = SF_D3D11;
@@ -755,7 +791,7 @@ void CParserBin::SetupForGL4()
 {
 	CleanPlatformMacros();
 	uint32 nMacro[1] = { eT_1 };
-#if CRY_PLATFORM_WINDOWS || defined(OPENGL)
+#if CRY_PLATFORM_WINDOWS || CRY_RENDERER_OPENGL
 	AddMacro(CParserBin::fxToken("PCDX11"), nMacro, 1, 0, m_StaticMacros);
 	AddMacro(CParserBin::fxToken("OPENGL"), nMacro, 1, 0, m_StaticMacros);
 #endif
@@ -774,7 +810,7 @@ void CParserBin::SetupForGLES3()
 {
 	CleanPlatformMacros();
 	uint32 nMacro[1] = { eT_1 };
-#if CRY_PLATFORM_WINDOWS || defined(OPENGL)
+#if CRY_PLATFORM_WINDOWS || CRY_RENDERER_OPENGL
 	AddMacro(CParserBin::fxToken("PCDX11"), nMacro, 1, 0, m_StaticMacros);
 #endif
 	m_nPlatform = SF_GLES3;
@@ -821,6 +857,24 @@ void CParserBin::SetupForDurango()
 	gRenDev->m_cEF.m_pGlobalExt = gRenDev->m_cEF.mfCreateShaderGenInfo("RunTime", true);
 }
 
+void CParserBin::SetupForVulkan()
+{
+	CleanPlatformMacros();
+	uint32 nMacro[1] = { eT_1 };
+
+	m_nPlatform = SF_VULKAN;
+	gRenDev->m_cEF.m_ShadersCache = "Shaders/Cache/Vulkan/";
+	gRenDev->m_cEF.m_ShadersFilter = "Vulkan";
+	AddMacro(CParserBin::fxToken("VULKAN"), nMacro, 1, 0, m_StaticMacros);
+
+	SetupFeatureDefines();
+	gRenDev->m_cEF.m_Bin.InvalidateCache();
+	gRenDev->m_cEF.mfInitLookups();
+
+	SAFE_DELETE(gRenDev->m_cEF.m_pGlobalExt);
+	gRenDev->m_cEF.m_pGlobalExt = gRenDev->m_cEF.mfCreateShaderGenInfo("RunTime", true);
+}
+
 const char* CParserBin::GetPlatformShaderlistName()
 {
 	if (CParserBin::m_nPlatform == SF_D3D11)
@@ -833,6 +887,8 @@ const char* CParserBin::GetPlatformShaderlistName()
 		return "ShaderList_Durango.txt";
 	else if (CParserBin::m_nPlatform == SF_ORBIS)
 		return "ShaderList_Orbis.txt";
+	else if (CParserBin::m_nPlatform == SF_VULKAN)
+		return "ShaderList_Vulkan.txt";
 
 	CryFatalError("Unexpected Shader Platform/No platform specified");
 
@@ -846,6 +902,8 @@ CCryNameTSCRC CParserBin::GetPlatformSpecName(CCryNameTSCRC orgName)
 		nmTemp.add(0x200);
 	else if (CParserBin::m_nPlatform == SF_GL4)
 		nmTemp.add(0x300);
+	else if (CParserBin::m_nPlatform == SF_VULKAN)
+		nmTemp.add(0x400);
 	else if (CParserBin::m_nPlatform == SF_GLES3)
 		nmTemp.add(0x800);
 	else if (CParserBin::m_nPlatform == SF_ORBIS)
@@ -990,9 +1048,10 @@ bool CParserBin::RemoveMacro(uint32 dwName, FXMacroBin& Macro)
 void CParserBin::CleanPlatformMacros()
 {
 	RemoveMacro(CParserBin::fxToken("DURANGO"), m_StaticMacros);
-	RemoveMacro(CParserBin::fxToken("ORBIS"), m_StaticMacros);
-	RemoveMacro(CParserBin::fxToken("PCDX11"), m_StaticMacros);
-	RemoveMacro(CParserBin::fxToken("OPENGL"), m_StaticMacros);
+	RemoveMacro(CParserBin::fxToken("ORBIS"),   m_StaticMacros);
+	RemoveMacro(CParserBin::fxToken("PCDX11"),  m_StaticMacros);
+	RemoveMacro(CParserBin::fxToken("OPENGL"),  m_StaticMacros);
+	RemoveMacro(CParserBin::fxToken("VULKAN"),  m_StaticMacros);
 }
 
 const SMacroBinFX* CParserBin::FindMacro(uint32 dwName, FXMacroBin& Macro)
@@ -1605,7 +1664,7 @@ bool CParserBin::PreprocessTokens(ShaderTokensVec& Tokens, int nPass, PodArray<u
 		case eT_if_2:
 		case eT_ifdef_2:
 		case eT_ifndef_2:
-			if ((nPass == 0 && !bFirst) || (nPass == 1 && bFirst))
+			if (nPass != 2 && ((nPass == 0 && !bFirst) || (nPass == 1 && bFirst)))
 			{
 				if (nPass == 1)
 				{
@@ -1840,7 +1899,7 @@ bool CParserBin::Preprocess(int nPass, ShaderTokensVec& Tokens, FXShaderToken* p
 
 	// Use a buffer to process tokens, transfer to the
 	// real storage in Tokens once we know the full quantity
-	enum { TOKENS_BUFFER_SIZE = 88000 };
+	enum { TOKENS_BUFFER_SIZE = 100000 };
 
 	PodArray<uint32> tokensBuffer(TOKENS_BUFFER_SIZE);
 
@@ -2142,22 +2201,48 @@ int CParserBin::GetNextToken(uint32& nStart, ETokenStorageClass& nTokenStorageCl
 				// DX11 stuff
 				uint32 nCur = m_CurFrame.m_nCurToken + 1;
 				uint32 nCount = 0;
-				while (nFnRet == eT_br_sq_1)
+
+				while (true)
 				{
+					switch (nFnRet)
+					{
+					case eT_br_sq_1: 
 					nCount++;
 					nLastTok = FindToken(nCur, m_CurFrame.m_nLastToken, eT_br_sq_2);
-					if (nLastTok > 0)
+						if (nLastTok < 0)
 					{
+							Warning("Unmatched [");
+							assert(0);
+							nLastTok = nCur;
+						}
 						nLastTok++;
 						nFnRet = pTokens[nLastTok];
-						if (nFnRet == eT_skip)
+						nCur = nLastTok + 1;
+						continue;
+
+					case eT_skip_1:
+						nCount++;
+						nLastTok = FindToken(nCur, m_CurFrame.m_nLastToken, eT_skip_2);
+						if (nLastTok < 0)
 						{
+							Warning("Unmatched #skip_(");
+							assert(0);
+							nLastTok = nCur;
+						}
+						nLastTok++;
+						nFnRet = pTokens[nLastTok];
+						nCur = nLastTok + 1;
+						continue;
+
+					case eT_skip:
 							pTokens[nLastTok + 1] = eT_skip;
 							nLastTok += 2;
 							nFnRet = pTokens[nLastTok];
-						}
 						nCur = nLastTok + 1;
+						continue;
 					}
+
+					break;
 				}
 				nFnName = pTokens[nLastTok + 1];
 				//const char *szFn = GetString(nFnName);
@@ -3069,31 +3154,33 @@ void CParserBin::SetupFeatureDefines()
 
 	uint32 nEnable[1] = { eT_1 };
 #if defined(MESH_TESSELLATION)
-	if (m_nPlatform == SF_D3D11 || m_nPlatform == SF_DURANGO || m_nPlatform == SF_GL4)
+	if (m_nPlatform & (SF_D3D11 | SF_DURANGO | SF_ORBIS | SF_GL4 | SF_VULKAN))
 	{
 		AddMacro(CParserBin::GetCRC32("FEATURE_MESH_TESSELLATION"), nEnable, 1, 0, m_StaticMacros);
 	}
 #endif
 
 #if defined(FEATURE_DEFERRED_SHADING_SELF_SHADOWS)
-	if (m_nPlatform == SF_D3D11 || m_nPlatform == SF_GL4 || m_nPlatform == SF_GLES3)
+	if (m_nPlatform & (SF_D3D11 | SF_GL4 | SF_GLES3 | SF_VULKAN))
 	{
 		AddMacro(CParserBin::GetCRC32("FEATURE_SELF_SHADOWS"), nEnable, 1, 0, m_StaticMacros);
 	}
 #endif
+
 #if defined(PARTICLES_TESSELLATION)
-	if (m_nPlatform == SF_D3D11 || m_nPlatform == SF_DURANGO || m_nPlatform == SF_ORBIS || m_nPlatform == SF_GL4)
+	if (m_nPlatform & (SF_D3D11 | SF_DURANGO | SF_ORBIS |  SF_GL4 | SF_VULKAN))
 	{
 		AddMacro(CParserBin::GetCRC32("FEATURE_PARTICLES_TESSELLATION"), nEnable, 1, 0, m_StaticMacros);
 	}
 #endif
 
-	if (m_nPlatform & (SF_D3D11 | SF_ORBIS | SF_DURANGO | SF_GL4))
+	if (m_nPlatform & (SF_D3D11 | SF_ORBIS | SF_DURANGO | SF_GL4 | SF_VULKAN))
 	{
 		AddMacro(CParserBin::GetCRC32("FEATURE_GEOMETRY_SHADERS"), nEnable, 1, 0, m_StaticMacros);
 	}
 
 #if defined(FEATURE_SVO_GI)
-	AddMacro(CParserBin::GetCRC32("FEATURE_SVO_GI"), nEnable, 1, 0, m_StaticMacros);
+	if (m_nPlatform == SF_D3D11 || m_nPlatform == SF_DURANGO || m_nPlatform == SF_ORBIS)
+		AddMacro(CParserBin::GetCRC32("FEATURE_SVO_GI"), nEnable, 1, 0, m_StaticMacros);
 #endif
 }

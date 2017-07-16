@@ -14,6 +14,8 @@
 #include "Gpu/Particles/GpuParticleManager.h"
 #include <CrySystem/VR/IHMDManager.h>
 
+#include "D3D_SVO.h"
+
 //=======================================================================
 
 bool CD3D9Renderer::RT_CreateDevice()
@@ -26,7 +28,7 @@ bool CD3D9Renderer::RT_CreateDevice()
 		return false;
 #endif
 
-	return SetRes();
+	return SetBaseResolution();
 }
 
 void CD3D9Renderer::RT_ReleaseVBStream(void* pVB, int nStream)
@@ -48,20 +50,16 @@ void CD3D9Renderer::RT_ReleaseRS(std::shared_ptr<CDeviceResourceSet>& pRS)
 
 void CD3D9Renderer::RT_ClearTarget(CTexture* pTex, const ColorF& color)
 {
-	if (pTex->GetFlags() & FT_USAGE_DEPTHSTENCIL)
+	CDeviceTexture* pDevTex = pTex->GetDevTexture(pTex->IsMSAA());
+	if (auto* pView = pDevTex->LookupResourceView(EDefaultResourceViews::RasterizerTarget).second)
 	{
-		D3DDepthSurface* pSurf = reinterpret_cast<D3DDepthSurface*>(pTex->GetDeviceDepthStencilView());
-		if (!pSurf) return;
+		CDeviceGraphicsCommandInterface* pGraphicsInterface = GetDeviceObjectFactory().GetCoreCommandList().GetGraphicsInterface();
 
-		// NOTE: normalized depth in color.r and unnormalized stencil in color.g
-		GetDeviceContext().ClearDepthStencilView(pSurf, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, color.r, (uint8)color.g);
-	}
-	else
-	{
-		D3DSurface* pSurf = pTex->GetSurface(0, 0);
-		if (!pSurf) return;
-
-		GetDeviceContext().ClearRenderTargetView(pSurf, (float*)&color);
+		// FT_USAGE_DEPTHSTENCIL takes preference over RenderTarget if both are possible
+		if (pTex->GetFlags() & FT_USAGE_DEPTHSTENCIL)
+			pGraphicsInterface->ClearSurface(reinterpret_cast<D3DDepthSurface*>(pView), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, color.r, (uint8)color.g); // NOTE: normalized depth in color.r and unnormalized stencil in color.g
+		else if (pTex->GetFlags() & FT_USAGE_RENDERTARGET)
+			pGraphicsInterface->ClearSurface(reinterpret_cast<D3DSurface*>(pView), color);
 	}
 }
 
@@ -73,7 +71,7 @@ void CD3D9Renderer::RT_DrawDynVB(SVF_P3F_C4B_T2F* pBuf, uint16* pInds, uint32 nV
 
 	FX_SetFPMode();
 
-	if (!FAILED(FX_SetVertexDeclaration(0, eVF_P3F_C4B_T2F)))
+	if (!FAILED(FX_SetVertexDeclaration(0, EDefaultInputLayouts::P3F_C4B_T2F)))
 	{
 		if (pInds)
 			FX_DrawIndexedPrimitive(GetInternalPrimitiveType(nPrimType), 0, 0, nVerts, 0, nInds);
@@ -106,10 +104,10 @@ void CD3D9Renderer::RT_Draw2dImageInternal(S2DImage* images, uint32 numImages, b
 	m = m_RP.m_TI[m_RP.m_nProcessThreadID].m_matView->GetTop();
 	m_RP.m_TI[m_RP.m_nProcessThreadID].m_matView->LoadIdentity();
 
+#ifdef RENDERER_ENABLE_LEGACY_PIPELINE
 	// Create dynamic geometry
-	TempDynVB<SVF_P3F_C4B_T2F> vb;
-	vb.Allocate(numImages * 4);
-	SVF_P3F_C4B_T2F* vQuad = vb.Lock();
+	// NOTE: Get aligned stack-space (pointer and size aligned to manager's alignment requirement)
+	CryStackAllocWithSizeVector(SVF_P3F_C4B_T2F, numImages * 4, vQuad, CDeviceBufferManager::AlignBufferSizeForStreaming);
 
 	for (uint32 i = 0; i < numImages; ++i)
 	{
@@ -197,23 +195,18 @@ void CD3D9Renderer::RT_Draw2dImageInternal(S2DImage* images, uint32 numImages, b
 		}
 	}
 
-	vb.Unlock();
-	vb.Bind(0);
-	vb.Release();
+	TempDynVB<SVF_P3F_C4B_T2F>::CreateFillAndBind(vQuad, numImages * 4, 0);
 
 	CTexture* prevTex = NULL;
 	EF_SetColorOp(eCO_REPLACE, eCO_REPLACE, (eCA_Diffuse | (eCA_Diffuse << 3)), (eCA_Diffuse | (eCA_Diffuse << 3)));
 	FX_SetFPMode();
 
-	if (FAILED(FX_SetVertexDeclaration(0, eVF_P3F_C4B_T2F)))
+	if (FAILED(FX_SetVertexDeclaration(0, EDefaultInputLayouts::P3F_C4B_T2F)))
 	{
 		m_RP.m_TI[m_RP.m_nProcessThreadID].m_matView->Pop();
 		m_RP.m_TI[m_RP.m_nProcessThreadID].m_matProj->Pop();
 		return;
 	}
-
-	int nFilterTilinear = CTexture::GetTexState(STexState(FILTER_TRILINEAR, true));
-	int nFilterPoint = CTexture::GetTexState(STexState(FILTER_POINT, true));
 
 	// Draw quads
 	for (uint32 i = 0; i < numImages; ++i)
@@ -225,7 +218,7 @@ void CD3D9Renderer::RT_Draw2dImageInternal(S2DImage* images, uint32 numImages, b
 			prevTex = img.pTex;
 			if (img.pTex)
 			{
-				img.pTex->Apply(0, (m_bDraw2dImageStretchMode || img.pTex->IsHighQualityFiltered()) ? nFilterTilinear : nFilterPoint);
+				img.pTex->Apply(0, (m_bDraw2dImageStretchMode || img.pTex->IsHighQualityFiltered()) ? EDefaultSamplerStates::TrilinearClamp : EDefaultSamplerStates::PointClamp);
 				EF_SetColorOp(eCO_MODULATE, eCO_MODULATE, DEF_TEXARG0, DEF_TEXARG0);
 			}
 			else
@@ -235,7 +228,7 @@ void CD3D9Renderer::RT_Draw2dImageInternal(S2DImage* images, uint32 numImages, b
 
 #if CRY_PLATFORM_ORBIS
 			// Workaround for vertex declaration not always being fully bound
-			if (FAILED(FX_SetVertexDeclaration(0, eVF_P3F_C4B_T2F)))
+			if (FAILED(FX_SetVertexDeclaration(0, EDefaultInputLayouts::P3F_C4B_T2F)))
 			{
 				m_RP.m_TI[m_RP.m_nProcessThreadID].m_matView->Pop();
 				m_RP.m_TI[m_RP.m_nProcessThreadID].m_matProj->Pop();
@@ -247,33 +240,10 @@ void CD3D9Renderer::RT_Draw2dImageInternal(S2DImage* images, uint32 numImages, b
 		FX_DrawPrimitive(eptTriangleStrip, i * 4, 4);
 	}
 
+#endif
+
 	EF_PopMatrix();
 	m_RP.m_TI[m_RP.m_nProcessThreadID].m_matProj->Pop();
-}
-
-void CD3D9Renderer::RT_DrawStringU(IFFont_RenderProxy* pFont, float x, float y, float z, const char* pStr, const bool asciiMultiLine, const STextDrawContext& ctx) const
-{
-	SetProfileMarker("DRAWSTRINGU", CRenderer::ESPM_PUSH);
-
-	if (GetS3DRend().IsStereoEnabled() && !GetS3DRend().DisplayStereoDone())
-	{
-		GetS3DRend().BeginRenderingTo(LEFT_EYE);
-		pFont->RenderCallback(x, y, z, pStr, asciiMultiLine, ctx);
-		GetS3DRend().EndRenderingTo(LEFT_EYE);
-
-		if (GetS3DRend().RequiresSequentialSubmission())
-		{
-			GetS3DRend().BeginRenderingTo(RIGHT_EYE);
-			pFont->RenderCallback(x, y, z, pStr, asciiMultiLine, ctx);
-			GetS3DRend().EndRenderingTo(RIGHT_EYE);
-		}
-	}
-	else
-	{
-		pFont->RenderCallback(x, y, z, pStr, asciiMultiLine, ctx);
-	}
-
-	SetProfileMarker("DRAWSTRINGU", CRenderer::ESPM_POP);
 }
 
 void CD3D9Renderer::RT_DrawLines(Vec3 v[], int nump, ColorF& col, int flags, float fGround)
@@ -296,9 +266,8 @@ void CD3D9Renderer::RT_DrawLines(Vec3 v[], int nump, ColorF& col, int flags, flo
 
 	if (fGround >= 0)
 	{
-		TempDynVB<SVF_P3F_C4B_T2F> vb;
-		vb.Allocate(nump * 2);
-		SVF_P3F_C4B_T2F* vQuad = vb.Lock();
+		// NOTE: Get aligned stack-space (pointer and size aligned to manager's alignment requirement)
+		CryStackAllocWithSizeVector(SVF_P3F_C4B_T2F, nump * 2, vQuad, CDeviceBufferManager::AlignBufferSizeForStreaming);
 
 		for (i = 0; i < nump; i++)
 		{
@@ -312,19 +281,16 @@ void CD3D9Renderer::RT_DrawLines(Vec3 v[], int nump, ColorF& col, int flags, flo
 			vQuad[i * 2 + 1].st = Vec2(0.0f, 0.0f);
 		}
 
-		vb.Unlock();
-		vb.Bind(0);
-		vb.Release();
+		TempDynVB<SVF_P3F_C4B_T2F>::CreateFillAndBind(vQuad, nump * 2, 0);
 
 		FX_SetFPMode();
-		if (!FAILED(FX_SetVertexDeclaration(0, eVF_P3F_C4B_T2F)))
+		if (!FAILED(FX_SetVertexDeclaration(0, EDefaultInputLayouts::P3F_C4B_T2F)))
 			FX_DrawPrimitive(eptLineList, 0, nump * 2);
 	}
 	else
 	{
-		TempDynVB<SVF_P3F_C4B_T2F> vb;
-		vb.Allocate(nump);
-		SVF_P3F_C4B_T2F* vQuad = vb.Lock();
+		// NOTE: Get aligned stack-space (pointer and size aligned to manager's alignment requirement)
+		CryStackAllocWithSizeVector(SVF_P3F_C4B_T2F, nump, vQuad, CDeviceBufferManager::AlignBufferSizeForStreaming);
 
 		for (i = 0; i < nump; i++)
 		{
@@ -333,12 +299,10 @@ void CD3D9Renderer::RT_DrawLines(Vec3 v[], int nump, ColorF& col, int flags, flo
 			vQuad[i].st = Vec2(0, 0);
 		}
 
-		vb.Unlock();
-		vb.Bind(0);
-		vb.Release();
+		TempDynVB<SVF_P3F_C4B_T2F>::CreateFillAndBind(vQuad, nump, 0);
 
 		FX_SetFPMode();
-		if (!FAILED(FX_SetVertexDeclaration(0, eVF_P3F_C4B_T2F)))
+		if (!FAILED(FX_SetVertexDeclaration(0, EDefaultInputLayouts::P3F_C4B_T2F)))
 			FX_DrawPrimitive(eptLineStrip, 0, nump);
 	}
 }
@@ -428,10 +392,7 @@ void CD3D9Renderer::FlashRenderInternal(IFlashPlayer_RenderProxy* pPlayer, bool 
 
 		if (GetS3DRend().IsStereoEnabled() && bStereo)
 		{
-			IHmdManager* pHmdManager = gEnv->pSystem->GetHmdManager();
-			const EHmdClass hmdClass = pHmdManager && pHmdManager->GetHmdDevice() ? pHmdManager->GetHmdDevice()->GetClass() : eHmdClass_Null;
-			const bool bRenderFlashToVrLayer = CRenderer::CV_r_StereoMode == STEREO_MODE_DUAL_RENDERING && (hmdClass == eHmdClass_Oculus || hmdClass == eHmdClass_OpenVR);
-			if (bRenderFlashToVrLayer)
+			if (GetS3DRend().IsQuadLayerEnabled())
 			{
 				GetS3DRend().BeginRenderingToVrQuadLayer(RenderLayer::eQuadLayers_0);
 				pPlayer->RenderCallback(IFlashPlayer_RenderProxy::EFT_Mono);
@@ -472,15 +433,24 @@ void CD3D9Renderer::FlashRenderPlaybackLocklessInternal(IFlashPlayer_RenderProxy
 
 		if (GetS3DRend().IsStereoEnabled() && bStereo)
 		{
-			GetS3DRend().BeginRenderingTo(LEFT_EYE);
-			pPlayer->RenderPlaybackLocklessCallback(cbIdx, IFlashPlayer_RenderProxy::EFT_StereoLeft, false, false);
-			GetS3DRend().EndRenderingTo(LEFT_EYE);
-
-			if (GetS3DRend().RequiresSequentialSubmission())
+			if (GetS3DRend().IsQuadLayerEnabled())
 			{
-				GetS3DRend().BeginRenderingTo(RIGHT_EYE);
-				pPlayer->RenderPlaybackLocklessCallback(cbIdx, IFlashPlayer_RenderProxy::EFT_StereoRight, bFinalPlayback, true);
-				GetS3DRend().EndRenderingTo(RIGHT_EYE);
+				GetS3DRend().BeginRenderingToVrQuadLayer(RenderLayer::eQuadLayers_0);
+				pPlayer->RenderPlaybackLocklessCallback(cbIdx, IFlashPlayer_RenderProxy::EFT_Mono, bFinalPlayback);
+				GetS3DRend().EndRenderingToVrQuadLayer(RenderLayer::eQuadLayers_0);
+			}
+			else
+			{
+				GetS3DRend().BeginRenderingTo(LEFT_EYE);
+				pPlayer->RenderPlaybackLocklessCallback(cbIdx, IFlashPlayer_RenderProxy::EFT_StereoLeft, false, false);
+				GetS3DRend().EndRenderingTo(LEFT_EYE);
+
+				if (GetS3DRend().RequiresSequentialSubmission())
+				{
+					GetS3DRend().BeginRenderingTo(RIGHT_EYE);
+					pPlayer->RenderPlaybackLocklessCallback(cbIdx, IFlashPlayer_RenderProxy::EFT_StereoRight, bFinalPlayback, true);
+					GetS3DRend().EndRenderingTo(RIGHT_EYE);
+				}
 			}
 		}
 		else
@@ -521,8 +491,8 @@ void CD3D9Renderer::RT_CreateResource(SResourceAsync* pRes)
 		{
 			// only create device texture
 			pTex = CTexture::GetByID(pRes->nTexId);
-			byte* arrData[6] = { pRes->pData, 0, 0, 0, 0, 0 };
-			pTex->CreateDeviceTexture(arrData);
+			const void* pData[] = { pRes->pData, nullptr, nullptr };
+			pTex->CreateDeviceTexture(pData);
 		}
 		else
 		{
@@ -534,7 +504,7 @@ void CD3D9Renderer::RT_CreateResource(SResourceAsync* pRes)
 				cry_sprintf(szName, "$AutoDownloadAsync_%d", m_TexGenID++);
 				pName = szName;
 			}
-			pTex = CTexture::Create2DTexture(pName, pRes->nWidth, pRes->nHeight, pRes->nMips, pRes->nTexFlags, pRes->pData, (ETEX_Format)pRes->nFormat, (ETEX_Format)pRes->nFormat);
+			pTex = CTexture::GetOrCreate2DTexture(pName, pRes->nWidth, pRes->nHeight, pRes->nMips, pRes->nTexFlags, pRes->pData, (ETEX_Format)pRes->nFormat);
 		}
 
 		SAFE_DELETE_ARRAY(pRes->pData);
@@ -563,6 +533,11 @@ void CD3D9Renderer::RT_ReleaseResource(SResourceAsync* pRes)
 	delete pRes;
 }
 
+void CD3D9Renderer::RT_ReleaseOptics(IOpticsElementBase* pOpticsElement)
+{
+	SAFE_RELEASE(pOpticsElement);
+}
+
 void CD3D9Renderer::RT_UnbindTMUs()
 {
 	D3DShaderResource* pTex[MAX_TMU] = { NULL };
@@ -570,12 +545,12 @@ void CD3D9Renderer::RT_UnbindTMUs()
 	{
 		CTexture::s_TexStages[i].m_DevTexture = NULL;
 	}
-	m_DevMan.BindSRV(CDeviceManager::TYPE_VS, pTex, 0, MAX_TMU);
-	m_DevMan.BindSRV(CDeviceManager::TYPE_GS, pTex, 0, MAX_TMU);
-	m_DevMan.BindSRV(CDeviceManager::TYPE_DS, pTex, 0, MAX_TMU);
-	m_DevMan.BindSRV(CDeviceManager::TYPE_HS, pTex, 0, MAX_TMU);
-	m_DevMan.BindSRV(CDeviceManager::TYPE_CS, pTex, 0, MAX_TMU);
-	m_DevMan.BindSRV(CDeviceManager::TYPE_PS, pTex, 0, MAX_TMU);
+	m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_VS, pTex, 0, MAX_TMU);
+	m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_GS, pTex, 0, MAX_TMU);
+	m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_DS, pTex, 0, MAX_TMU);
+	m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_HS, pTex, 0, MAX_TMU);
+	m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_CS, pTex, 0, MAX_TMU);
+	m_DevMan.BindSRV(CSubmissionQueue_DX11::TYPE_PS, pTex, 0, MAX_TMU);
 
 	m_DevMan.CommitDeviceStates();
 }
@@ -597,50 +572,90 @@ void CD3D9Renderer::RT_UnbindResources()
 	m_DevMan.BindVtxDecl(NULL);
 	m_pLastVDeclaration = NULL;
 
-	m_DevMan.BindShader(CDeviceManager::TYPE_PS, NULL);
-	m_DevMan.BindShader(CDeviceManager::TYPE_VS, NULL);
-	m_DevMan.BindShader(CDeviceManager::TYPE_GS, NULL);
-	m_DevMan.BindShader(CDeviceManager::TYPE_DS, NULL);
-	m_DevMan.BindShader(CDeviceManager::TYPE_HS, NULL);
-	m_DevMan.BindShader(CDeviceManager::TYPE_CS, NULL);
+	m_DevMan.BindShader(CSubmissionQueue_DX11::TYPE_PS, NULL);
+	m_DevMan.BindShader(CSubmissionQueue_DX11::TYPE_VS, NULL);
+	m_DevMan.BindShader(CSubmissionQueue_DX11::TYPE_GS, NULL);
+	m_DevMan.BindShader(CSubmissionQueue_DX11::TYPE_DS, NULL);
+	m_DevMan.BindShader(CSubmissionQueue_DX11::TYPE_HS, NULL);
+	m_DevMan.BindShader(CSubmissionQueue_DX11::TYPE_CS, NULL);
 
 	m_DevMan.CommitDeviceStates();
 }
 
 void CD3D9Renderer::RT_ReleaseRenderResources(uint32 nFlags)
 {
-	if (nFlags & (FRR_PERMANENT_RENDER_OBJECTS | FRR_OBJECTS))
+	if (nFlags & FRR_FLUSH_TEXTURESTREAMING)
 	{
-		// Delete all items that have not been allocated from the object pool
+		CTexture::RT_FlushStreaming(true);
+	}
+
+	if (nFlags & FRR_PERMANENT_RENDER_OBJECTS)
+	{
 		for (int i = 0; i < RT_COMMAND_BUF_COUNT; i++)
 		{
 			FreePermanentRenderObjects(i);
 		}
-		if (nFlags == FRR_PERMANENT_RENDER_OBJECTS)
-			return;
 	}
 
-	if (m_gpuParticleManager)
-		m_gpuParticleManager->RT_CleanupResources();
-
-	RT_GraphicsPipelineShutdown();
-
-	m_cEF.mfReleasePreactivatedShaderData();
-	m_cEF.m_Bin.InvalidateCache();
-	//m_cEF.m_Bin.m_BinPaths.clear();
-	ForceFlushRTCommands();
-
-	for (uint i = 0; i < CLightStyle::s_LStyles.Num(); i++)
+	if (nFlags & FRR_DELETED_MESHES)
 	{
-		delete CLightStyle::s_LStyles[i];
+		CRenderMesh::Tick(MAX_RELEASED_MESH_FRAMES);
 	}
-	CLightStyle::s_LStyles.Free();
 
-	if ((nFlags & FRR_TEXTURES) == 0) // in case of FRR_TEXTURES all textures have already been released
+	if (nFlags & FRR_POST_EFFECTS)
+	{
+		if (m_pPostProcessMgr)
+			m_pPostProcessMgr->ReleaseResources();
+	}
+
+#if defined(FEATURE_SVO_GI)
+	if (nFlags & FRR_SVOGI)
+	{
+		if (auto pSvoRenderer = CSvoRenderer::GetInstance())
+			pSvoRenderer->Release();
+	}
+#endif
+
+	if (nFlags & FRR_SYSTEM_RESOURCES)
+	{
+		// 1) Make sure all high level objects (CRenderMesh, CRenderElement,..) are gone
+		RT_UnbindResources();
+		RT_ResetGlass();
+
+		CRenderMesh::Tick(MAX_RELEASED_MESH_FRAMES);
+		CRenderElement::Cleanup();
+
+		// 2) Release renderer created high level stuff (CStandardGraphicsPipeline, CPrimitiveRenderPass, CSceneRenderPass,..)	
+		SF_DestroyResources();
+		RT_GraphicsPipelineShutdown();
+
+		// 3) At this point all device objects should be gone and we can safely reset PSOs, ResourceLayouts,..
+		RT_ResetDeviceObjectFactory();
+		
+		// 4) Now release textures and shaders
+		m_cEF.mfReleaseSystemShaders();
+		m_cEF.m_Bin.InvalidateCache();
+
+		RT_UnbindTMUs();
+
+		CTexture::ResetTMUs();
+		CTexture::ReleaseSystemTextures();
+
+		FX_PipelineShutdown();
+		GetDeviceObjectFactory().GetCoreCommandList().GetGraphicsInterface()->ClearState(true);
+		m_nMaxRT2Commit = -1;
+	}
+
+	if (nFlags & FRR_TEXTURES)
+	{
+		CTexture::ShutDown();
+	}
+	else
 	{
 		// Clear core render targets on shut down, just to be sure
 		// they are in a sane state for next render and prevent flicks
-		CTexture* clearTextures[] = {
+		CTexture* clearTextures[] =
+		{
 			CTexture::s_ptexSceneNormalsMap,
 			CTexture::s_ptexSceneDiffuse,
 			CTexture::s_ptexSceneSpecular,
@@ -658,26 +673,21 @@ void CD3D9Renderer::RT_ReleaseRenderResources(uint32 nFlags)
 			CTexture::s_ptexStereoR,
 		};
 
-		for (size_t i = 0; i < CRY_ARRAY_COUNT(clearTextures); i++)
+		for (auto pTex : clearTextures)
 		{
-			if (clearTextures[i] == NULL || clearTextures[i]->GetDevTexture() == NULL) continue;
-
-			FX_ClearTarget(clearTextures[i], Clr_Empty);
+			if (CTexture::IsTextureExist(pTex))
+				FX_ClearTarget(pTex, Clr_Empty);
 		}
 	}
 
-	int i;
-	FX_PipelineShutdown();
-	D3DSurface* pRTV[RT_STACK_WIDTH] = { NULL };
-	GetDeviceContext().OMSetRenderTargets(RT_STACK_WIDTH, pRTV, NULL);
-	m_nMaxRT2Commit = -1;
-	for (i = 0; i < 4; i++)
+	// sync dev buffer only once per frame, to prevent syncing to the currently rendered frame
+	// which would result in a deadlock
+	if (nFlags & (FRR_SYSTEM_RESOURCES | FRR_DELETED_MESHES))
 	{
-		//m_pNewTarget[i] = NULL;
-		//m_pCurTarget[i] = NULL;
+		gRenDev->m_DevBufMan.Sync(gRenDev->m_RP.m_TI[gRenDev->m_RP.m_nProcessThreadID].m_nFrameUpdateID);
 	}
-
 }
+
 void CD3D9Renderer::RT_CreateRenderResources()
 {
 	EF_Init();
@@ -692,14 +702,30 @@ void CD3D9Renderer::RT_CreateRenderResources()
 		m_pGraphicsPipeline = new CStandardGraphicsPipeline;
 		m_pGraphicsPipeline->Init();
 	}
+
+#if RENDERER_SUPPORT_SCALEFORM
+	if (!m_pSFResD3D)
+	{
+		SF_CreateResources();
+		assert(m_pSFResD3D);
+	}
+#endif
 }
 
 void CD3D9Renderer::RT_PrecacheDefaultShaders()
 {
 	SShaderCombination cmb;
-	m_cEF.s_ShaderStereo->mfPrecache(cmb, true, true, NULL);
+	m_cEF.s_ShaderStereo->mfPrecache(cmb, true, NULL);
 
+<<<<<<< HEAD
 #if defined(INCLUDE_SCALEFORM_SDK) || defined(CRY_FEATURE_SCALEFORM_HELPER)
+=======
+#if CRY_RENDERER_GNM
+	gGnmDevice->GnmCreateBuiltinPrograms();
+#endif
+
+#if RENDERER_SUPPORT_SCALEFORM
+>>>>>>> upstream/stabilisation
 	SF_PrecacheShaders();
 #endif
 }
@@ -746,8 +772,9 @@ void CD3D9Renderer::StartLoadtimeFlashPlayback(ILoadtimeCallback* pCallback)
 	{
 		FlushRTCommands(true, true, true);
 
+		SDisplayContext* pDC = GetActiveDisplayContext();
 		m_pRT->m_pLoadtimeCallback = pCallback;
-		SetViewport(0, 0, m_backbufferWidth, m_backbufferHeight);
+		SetViewport(0, 0, pDC->m_Width, pDC->m_Height);
 		m_pRT->RC_StartVideoThread();
 
 		// wait until render thread has fully processed the start of the video
@@ -779,16 +806,17 @@ void CD3D9Renderer::StopLoadtimeFlashPlayback()
 		m_pRT->m_pLoadtimeCallback = 0;
 
 		m_pRT->RC_BeginFrame();
-		SetState(GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA | GS_NODEPTHTEST);
-		Draw2dImage(0, 0, 800.f, 600.f, -1,
-		            0.0f, 0.0f, 1.0f, 1.0f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f);
+		m_pRT->RC_ClearTargetsImmediately(2, FRT_CLEAR_COLOR, Col_Black, Clr_FarPlane.r);
 
 #if !defined(STRIP_RENDER_THREAD)
-		// Blit the accumulated commands from the renderloading thread into the current fill command queue
-		// : Currently hacked into the RC_UpdateMaterialConstants command, but will be generalized soon
-		void* buf = m_pRT->m_Commands[m_pRT->m_nCurThreadFill].Grow(m_pRT->m_CommandsLoading.size());
-		memcpy(buf, &m_pRT->m_CommandsLoading[0], m_pRT->m_CommandsLoading.size());
-		m_pRT->m_CommandsLoading.Free();
+		if(m_pRT->m_CommandsLoading.size() > 0)
+		{
+			// Blit the accumulated commands from the renderloading thread into the current fill command queue
+			// : Currently hacked into the RC_UpdateMaterialConstants command, but will be generalized soon
+			void* buf = m_pRT->m_Commands[m_pRT->m_nCurThreadFill].Grow(m_pRT->m_CommandsLoading.size());
+			memcpy(buf, &m_pRT->m_CommandsLoading[0], m_pRT->m_CommandsLoading.size());
+			m_pRT->m_CommandsLoading.Free();
+		}
 #endif // !defined(STRIP_RENDER_THREAD)
 	}
 }
@@ -798,15 +826,13 @@ void CRenderer::RT_SubmitWind(const SWindGrid* pWind)
 	m_pCurWindGrid = pWind;
 	if (!CTexture::IsTextureExist(CTexture::s_ptexWindGrid))
 	{
-		CTexture::s_ptexWindGrid->Create2DTexture(pWind->m_nWidth, pWind->m_nHeight, 1,
-		                                          FT_DONT_RELEASE | FT_DONT_STREAM | FT_STAGE_UPLOAD,
-		                                          0, eTF_R16G16F, eTF_R16G16F);
+		CTexture::s_ptexWindGrid->Create2DTexture(pWind->m_nWidth, pWind->m_nHeight, 1, FT_DONT_RELEASE | FT_DONT_STREAM | FT_STAGE_UPLOAD, nullptr, eTF_R16G16F);
 	}
 	CDeviceTexture* pDevTex = CTexture::s_ptexWindGrid->GetDevTexture();
 	int nThreadID = m_pRT->m_nCurThreadProcess;
 	pDevTex->UploadFromStagingResource(0, [=](void* pData, uint32 rowPitch, uint32 slicePitch)
 	{
-		cryMemcpy(pData, pWind->m_pData, CTexture::TextureDataSize(pWind->m_nWidth, pWind->m_nHeight, 1, 1, 1, eTF_R16G16));
+		cryMemcpy(pData, pWind->m_pData, CTexture::TextureDataSize(pWind->m_nWidth, pWind->m_nHeight, 1, 1, 1, eTF_R16G16F));
 		return true;
 	});
 }

@@ -167,10 +167,7 @@ static SParamDB sParams[] =
 	SParamDB(PARAM(SI_BendInfo,                              ECGP_SI_BendInfo),                              0),
 
 	SParamDB(PARAM(PI_ViewProjection,                        ECGP_Matr_PI_ViewProj),                         0),
-	SParamDB(PARAM(PF_ViewProjMatrix,                        ECGP_Matr_PF_ViewProjMatrix),                   0),
-	SParamDB(PARAM(PF_ViewProjMatrixPrev,                    ECGP_Matr_PF_ViewProjMatrixPrev),               0),
-	SParamDB(PARAM(PB_ViewProjMatrixPrev,                    ECGP_Matr_PF_ViewProjMatrixPrev),               0),
-	SParamDB(PARAM(PF_ViewProjZeroMatrix,                    ECGP_Matr_PF_ViewProjZeroMatrix),               0),
+	SParamDB(PARAM(PB_ViewProjMatrixPrev,                    ECGP_Matr_PB_ViewProjMatrixPrev),               0),
 	SParamDB(PARAM(PB_ViewProjMatrix_IT,                     ECGP_Matr_PB_ViewProjMatrix_IT),                0),
 	SParamDB(PARAM(PB_ViewProjMatrix_I,                      ECGP_Matr_PB_ViewProjMatrix_I),                 0),
 
@@ -278,47 +275,15 @@ static SParamDB sParams[] =
 	SParamDB(PARAM(PB_HDRDynamicMultiplier,                  ECGP_PB_HDRDynamicMultiplier),                  0),
 	SParamDB(PARAM(PB_CausticsParams,                        ECGP_PB_CausticsParams),                        0),
 	SParamDB(PARAM(PB_CausticsSmoothSunDirection,            ECGP_PB_CausticsSmoothSunDirection),            0),
-	SParamDB(PARAM(PF_SunDirection,                          ECGP_PF_SunDirection),                          0),
-	SParamDB(PARAM(PF_FogColor,                              ECGP_PF_FogColor),                              0),
-	SParamDB(PARAM(PF_SunColor,                              ECGP_PF_SunColor),                              0),
-	SParamDB(PARAM(PB_SunColor,                              ECGP_PF_SunColor),                              0),
-	SParamDB(PARAM(PF_SkyColor,                              ECGP_PF_SkyColor),                              0),
-	SParamDB(PARAM(PF_Time,                                  ECGP_PF_Time),                                  0,              sParseTimeExpr),
-	SParamDB(PARAM(PB_Time,                                  ECGP_PF_Time),                                  0,              sParseTimeExpr),
-	SParamDB(PARAM(PF_FrameTime,                             ECGP_PF_FrameTime),                             0,              sParseTimeExpr),
-	SParamDB(PARAM(PB_FrameTime,                             ECGP_PF_FrameTime),                             0,              sParseTimeExpr),
-	SParamDB(PARAM(PF_HPosScale,                             ECGP_PF_HPosScale),                             0),
-	SParamDB(PARAM(PB_HPosScale,                             ECGP_PF_HPosScale),                             0),
-	SParamDB(PARAM(PF_ScreenSize,                            ECGP_PF_ScreenSize),                            0),
-	SParamDB(PARAM(PB_ScreenSize,                            ECGP_PF_ScreenSize),                            0),
-	SParamDB(PARAM(PF_CameraPos,                             ECGP_PF_CameraPos),                             0),
-	SParamDB(PARAM(PB_CameraPos,                             ECGP_PF_CameraPos),                             0),
-	SParamDB(PARAM(PF_NearFarDist,                           ECGP_PF_NearFarDist),                           0),
-	SParamDB(PARAM(PB_NearFarDist,                           ECGP_PF_NearFarDist),                           0),
+	SParamDB(PARAM(PB_SunColor,                              ECGP_PB_SunColor),                              0),
+	SParamDB(PARAM(PB_Time,                                  ECGP_PB_Time),                                  0,              sParseTimeExpr),
+	SParamDB(PARAM(PB_FrameTime,                             ECGP_PB_FrameTime),                             0,              sParseTimeExpr),
+	SParamDB(PARAM(PB_HPosScale,                             ECGP_PB_HPosScale),                             0),
+	SParamDB(PARAM(PB_ScreenSize,                            ECGP_PB_ScreenSize),                            0),
+	SParamDB(PARAM(PB_CameraPos,                             ECGP_PB_CameraPos),                             0),
+	SParamDB(PARAM(PB_NearFarDist,                           ECGP_PB_NearFarDist),                           0),
 
-	SParamDB(PARAM(PF_FrustumPlaneEquation,                  ECGP_PF_FrustumPlaneEquation),                  0),
-	SParamDB(PARAM(PF_ShadowLightPos,                        ECGP_PF_ShadowLightPos),                        0),
-	SParamDB(PARAM(PF_ShadowViewPos,                         ECGP_PF_ShadowViewPos),                         0),
 	SParamDB(PARAM(PB_PullVerticesInfo,                      ECGP_PB_PullVerticesInfo),                      0),
-
-	SParamDB(PARAM(PF_ProjRatio,                             ECGP_PF_ProjRatio),                             0),
-	SParamDB(PARAM(PF_NearestScaled,                         ECGP_PF_NearestScaled),                         0),
-	SParamDB(PARAM(PF_DepthFactor,                           ECGP_PF_DepthFactor),                           0),
-
-	SParamDB(PARAM(PB_SFCompMat,                             ECGP_Matr_PB_SFCompMat),                        0),
-	SParamDB(PARAM(PB_SFTexGenMat0,                          ECGP_Matr_PB_SFTexGenMat0),                     0),
-	SParamDB(PARAM(PB_SFTexGenMat1,                          ECGP_Matr_PB_SFTexGenMat1),                     0),
-	SParamDB(PARAM(PB_SFBitmapColorTransform,                ECGP_PB_SFBitmapColorTransform),                0),
-	SParamDB(PARAM(PB_SFColorTransformMatrix,                ECGP_PB_SFColorTransformMatrix),                0),
-	SParamDB(PARAM(PB_SFStereoVideoFrameSelect,              ECGP_PB_SFStereoVideoFrameSelect),              0),
-	SParamDB(PARAM(PB_SFPremultipliedAlpha,                  ECGP_PB_SFPremultipliedAlpha),                  0),
-	SParamDB(PARAM(PB_SFBlurFilterSize,                      ECGP_PB_SFBlurFilterSize),                      0),
-	SParamDB(PARAM(PB_SFBlurFilterScale,                     ECGP_PB_SFBlurFilterScale),                     0),
-	SParamDB(PARAM(PB_SFBlurFilterOffset,                    ECGP_PB_SFBlurFilterOffset),                    0),
-	SParamDB(PARAM(PB_SFBlurFilterColor1,                    ECGP_PB_SFBlurFilterColor1),                    0),
-	SParamDB(PARAM(PB_SFBlurFilterColor2,                    ECGP_PB_SFBlurFilterColor2),                    0),
-
-	SParamDB(PARAM(PI_OceanMat,                              ECGP_Matr_PI_OceanMat),                         0),
 
 	SParamDB(PARAM(PI_WrinklesMask0,                         ECGP_PI_WrinklesMask0),                         0),
 	SParamDB(PARAM(PI_WrinklesMask1,                         ECGP_PI_WrinklesMask1),                         0),
@@ -344,13 +309,6 @@ static SParamDB sParams[] =
 	SParamDB(PARAM(PB_TexelDensityColor,                     ECGP_PB_TexelDensityColor),                     0),
 	SParamDB(PARAM(PB_TexelsPerMeterInfo,                    ECGP_PB_TexelsPerMeterInfo),                    0),
 
-	SParamDB(PARAM(PB_GIGridMatrix,                          ECGP_Matr_PB_GIGridMatrix),                     0),
-	SParamDB(PARAM(PB_GIInvGridMatrix,                       ECGP_Matr_PB_GIInvGridMatrix),                  0),
-	SParamDB(PARAM(PB_GIGridSize,                            ECGP_PB_GIGridSize),                            0),
-	SParamDB(PARAM(PB_GIInvGridSize,                         ECGP_PB_GIInvGridSize),                         0),
-	SParamDB(PARAM(PB_GIGridSpaceCamPos,                     ECGP_PB_GIGridSpaceCamPos),                     0),
-	SParamDB(PARAM(PB_GIAttenuation,                         ECGP_PB_GIAttenuation),                         0),
-	SParamDB(PARAM(PB_GIGridCenter,                          ECGP_PB_GIGridCenter),                          0),
 	SParamDB(PARAM(PB_WaterRipplesLookupParams,              ECGP_PB_WaterRipplesLookupParams),              0),
 	SParamDB(PARAM(PB_SkinningExtraWeights,                  ECGP_PB_SkinningExtraWeights),                  0),
 
@@ -383,6 +341,8 @@ static SParamDB sParams[] =
 	SParamDB(PARAM(PB_SvoParams5,                            ECGP_PB_SvoParams5),                            0),
 	SParamDB(PARAM(PB_SvoParams6,                            ECGP_PB_SvoParams6),                            0),
 	SParamDB(PARAM(PB_SvoParams7,                            ECGP_PB_SvoParams7),                            0),
+	SParamDB(PARAM(PB_SvoParams8,                            ECGP_PB_SvoParams8),                            0),
+	SParamDB(PARAM(PB_SvoParams9,                            ECGP_PB_SvoParams9),                            0),
 #endif
 
 	SParamDB()
@@ -470,14 +430,8 @@ bool CShaderMan::mfParseParamComp(int comp, SCGParam* pCurParam, const char* szS
 				pCurParam->m_Flags |= PF_INSTANCE;
 			else if (!strnicmp(szName, "SI_", 3))
 				pCurParam->m_Flags |= PF_INSTANCE;
-			else if (!strnicmp(szName, "PF_", 3))
-				pCurParam->m_Flags |= PF_GLOBAL;
 			else if (!strnicmp(szName, "PM_", 3))
 				pCurParam->m_Flags |= PF_MATERIAL;
-			else if (!strnicmp(szName, "PL_", 3))
-				pCurParam->m_Flags |= PF_LIGHT;
-			else if (!strnicmp(szName, "SG_", 3))
-				pCurParam->m_Flags |= PF_SHADOWGEN;
 			static_assert(ECGP_COUNT <= 256, "ECGParam does not fit into 1 byte.");
 			if (comp > 0)
 				pCurParam->m_eCGParamType = (ECGParam)((int)pCurParam->m_eCGParamType | (int)(sParams[n].eParamType << (comp * 8)));
@@ -688,7 +642,7 @@ bool CShaderMan::mfParseFXSampler(SShaderFXParams& FXParams, SFXSampler* pr, con
 	CGpr.m_nStateHandle = pr->m_nTexState;
 	if (pr->m_Semantic.empty() && pr->m_Values.empty())
 	{
-		if (CGpr.m_nStateHandle >= 0)
+		if (CGpr.m_nStateHandle != EDefaultSamplerStates::Unspecified)
 		{
 			pParams->push_back(CGpr);
 			return true;
@@ -714,8 +668,9 @@ bool CShaderMan::mfParseFXSampler(SShaderFXParams& FXParams, SFXSampler* pr, con
 	return true;
 }
 
-// TM_ - material slots
-// TR_ - global engine RT's
+// TM_  - material slots
+// TSF_ - scaleform slots
+// TS_  - global engine RT's
 static STextureDB sTextures[] =
 {
 	STextureDB(PARAM(TM_Diffuse,                      ECGT_MatSlot_Diffuse),              0),
@@ -733,12 +688,13 @@ static STextureDB sTextures[] =
 	STextureDB(PARAM(TM_Smoothness,                   ECGT_MatSlot_Smoothness),           0),
 	STextureDB(PARAM(TM_Emittance,                    ECGT_MatSlot_Emittance),            0),
 
-	STextureDB(PARAM(TSF_Slot0,                       ECGT_SF_Slot0),                     0),
-	STextureDB(PARAM(TSF_Slot1,                       ECGT_SF_Slot1),                     0),
-	STextureDB(PARAM(TSF_SlotY,                       ECGT_SF_SlotY),                     0),
-	STextureDB(PARAM(TSF_SlotU,                       ECGT_SF_SlotU),                     0),
-	STextureDB(PARAM(TSF_SlotV,                       ECGT_SF_SlotV),                     0),
-	STextureDB(PARAM(TSF_SlotA,                       ECGT_SF_SlotA),                     0),
+	STextureDB(PARAM(TSF_ScaleformInput0,             ECGT_ScaleformInput0),              0),
+	STextureDB(PARAM(TSF_ScaleformInput1,             ECGT_ScaleformInput1),              0),
+	STextureDB(PARAM(TSF_ScaleformInput2,             ECGT_ScaleformInput2),              0),
+	STextureDB(PARAM(TSF_ScaleformInputY,             ECGT_ScaleformInputY),              0),
+	STextureDB(PARAM(TSF_ScaleformInputU,             ECGT_ScaleformInputU),              0),
+	STextureDB(PARAM(TSF_ScaleformInputV,             ECGT_ScaleformInputV),              0),
+	STextureDB(PARAM(TSF_ScaleformInputA,             ECGT_ScaleformInputA),              0),
 
 	STextureDB(PARAM(TS_Shadow0,                      ECGT_Shadow0),                      0),
 	STextureDB(PARAM(TS_Shadow1,                      ECGT_Shadow1),                      0),
@@ -784,7 +740,6 @@ static STextureDB sTextures[] =
 	STextureDB(PARAM(TS_VolumetricFogShadow1,         ECGT_VolumetricFogShadow1),         0),
 
 	STextureDB(PARAM(TS_WaterOceanMap,                ECGT_WaterOceanMap),                0),
-	STextureDB(PARAM(TS_WaterRipplesDDN,              ECGT_WaterRipplesDDN),              0),
 	STextureDB(PARAM(TS_WaterVolumeDDN,               ECGT_WaterVolumeDDN),               0),
 	STextureDB(PARAM(TS_WaterVolumeCaustics,          ECGT_WaterVolumeCaustics),          0),
 	STextureDB(PARAM(TS_WaterVolumeRefl,              ECGT_WaterVolumeRefl),              0),
@@ -792,7 +747,10 @@ static STextureDB sTextures[] =
 	STextureDB(PARAM(TS_RainOcclusion,                ECGT_RainOcclusion),                0),
 	STextureDB(PARAM(TS_TerrainNormMap,               ECGT_TerrainNormMap),               0),
 	STextureDB(PARAM(TS_TerrainBaseMap,               ECGT_TerrainBaseMap),               0),
+	STextureDB(PARAM(TS_TerrainElevMap,               ECGT_TerrainElevMap),               0),
 	STextureDB(PARAM(TS_WindGrid,                     ECGT_WindGrid),                     0),
+	STextureDB(PARAM(TS_CloudShadow,                  ECGT_CloudShadow),                  0),
+	STextureDB(PARAM(TS_VolCloudShadow,               ECGT_VolCloudShadow),               0),
 
 	STextureDB()
 };

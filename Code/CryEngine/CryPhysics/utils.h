@@ -40,12 +40,6 @@ inline int minmax(int op1,int op2,int bMax) {	return (op1&-bMax | op2&~-bMax) + 
 template<class F> inline F max_safe(F op1,F op2) { return op1>op2 ? op1:op2; }//int mask=isneg(op2-op1); return op1*mask+op2*(mask^1); }
 template<class F> inline F min_safe(F op1,F op2) { return op1<op2 ? op1:op2; }//{ int mask=isneg(op1-op2); return op1*mask+op2*(mask^1); }
 
-template<class F> ILINE Vec3_tpl<F> min(const Vec3_tpl<F> &v0,const Vec3_tpl<F> &v1) { 
-	return Vec3_tpl<F>(min(v0.x,v1.x), min(v0.y,v1.y), min(v0.z,v1.z)); 
-}
-template<class F> ILINE Vec3_tpl<F> max(const Vec3_tpl<F> &v0,const Vec3_tpl<F> &v1) { 
-	return Vec3_tpl<F>(max(v0.x,v1.x), max(v0.y,v1.y), max(v0.z,v1.z)); 
-}
 template<class F> ILINE Vec3_tpl<F> min_safe(const Vec3_tpl<F> &v0,const Vec3_tpl<F> &v1) { 
 	return Vec3_tpl<F>(min_safe(v0.x,v1.x), min_safe(v0.y,v1.y), min_safe(v0.z,v1.z)); 
 }
@@ -53,12 +47,6 @@ template<class F> ILINE Vec3_tpl<F> max_safe(const Vec3_tpl<F> &v0,const Vec3_tp
 	return Vec3_tpl<F>(max_safe(v0.x,v1.x), max_safe(v0.y,v1.y), max_safe(v0.z,v1.z)); 
 }
 
-template<class F> ILINE Vec2_tpl<F> min(const Vec2_tpl<F> &v0,const Vec2_tpl<F> &v1) { 
-	return Vec2_tpl<F>(min(v0.x,v1.x), min(v0.y,v1.y));
-}
-template<class F> ILINE Vec2_tpl<F> max(const Vec2_tpl<F> &v0,const Vec2_tpl<F> &v1) { 
-	return Vec2_tpl<F>(max(v0.x,v1.x), max(v0.y,v1.y)); 
-}
 template<class F> ILINE Vec2_tpl<F> min_safe(const Vec2_tpl<F> &v0,const Vec2_tpl<F> &v1) { 
 	return Vec2_tpl<F>(min_safe(v0.x,v1.x), min_safe(v0.y,v1.y));
 }
@@ -80,7 +68,7 @@ struct ort_gen {
 	ort_gen() {}
 	Vec3 operator[](int i) { return Vec3(iszero(i),i&1,i>>1); }
 };
-#define ort (ort_gen())
+#define ort ort_gen()
 #define ortx (Vec3(1,0,0))
 #define orty (Vec3(0,1,0))
 #define ortz (Vec3(0,0,1))
@@ -256,7 +244,7 @@ ILINE int intersect_lists(F *pSrc0,int nSrc0, F *pSrc1,int nSrc1, F *pDst)
 typedef void* (*qhullmalloc)(size_t);
 int qhull(strided_pointer<Vec3> pts, int npts, index_t*& pTris, qhullmalloc qmalloc = 0);
 
-int qhull2d(ptitem2d *pts,int nVtx, edgeitem *edges);
+int qhull2d(ptitem2d *pts,int nVtx, edgeitem *edges, int nMaxEdges=0);
 
 real ComputeMassProperties(strided_pointer<const Vec3> points, const index_t *faces, int nfaces, Vec3r &center,Matrix33r &I);
 
@@ -649,13 +637,6 @@ int ascii2bin(const unsigned char *pin,int sz, unsigned char *pout);
 
 template<class T> ILINE T *_align16(T *ptr) { return (T*)(((INT_PTR)ptr-1&~15)+16); }
 
-ILINE bool is_valid(float op) { return op*op>=0 && op*op<1E30f; }
-ILINE bool is_valid(int op) { return true; }
-ILINE bool is_valid(unsigned int op) { return true; }
-ILINE bool is_valid(const Quat& op) { return is_valid(op|op); }
-
-template<class dtype> bool is_valid(const dtype &op) { return is_valid(op.x*op.x + op.y*op.y + op.z*op.z); }
-
 void WritePacked(CStream &stm, int num);
 void WritePacked(CStream &stm, uint64 num);
 void ReadPacked(CStream &stm,int &num);
@@ -791,7 +772,7 @@ struct subref {
 
 // spinlocks
 /*ILINE void SpinLock(volatile int *pLock,int checkVal,int setVal) { 
-#ifdef _CPU_X86
+#if CRY_PLATFORM_X86
 	__asm {
 	mov edx, setVal
 	mov ecx, pLock
@@ -805,7 +786,7 @@ struct subref {
 }
 
 ILINE void AtomicAdd(volatile int *pVal, int iAdd) {
-#ifdef _CPU_X86
+#if CRY_PLATFORM_X86
 	__asm {
 		mov edx, pVal
 		mov eax, iAdd
@@ -976,57 +957,6 @@ public:
     return 0; 
   }
 };
-
-
-
-// uncomment the following block to effectively disable validations
-/*#define VALIDATOR_LOG(pLog,str)
-#define VALIDATORS_START
-#define VALIDATOR(member)
-#define VALIDATOR_NORM(member)
-#define VALIDATOR_RANGE(member,minval,maxval)
-#define VALIDATOR_RANGE2(member,minval,maxval)
-#define VALIDATORS_END
-#define ENTITY_VALIDATE(strSource,pStructure)*/
-#if (CRY_PLATFORM_WINDOWS && CRY_PLATFORM_64BIT) || (CRY_PLATFORM_LINUX && CRY_PLATFORM_64BIT)
-#define DoBreak {assert(0);}
-#else
-#define DoBreak { __debugbreak(); }
-#endif
-
-#define VALIDATOR_LOG(pLog,str) if (pLog) pLog->Log("%s", str) //OutputDebugString(str)
-#define VALIDATORS_START bool validate( const char *strSource, ILog *pLog, const Vec3 &pt,\
-	IPhysRenderer *pStreamer, void *param0, int param1, int param2 ) { bool res=true; char errmsg[1024];
-#define VALIDATOR(member) if (!is_unused(member) && !is_valid(member)) { \
-	res=false; cry_sprintf(errmsg,"%s: (%.50s @ %.1f,%.1f,%.1f) Validation Error: %s is invalid",strSource,\
-	pStreamer?pStreamer->GetForeignName(param0,param1,param2):"",pt.x,pt.y,pt.z,#member); \
-	VALIDATOR_LOG(pLog,errmsg); } 
-#define VALIDATOR_NORM(member) if (!is_unused(member) && !(is_valid(member) && fabs_tpl((member|member)-1.0f)<0.01f)) { \
-	res=false; cry_sprintf(errmsg,"%s: (%.50s @ %.1f,%.1f,%.1f) Validation Error: %s is invalid or unnormalized",\
-	strSource,pStreamer?pStreamer->GetForeignName(param0,param1,param2):"",pt.x,pt.y,pt.z,#member); VALIDATOR_LOG(pLog,errmsg); }
-#define VALIDATOR_NORM_MSG(member,msg,member1) if (!is_unused(member) && !(is_valid(member) && fabs_tpl((member|member)-1.0f)<0.01f)) { \
-	PREFAST_SUPPRESS_WARNING(6053) \
-	res=false; cry_sprintf(errmsg,"%s: (%.50s @ %.1f,%.1f,%.1f) Validation Error: %s is invalid or unnormalized %s",\
-	strSource,pStreamer?pStreamer->GetForeignName(param0,param1,param2):"",pt.x,pt.y,pt.z,#member,msg); \
-	PREFAST_SUPPRESS_WARNING(6053) \
-	if (!is_unused(member1)) { cry_sprintf(errmsg+strlen(errmsg),sizeof errmsg - strlen(errmsg)," "#member1": %.1f,%.1f,%.1f",member1.x,member1.y,member1.z);} \
-	VALIDATOR_LOG(pLog,errmsg); }
-#define VALIDATOR_RANGE(member,minval,maxval) if (!is_unused(member) && !(is_valid(member) && member>=minval && member<=maxval)) { \
-	res=false; cry_sprintf(errmsg,"%s: (%.50s @ %.1f,%.1f,%.1f) Validation Error: %s is invalid or out of range",\
-	strSource,pStreamer?pStreamer->GetForeignName(param0,param1,param2):"",pt.x,pt.y,pt.z,#member); VALIDATOR_LOG(pLog,errmsg); }
-#define VALIDATOR_RANGE2(member,minval,maxval) if (!is_unused(member) && !(is_valid(member) && member*member>=minval*minval && \
-		member*member<=maxval*maxval)) { \
-	res=false; cry_sprintf(errmsg,"%s: (%.50s @ %.1f,%.1f,%.1f) Validation Error: %s is invalid or out of range",\
-	strSource,pStreamer?pStreamer->GetForeignName(param0,param1,param2):"",pt.x,pt.y,pt.z,#member); VALIDATOR_LOG(pLog,errmsg); }
-#define VALIDATORS_END return res; }
-
-#define ENTITY_VALIDATE(strSource,pStructure) if (!pStructure->validate(strSource,m_pWorld->m_pLog,m_pos,\
-	m_pWorld->m_pRenderer,m_pForeignData,m_iForeignData,m_iForeignFlags)) { \
-	if (m_pWorld->m_vars.bBreakOnValidation) DoBreak return 0; }
-#define ENTITY_VALIDATE_ERRCODE(strSource,pStructure,iErrCode) if (!pStructure->validate(strSource,m_pWorld->m_pLog,m_pos, \
-	m_pWorld->m_pRenderer,m_pForeignData,m_iForeignData,m_iForeignFlags)) { \
-	if (m_pWorld->m_vars.bBreakOnValidation) DoBreak return iErrCode; }
-
 
 //////////////////////////////////////////////////////////////////////////
 // Return tag name combined with number, ex: Name_1, Name_2

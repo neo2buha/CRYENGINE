@@ -55,12 +55,6 @@ void CREMeshImpl::mfPrepare(bool bCheckOverflow)
 		rd->m_RP.m_FirstIndex = m_nFirstIndexId;
 		rd->m_RP.m_RendNumIndices = m_nNumIndices;
 		rd->m_RP.m_RendNumVerts = m_nNumVerts;
-
-		if (rd->m_RP.m_TI[rd->m_RP.m_nProcessThreadID].m_PersFlags & (RBPF_SHADOWGEN) && (gRenDev->m_RP.m_PersFlags2 & RBPF2_DISABLECOLORWRITES))
-		{
-			IMaterial* pMaterial = (gRenDev->m_RP.m_pCurObject) ? (gRenDev->m_RP.m_pCurObject->m_pCurrMaterial) : NULL;
-			m_pRenderMesh->AddShadowPassMergedChunkIndicesAndVertices(m_pChunk, pMaterial, rd->m_RP.m_RendNumVerts, rd->m_RP.m_RendNumIndices);
-		}
 	}
 }
 
@@ -93,7 +87,7 @@ void CREMeshImpl::mfPrecache(const SShaderItem& SH)
 	mfCheckUpdate(pSH->m_eVertexFormat, VSM_TANGENTS, gRenDev->m_RP.m_TI[gRenDev->m_RP.m_nFillThreadID].m_nFrameUpdateID);
 }
 
-bool CREMeshImpl::mfUpdate(EVertexFormat eVertFormat, int Flags, bool bTessellation)
+bool CREMeshImpl::mfUpdate(InputLayoutHandle eVertFormat, int Flags, bool bTessellation)
 {
 	DETAILED_PROFILE_MARKER("CREMeshImpl::mfUpdate");
 	FUNCTION_PROFILER_RENDER_FLAT
@@ -119,7 +113,6 @@ bool CREMeshImpl::mfUpdate(EVertexFormat eVertFormat, int Flags, bool bTessellat
 		bSucceed = m_pRenderMesh->RT_CheckUpdate(pVContainer, eVertFormat, Flags | VSM_MASK, bTessellation);
 		if (bSucceed)
 		{
-			// Modified data arrived, mark all corresponding REs dirty to trigger necessary recompiles
 			m_pRenderMesh->m_Modified[threadId].erase();
 		}
 	}
@@ -194,13 +187,23 @@ void CREMeshImpl::mfGetPlane(Plane& pl)
 }
 
 //////////////////////////////////////////////////////////////////////////
-EVertexFormat CREMeshImpl::GetVertexFormat() const
+InputLayoutHandle CREMeshImpl::GetVertexFormat() const
 {
 	if (m_pRenderMesh)
 		return m_pRenderMesh->_GetVertexContainer()->_GetVertexFormat();
-	return eVF_Unknown;
+	return InputLayoutHandle::Unspecified;
 }
 
+//////////////////////////////////////////////////////////////////////////
+bool CREMeshImpl::Compile(CRenderObject* pObj)
+{
+	if (!m_pRenderMesh)
+		return false;
+
+	return true;
+}
+
+//////////////////////////////////////////////////////////////////////////
 bool CREMeshImpl::GetGeometryInfo(SGeometryInfo& geomInfo, bool bSupportTessellation)
 {
 	if (!m_pRenderMesh)
@@ -220,12 +223,6 @@ bool CREMeshImpl::GetGeometryInfo(SGeometryInfo& geomInfo, bool bSupportTessella
 	geomInfo.nTessellationPatchIDOffset = m_nPatchIDOffset;
 	geomInfo.eVertFormat = pVContainer->_GetVertexFormat();
 	geomInfo.primitiveType = pVContainer->_GetPrimitiveType();
-
-	geomInfo.streamMask = 0;
-
-	const bool bSkinned = (m_pRenderMesh->m_nFlags & (FRM_SKINNED | FRM_SKINNEDNEXTDRAW)) != 0;
-	if (bSkinned && pVContainer->_HasVBStream(VSF_QTANGENTS))
-		geomInfo.streamMask |= BIT(VSF_QTANGENTS);
 
 	{
 		// Check if needs updating.
@@ -263,7 +260,7 @@ bool CREMeshImpl::BindRemappedSkinningData(uint32 guid)
 
 	if (pRM->GetRemappedSkinningData(guid, streamInfo))
 	{
-		size_t offset;
+		buffer_size_t offset;
 		void* buffer = gRenDev->m_DevBufMan.GetD3D(streamInfo.hStream, &offset);
 
 		rd->FX_SetVStream(VSF_HWSKIN_INFO, buffer, offset, streamInfo.nStride);
@@ -351,7 +348,7 @@ bool CREMeshImpl::mfDraw(CShader* ef, SShaderPass* sl)
 	return true;
 }
 
-void CREMeshImpl::Draw(CRenderObject* pObj, const SGraphicsPipelinePassContext& ctx)
+void CREMeshImpl::DrawToCommandList(CRenderObject* pObj, const SGraphicsPipelinePassContext& ctx)
 {
 	//@TODO: implement
 

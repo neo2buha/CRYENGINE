@@ -8,7 +8,7 @@
    -------------------------------------------------------------------------
    History:
    - 20:9:2004     : Created by Filippo De Luca
-   - September 2010: Jens Schöbel created a smooth extended camera shake
+   - September 2010: Jens SchÃ¶bel created a smooth extended camera shake
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -21,15 +21,18 @@
 #include "GameObjects/GameObject.h"
 #include "IGameSessionHandler.h"
 
+#include "ViewSystem.h"
+
 namespace
 {
 static ICVar* pCamShakeMult = 0;
-static ICVar* pHmdReferencePoint = 0;
+static ICVar* pHmdTrackingOrigin = 0;
 }
 //------------------------------------------------------------------------
 CView::CView(ISystem* const pSystem)
 	: m_pSystem(pSystem)
 	, m_linkedTo(0)
+	, m_linkedEntityCallback(nullptr)
 	, m_frameAdditiveAngles(0.0f, 0.0f, 0.0f)
 	, m_scale(1.0f)
 	, m_zoomedScale(1.0f)
@@ -39,9 +42,9 @@ CView::CView(ISystem* const pSystem)
 	{
 		pCamShakeMult = gEnv->pConsole->GetCVar("c_shakeMult");
 	}
-	if (!pHmdReferencePoint)
+	if (!pHmdTrackingOrigin)
 	{
-		pHmdReferencePoint = gEnv->pConsole->GetCVar("hmd_reference_point");
+		pHmdTrackingOrigin = gEnv->pConsole->GetCVar("hmd_tracking_origin");
 	}
 
 	CreateAudioListener();
@@ -90,9 +93,13 @@ void CView::Update(float frameTime, bool isActive)
 
 		m_viewParams.frameTime = frameTime;
 		//update view position/rotation
-		if (pLinkedTo)
+		if (pLinkedTo || m_linkedEntityCallback)
 		{
-			pLinkedTo->UpdateView(m_viewParams);
+			if (pLinkedTo)
+				pLinkedTo->UpdateView(m_viewParams);
+			else
+				m_linkedEntityCallback->UpdateView(m_viewParams);
+
 			if (!m_viewParams.position.IsValid())
 			{
 				m_viewParams.position = m_viewParams.GetPositionLast();
@@ -119,7 +126,7 @@ void CView::Update(float frameTime, bool isActive)
 			pLinkedTo->PostUpdateView(m_viewParams);
 		}
 
-		const float fNearZ = gEnv->pGame->GetIGameFramework()->GetIViewSystem()->GetDefaultZNear();
+		const float fNearZ = gEnv->pGameFramework->GetIViewSystem()->GetDefaultZNear();
 
 		//see if the view have to use a custom near clipping plane
 		const float nearPlane = (m_viewParams.nearplane >= 0.01f) ? (m_viewParams.nearplane) : fNearZ;
@@ -137,28 +144,29 @@ void CView::Update(float frameTime, bool isActive)
 			if (pHmdDevice)
 			{
 				const HmdTrackingState& sensorState = pHmdDevice->GetLocalTrackingState();
-				if (sensorState.CheckStatusFlags(eHmdStatus_IsUsable))
+				if (sensorState.CheckStatusFlags(eHmdStatus_IsUsable) && static_cast<CViewSystem*>(gEnv->pGameFramework->GetIViewSystem())->ShouldApplyHmdOffset())
 				{
 					bHmdTrackingEnabled = true;
 				}
 			}
-		}
 
-		if (pHmdManager->IsStereoSetupOk())
-		{
-			const IHmdDevice* pDev = pHmdManager->GetHmdDevice();
-			const HmdTrackingState& sensorState = pDev->GetLocalTrackingState();
-			if (sensorState.CheckStatusFlags(eHmdStatus_IsUsable))
+
+			if (pHmdManager->IsStereoSetupOk())
 			{
-				float arf_notUsed;
-				pDev->GetCameraSetupInfo(fov, arf_notUsed);
+				const IHmdDevice* pDev = pHmdManager->GetHmdDevice();
+				const HmdTrackingState& sensorState = pDev->GetLocalTrackingState();
+				if (sensorState.CheckStatusFlags(eHmdStatus_IsUsable))
+				{
+					float arf_notUsed;
+					pDev->GetCameraSetupInfo(fov, arf_notUsed);
+				}
 			}
 		}
 
 		m_camera.SetFrustum(pSysCam->GetViewSurfaceX(), pSysCam->GetViewSurfaceZ(), fov, nearPlane, farPlane, pSysCam->GetPixelAspectRatio());
 
 		//TODO: (14, 06, 2010, "the player view should always get updated, this due to the hud being visable, without shocking, in cutscenes - todo is to see if we can optimise this code");
-		IActor* pActor = gEnv->pGame->GetIGameFramework()->GetClientActor();
+		IActor* pActor = gEnv->pGameFramework->GetClientActor();
 		if (pActor)
 		{
 			CGameObject* const linkToObj = static_cast<CGameObject*>(pActor->GetEntity()->GetProxy(ENTITY_PROXY_USER));
@@ -212,7 +220,7 @@ void CView::Update(float frameTime, bool isActive)
 
 		// Uses the recorded tracking if time demo is on playback
 		// Otherwise uses real tracking from device
-		ITimeDemoRecorder* pTimeDemoRecorder = gEnv->pGame->GetIGameFramework()->GetITimeDemoRecorder();
+		ITimeDemoRecorder* pTimeDemoRecorder = gEnv->pGameFramework->GetITimeDemoRecorder();
 
 		if (pTimeDemoRecorder && pTimeDemoRecorder->IsPlaying())
 		{
@@ -225,10 +233,10 @@ void CView::Update(float frameTime, bool isActive)
 		else if (bHmdTrackingEnabled)
 		{
 			pHmdDevice->SetAsynCameraCallback(this);
-			if (pHmdReferencePoint && pHmdReferencePoint->GetIVal() == 1) // actor-centered HMD offset
+			if (pHmdTrackingOrigin && pHmdTrackingOrigin->GetIVal() == (int)EHmdTrackingOrigin::Floor)
 			{
 				const IEntity* pEnt = GetLinkedEntity();
-				if (const IActor* pActor = gEnv->pGame->GetIGameFramework()->GetClientActor())
+				if (const IActor* pActor = gEnv->pGameFramework->GetClientActor())
 				{
 					if (pEnt && pActor->GetEntity() == pEnt)
 					{
@@ -266,7 +274,7 @@ void CView::Update(float frameTime, bool isActive)
 //////////////////////////////////////////////////////////////////////////
 bool CView::OnAsyncCameraCallback(const HmdTrackingState& sensorState, IHmdDevice::AsyncCameraContext& context)
 {
-	ITimeDemoRecorder* pTimeDemoRecorder = gEnv->pGame->GetIGameFramework()->GetITimeDemoRecorder();
+	ITimeDemoRecorder* pTimeDemoRecorder = gEnv->pGameFramework->GetITimeDemoRecorder();
 	if (pTimeDemoRecorder && pTimeDemoRecorder->IsPlaying())
 	{
 		return false;
@@ -276,10 +284,10 @@ bool CView::OnAsyncCameraCallback(const HmdTrackingState& sensorState, IHmdDevic
 	Vec3 pos = m_viewParams.position;
 	Vec3 p = Vec3(ZERO);
 
-	if (pHmdReferencePoint && pHmdReferencePoint->GetIVal() == 1) // actor-centered HMD offset
+	if (pHmdTrackingOrigin && pHmdTrackingOrigin->GetIVal() == (int)EHmdTrackingOrigin::Floor)
 	{
 		const IEntity* pEnt = GetLinkedEntity();
-		if (const IActor* pActor = gEnv->pGame->GetIGameFramework()->GetClientActor())
+		if (const IActor* pActor = gEnv->pGameFramework->GetClientActor())
 		{
 			if (pEnt && pActor->GetEntity() == pEnt)
 			{
@@ -731,11 +739,12 @@ void CView::LinkTo(IGameObject* follow)
 }
 
 //------------------------------------------------------------------------
-void CView::LinkTo(IEntity* follow)
+void CView::LinkTo(IEntity* follow, IGameObjectView* callback)
 {
 	CRY_ASSERT(follow);
 	m_linkedTo = follow->GetId();
 	m_viewParams.targetPos = follow->GetWorldPos();
+	m_linkedEntityCallback = callback;
 }
 
 //------------------------------------------------------------------------
@@ -813,20 +822,22 @@ void CView::CreateAudioListener()
 		SEntitySpawnParams oEntitySpawnParams;
 		oEntitySpawnParams.sName = "AudioListener";
 		oEntitySpawnParams.pClass = gEnv->pEntitySystem->GetClassRegistry()->FindClass("AudioListener");
-		m_pAudioListener = gEnv->pEntitySystem->SpawnEntity(oEntitySpawnParams, true);
 
+		// We don't want the audio listener to serialize as the entity gets completely removed and recreated during save/load!
+		// NOTE: If we set ENTITY_FLAG_NO_SAVE *after* we spawn the entity, it will make it to m_dynamicEntities in GameSerialize.cpp
+		// (via CGameSerialize::OnSpawn) and GameSerialize will attempt to serialize it despite the flag with current (5.2.2) implementation
+		oEntitySpawnParams.nFlags = ENTITY_FLAG_TRIGGER_AREAS | ENTITY_FLAG_NO_SAVE;
+		oEntitySpawnParams.nFlagsExtended = ENTITY_FLAG_EXTENDED_AUDIO_LISTENER;
+		m_pAudioListener = gEnv->pEntitySystem->SpawnEntity(oEntitySpawnParams, true);
 		if (m_pAudioListener != nullptr)
 		{
-			// We don't want the audio listener to serialize as the entity gets completely removed and recreated during save/load!
-			m_pAudioListener->SetFlags(m_pAudioListener->GetFlags() | (ENTITY_FLAG_TRIGGER_AREAS | ENTITY_FLAG_NO_SAVE));
-			m_pAudioListener->SetFlagsExtended(m_pAudioListener->GetFlagsExtended() | ENTITY_FLAG_EXTENDED_AUDIO_LISTENER);
 			gEnv->pEntitySystem->AddEntityEventListener(m_pAudioListener->GetId(), ENTITY_EVENT_DONE, this);
 			CryFixedStringT<64> sTemp;
 			sTemp.Format("AudioListener(%d)", static_cast<int>(m_pAudioListener->GetId()));
 			m_pAudioListener->SetName(sTemp.c_str());
 
-			IEntityAudioProxyPtr pIEntityAudioProxy = crycomponent_cast<IEntityAudioProxyPtr>(m_pAudioListener->CreateProxy(ENTITY_PROXY_AUDIO));
-			CRY_ASSERT(pIEntityAudioProxy.get());
+			IEntityAudioComponent* pIEntityAudioComponent = m_pAudioListener->GetOrCreateComponent<IEntityAudioComponent>();
+			CRY_ASSERT(pIEntityAudioComponent);
 		}
 		else
 		{
@@ -859,7 +870,7 @@ void CView::SetActive(bool const bActive)
 	}
 	else if (m_pAudioListener != nullptr && (m_pAudioListener->GetFlags() & ENTITY_FLAG_TRIGGER_AREAS) != 0)
 	{
-		gEnv->pEntitySystem->GetAreaManager()->ExitAllAreas(m_pAudioListener);
+		gEnv->pEntitySystem->GetAreaManager()->ExitAllAreas(m_pAudioListener->GetId());
 		m_pAudioListener->SetFlagsExtended(m_pAudioListener->GetFlagsExtended() & ~ENTITY_FLAG_EXTENDED_AUDIO_LISTENER);
 	}
 }

@@ -111,30 +111,12 @@ void CObjManager::MakeShadowCastersList(CVisArea* pArea, const AABB& aabbReceive
 			}
 		}
 
-		bool bNeedRenderTerrain = (GetTerrain() && GetCVars()->e_GsmCastFromTerrain && (pLight->m_Flags & DLF_SUN) != 0)
-		                          || (pLight->m_Flags & DLF_REFLECTIVE_SHADOWMAP) != 0;
+		bool bNeedRenderTerrain = (GetTerrain() && Get3DEngine()->m_bSunShadowsFromTerrain && (pLight->m_Flags & DLF_SUN) != 0);
 
 		if (bNeedRenderTerrain && passInfo.RenderTerrain() && Get3DEngine()->m_bShowTerrainSurface)
 		{
 			// find all caster sectors
-			GetTerrain()->IntersectWithShadowFrustum(&lstCastingNodes, pFr, GetDefSID(), passInfo);
-
-			// make list of entities
-			for (int s = 0; s < lstCastingNodes.Count(); s++)
-			{
-				CTerrainNode* pNode = (CTerrainNode*)lstCastingNodes[s];
-
-				if (pLight->m_Flags & DLF_SUN)
-				{
-					if (pNode->m_nGSMFrameId == passInfo.GetFrameID())
-						continue;
-
-					if (bNeedRenderTerrain && pFr->FrustumPlanes[0].IsAABBVisible_EH(pNode->GetBBoxVirtual()) == CULL_INCLUSION)
-						pNode->m_nGSMFrameId = passInfo.GetFrameID();   // mark as completely present in some LOD
-				}
-
-				pFr->castersList.Add(pNode);
-			}
+			GetTerrain()->IntersectWithShadowFrustum(&pFr->castersList, pFr, GetDefSID(), passInfo);
 		}
 	}
 
@@ -160,7 +142,7 @@ void CObjManager::MakeShadowCastersList(CVisArea* pArea, const AABB& aabbReceive
 	}
 }
 
-int CObjManager::MakeStaticShadowCastersList(IRenderNode* pIgnoreNode, ShadowMapFrustum* pFrustum, int renderNodeExcludeFlags, int nMaxNodes, const SRenderingPassInfo& passInfo)
+int CObjManager::MakeStaticShadowCastersList(IRenderNode* pIgnoreNode, ShadowMapFrustum* pFrustum, const PodArray<struct SPlaneObject>* pShadowHull, int renderNodeExcludeFlags, int nMaxNodes, const SRenderingPassInfo& passInfo)
 {
 	int nRemainingNodes = nMaxNodes;
 
@@ -173,7 +155,7 @@ int CObjManager::MakeStaticShadowCastersList(IRenderNode* pIgnoreNode, ShadowMap
 	for (int nSID = nStartSID; nSID < Get3DEngine()->m_pObjectsTree.Count(); nSID++)
 	{
 		if (Get3DEngine()->IsSegmentSafeToUse(nSID))
-			Get3DEngine()->m_pObjectsTree[nSID]->GetShadowCastersTimeSliced(pIgnoreNode, pFrustum, renderNodeExcludeFlags, nRemainingNodes, 1, passInfo);
+			Get3DEngine()->m_pObjectsTree[nSID]->GetShadowCastersTimeSliced(pIgnoreNode, pFrustum, pShadowHull, renderNodeExcludeFlags, nRemainingNodes, 1, passInfo);
 
 		if (nRemainingNodes <= 0)
 			return nRemainingNodes;
@@ -203,7 +185,7 @@ int CObjManager::MakeStaticShadowCastersList(IRenderNode* pIgnoreNode, ShadowMap
 				if (lstAreas[i]->IsAffectedByOutLights() && lstAreas[i]->m_pObjectsTree)
 				{
 					if (pFrustum->aabbCasters.IsReset() || Overlap::AABB_AABB(pFrustum->aabbCasters, *lstAreas[i]->GetAABBox()))
-						lstAreas[i]->m_pObjectsTree->GetShadowCastersTimeSliced(pIgnoreNode, pFrustum, renderNodeExcludeFlags, nRemainingNodes, 0, passInfo);
+						lstAreas[i]->m_pObjectsTree->GetShadowCastersTimeSliced(pIgnoreNode, pFrustum, pShadowHull, renderNodeExcludeFlags, nRemainingNodes, 0, passInfo);
 				}
 
 				if (nRemainingNodes <= 0)
@@ -233,18 +215,6 @@ uint64 CObjManager::GetShadowFrustumsList(PodArray<CDLight*>* pAffectingLights, 
 		return 0;
 
 	const int MAX_MASKED_GSM_LODS_NUM = 4;
-
-	int nExtendedFrustumInUse = 0;
-
-	// check for RSM presence
-	if (GetCVars()->e_GI)
-	{
-		if (passInfo.RenderTerrain() && Get3DEngine()->m_bShowTerrainSurface)
-			for (int i = 0; i < pAffectingLights->Count(); i++)
-				if (CDLight* pLight = pAffectingLights->GetAt(0))
-					if ((pLight->m_Flags & DLF_REFLECTIVE_SHADOWMAP) && (pLight->m_Id >= 0))
-						nExtendedFrustumInUse = 1;
-	}
 
 	// calculate frustums list id
 	uint64 nCastersListId = 0;
@@ -291,9 +261,8 @@ uint64 CObjManager::GetShadowFrustumsList(PodArray<CDLight*>* pAffectingLights, 
 		}
 	assert(nSunID == 0);
 
-	if (!nExtendedFrustumInUse)
-		if (!nCastersListId)
-			return 0;
+	if (!nCastersListId)
+		return 0;
 
 	assert(nCastersListId);
 	return nCastersListId;

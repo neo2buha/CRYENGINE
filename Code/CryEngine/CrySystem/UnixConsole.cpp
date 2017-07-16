@@ -48,8 +48,8 @@ LINK_SYSTEM_LIBRARY("pdcurses.lib")
 // be exposed through INetwork.
 			#include <CryScriptSystem/IScriptSystem.h>
 			#include <CryNetwork/INetwork.h>
-			#include <CryAction.h>
-			#include <Network/GameServerNub.h>
+			#include <../CryAction/CryAction.h>
+			#include <../CryAction/Network/GameServerNub.h>
 		#endif
 
 		#include <CryGame/IGameFramework.h>
@@ -133,34 +133,36 @@ class CUNIXConsoleSignalHandler
 };
 
 CUNIXConsole::CUNIXConsole()
-	: m_HistoryIndex(-1),
-	m_PromptResponse(0),
-	m_pSystem(NULL),
-	m_pConsole(NULL),
-	m_pTimer(NULL),
-	m_OnUpdateCalled(false),
-	m_LastUpdateTime(0.0f),
-	m_svMap(NULL),
-	m_svGameRules(NULL),
-	m_Width(~0), m_Height(~0),
-	m_HeaderHeight(1),
-	m_StatusHeight(1),
-	m_CmdHeight(2),
-	m_Color(DEFAULT_COLOR),
-	m_DefaultColorPair(-1),
-	m_EnableColor(true),
-	m_WindowResized(false),
-	m_OnShutdownCalled(false),
-	m_Initialized(false),
-	m_RequireDedicatedServer(false),
-	m_ScrollUp(0),
-	m_pInputThread(NULL),
-	m_CursorPosition(0),
-	m_ScrollPosition(0),
-	m_fsMode(false),
-	m_bShowConsole(true)
-{
-}
+	: m_HistoryIndex(-1)
+	, m_PromptResponseChars{0}
+	, m_PromptResponse(0)
+	, m_pSystem(NULL)
+	, m_pConsole(NULL)
+	, m_pTimer(NULL)
+	, m_OnUpdateCalled(false)
+	, m_LastUpdateTime(0.0f)
+	, m_svMap(NULL)
+	, m_svGameRules(NULL)
+	, m_Width(~0)
+	, m_Height(~0)
+	, m_HeaderHeight(1)
+	, m_StatusHeight(1)
+	, m_CmdHeight(2)
+	, m_Color(DEFAULT_COLOR)
+	, m_DefaultColorPair(-1)
+	, m_EnableColor(true)
+	, m_WindowResized(false)
+	, m_OnShutdownCalled(false)
+	, m_Initialized(false)
+	, m_RequireDedicatedServer(false)
+	, m_ScrollUp(0)
+	, m_ColorPair{0}
+	, m_pInputThread(NULL)
+	, m_CursorPosition(0)
+	, m_ScrollPosition(0)
+	, m_fsMode(false)
+	, m_bShowConsole(true)
+{}
 
 CUNIXConsole::~CUNIXConsole()
 {
@@ -696,7 +698,7 @@ int CUNIXConsole::GetNumPlayers()
 	if (m_pSystem->IsQuitting())
 		return 0;
 
-	IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+	IGameFramework* pGameFramework = gEnv->pGameFramework;
 	CGameServerNub* pGameServerNub = NULL;
 
 	if (pGameFramework == NULL)
@@ -1128,7 +1130,7 @@ static char* GetSpaces(int n)
 
 	if (n > spaceBufferSz)
 	{
-		spaceBufferSz = MAX(spaceBufferSz * 2, n);
+		spaceBufferSz = std::max(spaceBufferSz * 2, n);
 		delete[] spaceBuffer;
 		spaceBuffer = new char[spaceBufferSz];
 		memset(spaceBuffer, ' ', spaceBufferSz);
@@ -1766,14 +1768,6 @@ void CUNIXConsole::Print(const char* line)
 	Unlock();
 }
 
-bool CUNIXConsole::OnError(const char* errorString)
-{
-	if (!m_Initialized)
-		return true;
-
-	return true;
-}
-
 void CUNIXConsole::OnInitProgress(const char* sProgressMsg)
 {
 	if (!m_Initialized)
@@ -1904,7 +1898,7 @@ void CUNIXConsole::OnUpdate()
 		m_CommandQueue.pop_front();
 	}
 
-	if (IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework())
+	if (IGameFramework* pGameFramework = gEnv->pGameFramework)
 		if (INetNub* pNub = pGameFramework->GetServerNetNub())
 			m_nubStats = pNub->GetStatistics();
 	m_pSystem->GetUpdateStats(m_updStats);
@@ -2292,7 +2286,7 @@ void CNULLConsole::OnUpdate()
 	#if defined(UC_ENABLE_PLAYER_COUNT)
 	if (!gEnv->pSystem->IsQuitting())
 	{
-		IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+		IGameFramework* pGameFramework = gEnv->pGameFramework;
 		if (pGameFramework)
 		{
 			CGameServerNub* pGameServerNub = reinterpret_cast<CCryAction*>(pGameFramework)->GetGameServerNub();

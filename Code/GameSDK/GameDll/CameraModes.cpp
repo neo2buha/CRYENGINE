@@ -701,10 +701,10 @@ bool CSpectatorFollowCameraMode::UpdateView( const CPlayer& clientPlayer, SViewP
 				float raiseDist = minHeightDiff - (worldOffset_Len*worldOffset_Norm.z) - sphere.r;
 				if(newHitDist != 0)
 				{
-					raiseDist = MIN(minHeightDiff, newHitDist);
+					raiseDist = std::min(minHeightDiff, newHitDist);
 				}
 
-				raiseDist = MAX(0.0f, raiseDist);
+				raiseDist = std::max(0.0f, raiseDist);
 
 				targetWorldExtra.z += raiseDist*0.8f;
 			}
@@ -804,7 +804,7 @@ void CSpectatorFollowCameraMode::ApplyEffects( const CPlayer& clientPlayer, cons
 			// make the local player exit all areas.. will turn off any reverb effects that are setup around the local player
 			// ready for the killer cam and kill cam cameras to have their correct audio setup
 			IAreaManager* pAreaManager = gEnv->pEntitySystem->GetAreaManager();
-			pAreaManager->ExitAllAreas(clientPlayer.GetEntity());
+			pAreaManager->ExitAllAreas(clientPlayer.GetEntity()->GetId());
 		}
 	}
 

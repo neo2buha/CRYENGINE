@@ -8,7 +8,7 @@ Description: Binocular Implementation
 
 -------------------------------------------------------------------------
 History:
-- 18:12:2005   14:00 : Created by Márcio Martins
+- 18:12:2005   14:00 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #ifndef __BINOCULAR_H__
@@ -30,6 +30,7 @@ class CBinocular :	public CWeapon
 public:
 
 	CBinocular();
+	virtual ~CBinocular();
 
 	virtual void OnAction(EntityId actorId, const ActionId& actionId, int activationMode, float value);
 	
@@ -56,8 +57,6 @@ protected:
 	virtual bool ShouldDoPostSerializeReset() const;
 
 private:
-
-	virtual ~CBinocular();
 
 	bool ShouldUseSoundAttenuation(const CActor& ownerActor) const;
 	void SwitchSoundAttenuation(const CActor& ownerActor, const float coneInRadians) const;

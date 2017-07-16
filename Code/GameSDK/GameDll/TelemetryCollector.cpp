@@ -287,10 +287,12 @@ CTelemetryCollector::CTelemetryCollector() :
 	char fileName[] = "%USER%/MiscTelemetry/memory_stats.txt";
 	m_telemetryMemoryLogPath=fileName;
 
-	CDebugAllowFileAccess allowFileAccess;
-	gEnv->pCryPak->RemoveFile(m_telemetryMemoryLogPath.c_str());
-	FILE *file = gEnv->pCryPak->FOpen(m_telemetryMemoryLogPath.c_str(), "at");
-	allowFileAccess.End();
+	FILE* file = nullptr;
+	{
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+		gEnv->pCryPak->RemoveFile(m_telemetryMemoryLogPath.c_str());
+		file = gEnv->pCryPak->FOpen(m_telemetryMemoryLogPath.c_str(), "at");
+	}
 
 	if (file)
 	{
@@ -360,6 +362,7 @@ CTelemetryCollector::~CTelemetryCollector()
 		ic->UnregisterVariable(m_telemetryUploadErrorLog->GetName());
 		ic->UnregisterVariable(m_telemetryUploadGameLog->GetName());
 		ic->UnregisterVariable(m_telemetryCompressGameLog->GetName());
+		ic->UnregisterVariable(m_telemetryUploadInProgress->GetName());
 		ic->RemoveCommand(k_telemetry_submitLogCommand);
 		ic->RemoveCommand(k_telemetry_getSessionIdCommand);
 	}
@@ -382,7 +385,7 @@ void CTelemetryCollector::OutputSessionId(IConsoleCmdArgs *inArgs)
 // test function which uploads the game.log
 void CTelemetryCollector::SubmitGameLog(IConsoleCmdArgs *inArgs)
 {
-	CTelemetryCollector		*tc=static_cast<CTelemetryCollector*>(static_cast<CGame*>(gEnv->pGame)->GetITelemetryCollector());
+	CTelemetryCollector		*tc=static_cast<CTelemetryCollector*>(static_cast<CGame*>(g_pGame)->GetITelemetryCollector());
 	const char				*logFile=gEnv->pSystem->GetILog()->GetFileName();
 
 	if (tc)
@@ -513,9 +516,11 @@ bool CTelemetryCollector::UploadFileForPreviousSession(const char *inFileName, c
 			CryLog("CTelemetryCollector::UploadFileForPreviousSession() %s exists", k_hintFileName);
 			
 			// Get last session details
-			CDebugAllowFileAccess allowFileAccess;
-			FILE *file = gEnv->pCryPak->FOpen(k_hintFileName, "rt");
-			allowFileAccess.End();
+			FILE* file = nullptr;
+			{
+				SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+				file = gEnv->pCryPak->FOpen(k_hintFileName, "rt");
+			}
 
 			if (file)
 			{
@@ -575,9 +580,11 @@ bool CTelemetryCollector::UploadLargeFileForPreviousSession(const char *inFileNa
 			CryLogAlways("CTelemetryCollector::UploadLargeFileForPreviousSession() %s exists", k_hintFileName);
 			
 			// Get last session details
-			CDebugAllowFileAccess allowFileAccess;
-			FILE *file = gEnv->pCryPak->FOpen(k_hintFileName, "rt");
-			allowFileAccess.End();
+			FILE* file = nullptr;
+			{
+				SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+				file = gEnv->pCryPak->FOpen(k_hintFileName, "rt");
+			}
 
 			if (file)
 			{
@@ -725,9 +732,11 @@ void CTelemetryCollector::CheckForPreviousSessionCrash()
 	tm *today = localtime( &ltime );
 	strftime(timeStr.m_str, timeStr.MAX_SIZE, "%Y-%m-%d-%H-%M-%S", today);
 
-	CDebugAllowFileAccess allowFileAccess;
-	FILE *crashCheckFile = gEnv->pCryPak->FOpen(crashCheckFileName, "wt");
-	allowFileAccess.End();
+	FILE* crashCheckFile = nullptr;
+	{
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+		crashCheckFile = gEnv->pCryPak->FOpen(crashCheckFileName, "wt");
+	}
 
 	if (crashCheckFile)
 	{
@@ -910,6 +919,11 @@ void CTelemetryCollector::UpdateClientName()
 
 bool CTelemetryCollector::InitService()
 {
+	if (!gEnv->pNetwork->GetLobby())
+	{
+		return false;
+	}
+
 	// for debugging
 	ICryLobbyService*		pLobbyService = gEnv->pNetwork->GetLobby()->GetLobbyService();
 
@@ -1275,9 +1289,11 @@ bool CTelemetryCollector::SubmitFile(
 	{
 		ICryPak			*pak=gEnv->pCryPak;
 
-		CDebugAllowFileAccess allowFileAccess;
-		FILE			*file=pak->FOpen(inLocalFilePath,"rb",ICryPak::FLAGS_PATH_REAL|ICryPak::FOPEN_ONDISK);
-		allowFileAccess.End();
+		FILE* file = nullptr;
+		{
+			SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+			file = pak->FOpen(inLocalFilePath, "rb", ICryPak::FLAGS_PATH_REAL | ICryPak::FOPEN_ONDISK);
+		}
 
 		if (!file)
 		{
@@ -1333,7 +1349,6 @@ bool CTelemetryCollector::SubmitTelemetryProducer(
 		void									*inCallbackData,
 		TTelemetrySubmitFlags inFlags)
 {
-	ScopedSwitchToGlobalHeap globalHeapSwitch;
 	char				postHeader[k_maxHttpHeaderSize];
 	inFlags |= k_tf_chunked;	// Telemetry producers must be chunked
 	if ((inFlags & k_tf_isStream) && (inFlags & k_tf_md5Digest))
@@ -1491,7 +1506,8 @@ CTelemetrySaveToFile::CTelemetrySaveToFile(
 	m_pFile(NULL),
 	m_pSource(pInProducer)
 {
-	CDebugAllowFileAccess allowFileAccess;
+	SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+
 	m_pFile=gEnv->pCryPak->FOpen(m_fileName.c_str(),"wt");
 	if (!m_pFile)
 	{
@@ -2017,14 +2033,17 @@ ITelemetryProducer::EResult CTelemetryFileReader::ProduceTelemetry(
 	int					inBufferSize,
 	int					*pOutWritten)
 {
-	CDebugAllowFileAccess		allowFileAccess;			// TODO if this is to be used for production - this will need to move to a streaming API if available. this will probably not be possible for upload of game.log
-	EResult									result=eTS_EndOfStream;
-	ICryPak									*pPak=gEnv->pCryPak;
+	EResult result = eTS_EndOfStream;
+	ICryPak* pPak = gEnv->pCryPak;
 
-	FILE										*pFile=pPak->FOpen(m_localFilePath.c_str(),"rb",ICryPak::FLAGS_PATH_REAL|ICryPak::FOPEN_ONDISK);
-	allowFileAccess.End();
+	FILE* pFile = nullptr;
+	{
+		// TODO if this is to be used for production - this will need to move to a streaming API if available. this will probably not be possible for upload of game.log
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+		pFile = pPak->FOpen(m_localFilePath.c_str(), "rb", ICryPak::FLAGS_PATH_REAL | ICryPak::FOPEN_ONDISK);
+	}
 
-	*pOutWritten=0;
+	*pOutWritten = 0;
 
 	if (!pFile)
 	{
@@ -2420,9 +2439,11 @@ bool CTelemetryCollector::UploadData(
 
 		path.Format("%s/%s_%d.tel",m_telemetryRecordingPath.c_str(),sessionId.c_str(),m_fileUploadCounter);
 
-		CDebugAllowFileAccess allowFileAccess;
-		FILE		*file=pak->FOpen(path,"wb",ICryPak::FLAGS_PATH_REAL);
-		allowFileAccess.End();
+		FILE* file = nullptr;
+		{
+			SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+			file = pak->FOpen(path, "wb", ICryPak::FLAGS_PATH_REAL);
+		}
 
 		int			written=0;
 		if (file)
@@ -2464,7 +2485,6 @@ bool CTelemetryCollector::SubmitFromMemory(
 	const int				inDataLength,
 	TTelemetrySubmitFlags	inFlags)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
 	bool				success=false;
 	bool				shouldSubmit=ShouldSubmitTelemetry();
 
@@ -2510,9 +2530,11 @@ void CTelemetryCollector::OutputTelemetryServerHintFile()
 
 	int headerLen=MakePostHeader("_TelemetryServerDestFile_",-666666,headerMem,k_maxHttpHeaderSize,k_tf_none);
 	
-	CDebugAllowFileAccess allowFileAccess;
-	FILE *file = gEnv->pCryPak->FOpen( k_hintFileName,"wt" );
-	allowFileAccess.End();
+	FILE* file = nullptr;
+	{
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+		file = gEnv->pCryPak->FOpen(k_hintFileName, "wt");
+	}
 
 	if (file)
 	{
@@ -2545,9 +2567,11 @@ void CTelemetryCollector::OutputMemoryUsage(const char *message, const char *new
 		mapName = "unknown";
 	}
 
-	CDebugAllowFileAccess allowFileAccess;
-	FILE *file = gEnv->pCryPak->FOpen(m_telemetryMemoryLogPath.c_str(), "r+");
-	allowFileAccess.End();
+	FILE* file = nullptr;
+	{
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+		file = gEnv->pCryPak->FOpen(m_telemetryMemoryLogPath.c_str(), "r+");
+	}
 
 	if (file)
 	{
@@ -2653,15 +2677,13 @@ void CTelemetryCollector::SetNewSessionId( bool includeMatchDetails )
 	int	lobbyVersion=GameLobbyData::GetVersion();
 
 	string newId;
+
+	int patchId=0;
+	if (CDataPatchDownloader *pDP=g_pGame->GetDataPatchDownloader())
 	{
-		ScopedSwitchToGlobalHeap globalHeap;
-		int												patchId=0;
-		if (CDataPatchDownloader *pDP=g_pGame->GetDataPatchDownloader())
-		{
-			patchId=pDP->GetPatchId();
-		}
-		newId.Format("%s_mb%d_mv%d_pat%d_%s%s",hostNameStr.c_str(),g_pGameCVars->g_MatchmakingBlock,g_pGameCVars->g_MatchmakingVersion,patchId,rotationStr.c_str(),timeStr.c_str());
+		patchId=pDP->GetPatchId();
 	}
+	newId.Format("%s_mb%d_mv%d_pat%d_%s%s",hostNameStr.c_str(),g_pGameCVars->g_MatchmakingBlock,g_pGameCVars->g_MatchmakingVersion,patchId,rotationStr.c_str(),timeStr.c_str());
 
 	SetSessionId(newId);
 }
@@ -2775,9 +2797,11 @@ void CTelemetryBuffer::DumpToFile(const char *filename)
 #define FIXED_BUFFER_SIZE (10 * 1024)
 	CryFixedStringT<FIXED_BUFFER_SIZE> tempBuffer;
 
-	CDebugAllowFileAccess allowFileAccess;
-	FILE *file = gEnv->pCryPak->FOpen(filename, "wt");
-	allowFileAccess.End();
+	FILE* file = nullptr;
+	{
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+		file = gEnv->pCryPak->FOpen(filename, "wt");
+	}
 
 	if (file)
 	{

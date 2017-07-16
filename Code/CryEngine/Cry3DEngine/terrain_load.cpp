@@ -31,7 +31,6 @@ CTerrain::CTerrain(const STerrainInfo& TerrainInfo)
 	//	ZeroStruct(m_TerrainTextureLayer);
 	//	m_ucpDiffTexTmpBuffer = 0;
 	m_pTerrainEf = 0;
-	m_nSunLightMask = 0;
 	//	ZeroStruct(m_SSurfaceType); // staic
 	m_pOcean = 0;
 	m_eEndianOfTexture = eLittleEndian;
@@ -86,8 +85,6 @@ CTerrain::CTerrain(const STerrainInfo& TerrainInfo)
 		pIsr->m_LMaterial.m_Opacity = 1.0f;
 		m_pTerrainEf = MakeSystemMaterialFromShader("Terrain", pIsr);
 	}
-
-	m_pImposterEf = MakeSystemMaterialFromShader("Common.Imposter");
 
 	//	memset(m_arrImposters,0,sizeof(m_arrImposters));
 	//	memset(m_arrImpostersTopBottom,0,sizeof(m_arrImpostersTopBottom));
@@ -469,7 +466,11 @@ bool CTerrain::OpenTerrainTextureFile(SCommonFileHeader& hdrDiffTexHdr, STerrain
 		for (int x = 0; x < m_arrSecInfoPyramid[nSID][nTreeLevel].GetSize(); x++)
 			for (int y = 0; y < m_arrSecInfoPyramid[nSID][nTreeLevel].GetSize(); y++)
 			{
+#ifndef _RELEASE
 				m_arrSecInfoPyramid[nSID][nTreeLevel][x][y]->m_eTextureEditingState = eTES_SectorIsUnmodified;
+				m_arrSecInfoPyramid[nSID][nTreeLevel][x][y]->m_eElevTexEditingState = eTES_SectorIsUnmodified;
+#endif // _RELEASE
+
 				m_arrSecInfoPyramid[nSID][nTreeLevel][x][y]->m_nNodeTextureOffset = -1;
 				m_arrSecInfoPyramid[nSID][nTreeLevel][x][y]->m_bMergeNotAllowed = false;
 			}
@@ -516,15 +517,28 @@ bool CTerrain::OpenTerrainTextureFile(SCommonFileHeader& hdrDiffTexHdr, STerrain
 		}
 	}
 
+	int nSectorHeightMapTextureDim = m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[1].nSectorSizePixels;
+
 	delete[] ucpDiffTexTmpBuffer;
-	ucpDiffTexTmpBuffer = new uint8[m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[0].nSectorSizeBytes + m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[1].nSectorSizeBytes];
+	ucpDiffTexTmpBuffer = new uint8[m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[0].nSectorSizeBytes + m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[1].nSectorSizeBytes + sizeof(float)*nSectorHeightMapTextureDim*nSectorHeightMapTextureDim];
 
 	gEnv->pCryPak->FClose(fpDiffTexFile);
 	fpDiffTexFile = 0;
 
+	// if texture compression format is not supported by GPU - use uncompressed RGBA and decompress on CPU
+	ETEX_Format eTexPoolFormat = m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[0].eTexFormat;
+
+	if (!GetRenderer()->IsTextureFormatSupported(eTexPoolFormat))
+	{
+		GetLog()->LogWarning("Warning: Terrain texture compression format (%s) is not supported, fall back to CPU decompression", GetRenderer()->GetTextureFormatName(eTexPoolFormat));
+
+		eTexPoolFormat = eTF_R8G8B8A8;
+	}
+
 	// init texture pools
-	m_texCache[0].InitPool(ucpDiffTexTmpBuffer, m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[0].nSectorSizePixels, m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[0].eTexFormat);
-	m_texCache[1].InitPool(ucpDiffTexTmpBuffer, m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[1].nSectorSizePixels, m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[1].eTexFormat);
+	m_texCache[0].InitPool(0, m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[0].nSectorSizePixels, eTexPoolFormat);
+	m_texCache[1].InitPool(0, m_arrBaseTexInfos[nSID].m_TerrainTextureLayer[1].nSectorSizePixels, eTexPoolFormat);
+	m_texCache[2].InitPool(0, nSectorHeightMapTextureDim, eTF_R32F);
 
 	return true;
 }

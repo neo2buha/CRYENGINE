@@ -7,7 +7,7 @@ $DateTime$
 
 -------------------------------------------------------------------------
 History:
-- 8:9:2005   12:52 : Created by Márcio Martins
+- 8:9:2005   12:52 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -287,7 +287,7 @@ void CItem::AttachAccessory(IEntityClass* pAccessoryClass, bool attach, bool noa
 					}
 				}
 
-				if( GetOwnerId() == g_pGame->GetClientActorId() )
+				if( GetOwnerId() == gEnv->pGameFramework->GetClientActorId() )
 				{
 					if( CEquipmentLoadout* pLoadout = g_pGame->GetEquipmentLoadout() )
 					{
@@ -328,10 +328,10 @@ void CItem::AttachAccessory(IEntityClass* pAccessoryClass, bool attach, bool noa
 
 	if(pAccessory && (m_itemFlags & eIF_IgnoreHeat))
 	{
-		IEntityRenderProxy* pAccessoryRenderProxy = static_cast<IEntityRenderProxy*>(pAccessory->GetEntity()->GetProxy(ENTITY_PROXY_RENDER));
+		IEntityRender* pAccessoryRenderProxy = (pAccessory->GetEntity()->GetRenderInterface());
 		if(pAccessoryRenderProxy)
 		{
-			pAccessoryRenderProxy->SetIgnoreHeatAmount(attach);
+			//pAccessoryRenderProxy->SetIgnoreHeatAmount(attach);
 		}
 	}
 }

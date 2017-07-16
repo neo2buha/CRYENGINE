@@ -64,7 +64,6 @@ public:
 	Vec4         vFrustInfo;
 
 	// flags
-	bool bAllowViewDependency;
 	bool bUseAdditiveBlending;
 	bool bIncrementalUpdate;
 
@@ -81,7 +80,6 @@ public:
 
 	bool   bHWPCFCompare;
 	bool   bUseHWShadowMap;
-	bool   bReflectiveShadowMap;  // for RSMs
 
 	bool   bNormalizedDepth;
 
@@ -159,7 +157,6 @@ public:
 		, mLightProjMatrix(IDENTITY)
 		, mLightViewMatrix(IDENTITY)
 		, vFrustInfo(ZERO)
-		, bAllowViewDependency(false)
 		, bUseAdditiveBlending(false)
 		, bIncrementalUpdate(false)
 		, bOmniDirectionalShadow(false)
@@ -170,7 +167,6 @@ public:
 		, bIsMGPUCopy(false)
 		, bHWPCFCompare(false)
 		, bUseHWShadowMap(false)
-		, bReflectiveShadowMap(false)
 		, bNormalizedDepth(false)
 		, nShadowPoolUpdateRate(0)
 		, fWidthS(0)
@@ -238,7 +234,7 @@ public:
 		}
 	}
 
-	void GetTexOffset(int nSide, float* pOffset, float* pScale, int nShadowsPoolSizeX, int nShadowsPoolSizeY)
+	void GetTexOffset(int nSide, float* pOffset, float* pScale, int nShadowsPoolSizeX, int nShadowsPoolSizeY) const
 	{
 		if (bUseShadowsPool)
 		{

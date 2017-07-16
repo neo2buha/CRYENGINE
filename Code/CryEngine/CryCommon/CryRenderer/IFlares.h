@@ -12,6 +12,7 @@
 
 struct IShader;
 class CCamera;
+struct SRenderingPassInfo;
 
 class __MFPA
 {
@@ -73,14 +74,14 @@ public:
 			ADD_FLARE_INFO(eFT__Base__,          "__Base__",      NULL),
 			ADD_FLARE_INFO(eFT_Root,             "Root",          NULL),
 			ADD_FLARE_INFO(eFT_Group,            "Group",         NULL),
-			ADD_FLARE_INFO(eFT_Ghost,            "Ghost",         "EngineAssets/Textures/flares/icons/ghost.dds"),
-			ADD_FLARE_INFO(eFT_MultiGhosts,      "Multi Ghost",   "EngineAssets/Textures/flares/icons/multi_ghost.dds"),
-			ADD_FLARE_INFO(eFT_Glow,             "Glow",          "EngineAssets/Textures/flares/icons/glow.dds"),
-			ADD_FLARE_INFO(eFT_ChromaticRing,    "ChromaticRing", "EngineAssets/Textures/flares/icons/ring.dds"),
-			ADD_FLARE_INFO(eFT_IrisShafts,       "IrisShafts",    "EngineAssets/Textures/flares/icons/iris_shafts.dds"),
-			ADD_FLARE_INFO(eFT_CameraOrbs,       "CameraOrbs",    "EngineAssets/Textures/flares/icons/orbs.dds"),
-			ADD_FLARE_INFO(eFT_ImageSpaceShafts, "Vol Shafts",    "EngineAssets/Textures/flares/icons/vol_shafts.dds"),
-			ADD_FLARE_INFO(eFT_Streaks,          "Streaks",       "EngineAssets/Textures/flares/icons/iris_shafts.dds")
+			ADD_FLARE_INFO(eFT_Ghost,            "Ghost",         "%ENGINE%/EngineAssets/Textures/flares/icons/ghost.dds"),
+			ADD_FLARE_INFO(eFT_MultiGhosts,      "Multi Ghost",   "%ENGINE%/EngineAssets/Textures/flares/icons/multi_ghost.dds"),
+			ADD_FLARE_INFO(eFT_Glow,             "Glow",          "%ENGINE%/EngineAssets/Textures/flares/icons/glow.dds"),
+			ADD_FLARE_INFO(eFT_ChromaticRing,    "ChromaticRing", "%ENGINE%/EngineAssets/Textures/flares/icons/ring.dds"),
+			ADD_FLARE_INFO(eFT_IrisShafts,       "IrisShafts",    "%ENGINE%/EngineAssets/Textures/flares/icons/iris_shafts.dds"),
+			ADD_FLARE_INFO(eFT_CameraOrbs,       "CameraOrbs",    "%ENGINE%/EngineAssets/Textures/flares/icons/orbs.dds"),
+			ADD_FLARE_INFO(eFT_ImageSpaceShafts, "Vol Shafts",    "%ENGINE%/EngineAssets/Textures/flares/icons/vol_shafts.dds"),
+			ADD_FLARE_INFO(eFT_Streaks,          "Streaks",       "%ENGINE%/EngineAssets/Textures/flares/icons/iris_shafts.dds")
 		};
 
 		Props ret;
@@ -96,9 +97,10 @@ private:
 
 struct SLensFlareRenderParam
 {
-	SLensFlareRenderParam() :
-		pCamera(NULL),
-		pShader(NULL)
+	SLensFlareRenderParam(CCamera* pCamera, IShader* pShader, const SRenderingPassInfo& passInfo) :
+		pCamera(pCamera),
+		pShader(pShader),
+		passInfo(passInfo)
 	{
 	}
 	~SLensFlareRenderParam(){}
@@ -108,6 +110,7 @@ struct SLensFlareRenderParam
 	}
 	CCamera* pCamera;
 	IShader* pShader;
+	const SRenderingPassInfo& passInfo;
 };
 
 class ISoftOcclusionQuery
@@ -141,7 +144,7 @@ public:
 	// <interfuscator:shuffle>
 	virtual EFlareType          GetType() = 0;
 	virtual bool                IsGroup() const = 0;
-	virtual string              GetName() const = 0;
+	virtual const char*         GetName() const = 0;
 	virtual void                SetName(const char* ch_name) = 0;
 	virtual void                Load(IXmlNode* pNode) = 0;
 
@@ -161,7 +164,7 @@ public:
 	virtual void                GetMemoryUsage(ICrySizer* pSizer) const = 0;
 	virtual void                Invalidate() = 0;
 
-	virtual void                Render(SLensFlareRenderParam* pParam, const Vec3& vPos) = 0;
+	virtual void                RenderPreview(SLensFlareRenderParam* pParam, const Vec3& vPos) = 0;
 
 	virtual void                SetOpticsReference(IOpticsElementBase* pReference) {}
 	virtual IOpticsElementBase* GetOpticsReference() const                         { return NULL; }

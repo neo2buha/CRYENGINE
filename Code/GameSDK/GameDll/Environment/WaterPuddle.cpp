@@ -19,7 +19,6 @@ void CWaterPuddle::Update(SEntityUpdateContext& ctx, int slot) {}
 void CWaterPuddle::HandleEvent(const SGameObjectEvent& gameObjectEvent) {}
 void CWaterPuddle::ProcessEvent(SEntityEvent& entityEvent) {}
 void CWaterPuddle::SetChannelId(uint16 id) {}
-void CWaterPuddle::SetAuthority(bool auth) {}
 void CWaterPuddle::PostUpdate(float frameTime) {}
 void CWaterPuddle::PostRemoteSpawn() {}
 void CWaterPuddle::GetMemoryUsage(ICrySizer *pSizer) const {}
@@ -32,7 +31,7 @@ namespace
 
 	bool GetVolumeInfoForEntity(EntityId entityId, IGameVolumes::VolumeInfo* volumeInfo)
 	{
-		IGameVolumes* pGameVolumesMgr = gEnv->pGame->GetIGameFramework()->GetIGameVolumesManager();
+		IGameVolumes* pGameVolumesMgr = gEnv->pGameFramework->GetIGameVolumesManager();
 		if (pGameVolumesMgr != NULL)
 		{
 			return pGameVolumesMgr->GetVolumeInfoForEntity(entityId, volumeInfo);

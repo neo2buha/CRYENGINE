@@ -31,8 +31,6 @@
 #include <SDL.h>
 #endif
 
-#include <CrySystem/ParseEngineConfig.h>
-
 #ifdef _LIB
 #endif
 
@@ -366,7 +364,6 @@ int RunGame(const char *commandLine)
 
 	SSystemInitParams startupParams;
 	//memset(&startupParams, 0, sizeof(SSystemInitParams));
-	startupParams.hInstance = 0;
 	//strcpy(startupParams.szBinariesDir, "Bin");
 #if defined(DEDICATED_SERVER)
 	startupParams.sLogFileName = "Server.log";

@@ -997,16 +997,9 @@ static inline void ExtractSphereSet(
 					continue;
 				switch (statusPos.pGeom->GetType())
 				{
-					if (false)
-					{
-					case GEOM_CAPSULE:
-						statusPos.pGeom->GetPrimitive(0, &cylinder);
-					}
-					if (false)
-					{
-					case GEOM_CYLINDER:
-						statusPos.pGeom->GetPrimitive(0, &cylinder);
-					}
+				case GEOM_CAPSULE:
+				case GEOM_CYLINDER:
+					statusPos.pGeom->GetPrimitive(0, &cylinder);
 					for (int i = 0; i < 2 && nColliders < MMRM_MAX_COLLIDERS; ++i)
 					{
 						pColliders[nColliders].center = statusPos.pos + statusPos.q * (cylinder.center + ((float)(i - 1) * cylinder.axis * cylinder.hh * 2.75f));
@@ -1532,7 +1525,7 @@ bool CGeometryManager::PrepareLOD(SMMRMGeometry* geometry, CStatObj* host, size_
 
 	renderMesh->LockForThreadAccess();
 	int nvertices = renderMesh->GetVerticesCount();
-	EVertexFormat vtx_fmt = renderMesh->GetVertexFormat();
+	InputLayoutHandle vtx_fmt = renderMesh->GetVertexFormat();
 
 	vtx.data = (Vec3*)renderMesh->GetPosPtr(vtx.iStride, FSL_READ);
 	colour.data = (uint32*)renderMesh->GetColorPtr(colour.iStride, FSL_READ);
@@ -2309,6 +2302,15 @@ IRenderNode* CMergedMeshRenderNode::AddInstance(const SProcVegSample& sample)
 		           "CMergedMeshRenderNode::AddInstance no valid statobj given");
 		return NULL;
 	}
+	IF (!statObj->GetRenderMesh(), 0)
+	{
+		static CStatObj* lastReportedObj = NULL;
+		if (lastReportedObj != statObj)
+			FileWarning(0, statObj->GetFilePath(), "CMergedMeshRenderNode::AddInstance: CGF file does not support mesh auto merging");
+		lastReportedObj = statObj;
+		return NULL;
+	}
+
 	const Vec3 extents = (m_visibleAABB.max - m_visibleAABB.min) * 0.5f;
 	const Vec3 origin = m_pos - extents;
 	size_t headerIndex = (size_t)-1;
@@ -2608,7 +2610,8 @@ void CMergedMeshRenderNode::CreateRenderMesh(RENDERMESH_UPDATE_TYPE type, const 
 				{
 					if (update->chunks[j].matId != chunk.m_nMatID)
 					{
-						rmchunks.push_back(chunk);
+						if (chunk.nNumIndices && chunk.nNumVerts)
+							rmchunks.push_back(chunk);
 						chunk.m_nMatID = update->chunks[j].matId;
 						chunk.nFirstIndexId = ii;
 						chunk.nFirstVertId = iv;
@@ -2617,8 +2620,10 @@ void CMergedMeshRenderNode::CreateRenderMesh(RENDERMESH_UPDATE_TYPE type, const 
 					}
 					update->chunks[j].ioff = ii;
 					update->chunks[j].voff = iv;
-					chunk.nNumIndices = (ii += update->chunks[j].icnt);
-					chunk.nNumVerts = (iv += update->chunks[j].vcnt);
+					chunk.nNumIndices += update->chunks[j].icnt;
+					ii += update->chunks[j].icnt;
+					chunk.nNumVerts += update->chunks[j].vcnt;
+					iv += update->chunks[j].vcnt;
 				}
 			}
 done:
@@ -2628,7 +2633,7 @@ done:
 			mmrm_assert(iv <= 0xffff);
 			// Create a new rendermesh and dispatch the asynchronous updates
 			_smart_ptr<IRenderMesh> rm = GetRenderer()->CreateRenderMeshInitialized(
-			  NULL, iv, eVF_P3S_C4B_T2S, NULL, ii,
+			  NULL, iv, EDefaultInputLayouts::P3S_C4B_T2S, NULL, ii,
 			  prtTriangleList, "MergedMesh", "MergedMesh", eRMT_Dynamic);
 			rm->LockForThreadAccess();
 			m_SizeInVRam += (sizeof(SVF_P3S_C4B_T2S) + sizeof(SPipTangents)) * iv;
@@ -3011,7 +3016,6 @@ void CMergedMeshRenderNode::RenderRenderMesh(
 			}
 		}
 	}
-	ro->m_fSort = m_rendParams.fCustomSortOffset;
 	ro->m_nRenderQuality = (uint16)(fRenderQuality * 65535.0f);
 	ro->m_fDistance = distance;
 	if (Get3DEngine()->IsTessellationAllowed(ro, passInfo))
@@ -3421,7 +3425,7 @@ void CMergedMeshRenderNode::DebugRender(int nLod)
 					nVerts += m_renderMeshes[t][i].vertices;
 					nChunks += m_renderMeshes[t][i].chunks;
 				}
-			gEnv->pRenderer->DrawLabel(m_pos, 1.2f, "vb %d ib %d\nsize %3.1f kb\nlod %d ch %d"
+			IRenderAuxText::DrawLabelF(m_pos, 1.2f, "vb %d ib %d\nsize %3.1f kb\nlod %d ch %d"
 			                           , nVerts
 			                           , nInds
 			                           , (m_SizeInVRam) / 1024.f
@@ -3859,7 +3863,6 @@ void CMergedMeshesManager::Init()
 	if (!s_MergedMeshPool)
 	{
 		AUTO_LOCK(s_MergedMeshPoolLock);
-		ScopedSwitchToGlobalHeap heaper;
 		size_t memsize = (Cry3DEngineBase::GetCVars()->e_MergedMeshesPool + 4096) * 1024; // include 2mb buffer size for overhead and large peaks
 		if (memsize && (s_MergedMeshPool = gEnv->pSystem->GetIMemoryManager()->CreateGeneralExpandingMemoryHeap(
 		                  memsize, 0, "MERGEDMESH_POOL")) == NULL)
@@ -3944,10 +3947,9 @@ bool CMergedMeshesManager::CompileSectors(std::vector<struct IStatInstGroup*>* p
 				for (NodeListT::iterator it = list.begin(); it != list.end(); ++it)
 				{
 					nSize = 0;
-					m_InstanceSectors.push_back(SInstanceSector());
-					SInstanceSector* pSector = &m_InstanceSectors.back();
+					SInstanceSector* pSector = m_InstanceSectors.push_back();
 					(*it)->Compile(NULL, nSize, NULL, NULL);
-					pSector->data.grow(nSize);
+					pSector->data.resize(nSize);
 
 					if ((*it)->Compile(&pSector->data[0], nSize, &pSector->id, pVegGroupTable) == false)
 						return false;
@@ -5049,7 +5051,7 @@ void CDeformableNode::RenderInternalDeform(
 			return;
 
 		m_renderMesh = gEnv->pRenderer->CreateRenderMeshInitialized(
-		  NULL, m_numVertices, eVF_P3S_C4B_T2S, NULL, m_numIndices,
+		  NULL, m_numVertices, EDefaultInputLayouts::P3S_C4B_T2S, NULL, m_numIndices,
 		  prtTriangleList, "MergedMesh", "MergedMesh", eRMT_Dynamic);
 
 		m_renderMesh->LockForThreadAccess();
@@ -5171,6 +5173,32 @@ bool CMergedMeshesManager::GetCompiledData(uint32 index, byte* pData, int nSize,
 	m_SegNodes[index]->Compile(pData, nSize, pName, *ppStatInstGroupTable, segmentOffset);
 
 	return true;
+}
+
+void CMergedMeshRenderNode::FillBBox(AABB& aabb)
+{
+	aabb = CMergedMeshRenderNode::GetBBox();
+}
+
+EERType CMergedMeshRenderNode::GetRenderNodeType()
+{
+	return eERType_MergedMesh;
+}
+
+float CMergedMeshRenderNode::GetMaxViewDist()
+{
+	float radius = m_internalAABB.GetRadius();
+	return max(GetCVars()->e_ViewDistMin, radius * GetCVars()->e_MergedMeshesViewDistRatio);
+}
+
+Vec3 CMergedMeshRenderNode::GetPos(bool bWorldOnly) const
+{
+	return m_pos;
+}
+
+IMaterial* CMergedMeshRenderNode::GetMaterial(Vec3* pHitPos) const
+{
+	return NULL;
 }
 
 #undef FSL_CREATE_MODE

@@ -1,8 +1,16 @@
 #pragma once
+
+#include <CrySystem/IEngineModule.h>
+
 class ICrySizer;
 struct IFlashPlayer;
 struct IFlashPlayerBootStrapper;
 struct IFlashLoadMovieHandler;
+
+struct IScaleformHelperEngineModule : public Cry::IDefaultModule
+{
+	CRYINTERFACE_DECLARE(IScaleformHelperEngineModule, 0x3B0E89404AC64CBB, 0xAA3F7E13ECB9F871);
+};
 
 //! Helper for Scaleform-specific function access
 struct IScaleformHelper
@@ -10,9 +18,6 @@ struct IScaleformHelper
 public:
 	//! Initialize helper object
 	virtual bool Init() = 0;
-
-	//! Register CVars for Scaleform
-	virtual void InitCVars() = 0;
 
 	//! Destroy helper object
 	virtual void Destroy() = 0;

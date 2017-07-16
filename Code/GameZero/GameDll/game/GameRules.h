@@ -17,8 +17,6 @@ public:
 	virtual void                 PostInitClient(int channelId) override                                                   {}
 	virtual bool                 ReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params) override     { return false; }
 	virtual void                 PostReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params) override {}
-	virtual bool                 GetEntityPoolSignature(TSerialize signature) override                                    { return false; }
-	virtual void                 Release() override                                                                       {};
 	virtual void                 FullSerialize(TSerialize ser) override                                                   {}
 	virtual bool                 NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int flags) override   { return true; }
 	virtual void                 PostSerialize() override                                                                 {}
@@ -28,7 +26,6 @@ public:
 	virtual void                 HandleEvent(const SGameObjectEvent&) override                                            {}
 	virtual void                 ProcessEvent(SEntityEvent&) override                                                     {}
 	virtual void                 SetChannelId(uint16 id) override                                                         {}
-	virtual void                 SetAuthority(bool auth) override                                                         {}
 	virtual void                 PostUpdate(float frameTime) override                                                     {}
 	virtual void                 PostRemoteSpawn() override                                                               {}
 	virtual void                 GetMemoryUsage(ICrySizer* s) const override;
@@ -39,7 +36,6 @@ public:
 	virtual void        PrecacheLevel() override                                                                                                                                                                            {}
 	virtual void        PrecacheLevelResource(const char* resourceName, EGameResourceType resourceType) override                                                                                                            {}
 	virtual XmlNodeRef  FindPrecachedXmlFile(const char* sFilename) override                                                                                                                                                { return 0; }
-	virtual void        OnConnect(struct INetChannel* pNetChannel) override                                                                                                                                                 {}
 	virtual void        OnDisconnect(EDisconnectionCause cause, const char* desc) override                                                                                                                                  {}
 	virtual bool        OnClientConnect(int channelId, bool isReset) override;
 	virtual void        OnClientDisconnect(int channelId, EDisconnectionCause cause, const char* desc, bool keepClient) override                                                                                            {}

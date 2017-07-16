@@ -96,9 +96,9 @@ public:
 		FreeRenderData();
 	}
 
-	void        Render(const float fFrameTime, int nAfterWater, uint32 nDLMask, float fDistanceFading, float fDiatance, const SRenderingPassInfo& passInfo);
+	void        Render(const float fFrameTime, int nAfterWater, float fDistanceFading, float fDiatance, const SRenderingPassInfo& passInfo);
 	int         Update(bool& active, const float fFrameTime);
-	void        RenderBigDecalOnTerrain(float fAlpha, float fScale, uint32 nDLMask, const SRenderingPassInfo& passInfo);
+	void        RenderBigDecalOnTerrain(float fAlpha, float fScale, const SRenderingPassInfo& passInfo);
 	void        FreeRenderData();
 	static void ResetStaticData();
 	bool        IsBigDecalUsed() const { return m_pRenderMesh != 0; }
@@ -108,6 +108,20 @@ public:
 	{
 		pSizer->AddObject(this, sizeof(*this));
 	}
+
+private:
+	void AddDecalToRenderView(float fDistance,
+	                          IMaterial* pMat,
+	                          const uint8 sortPrio,
+	                          Vec3 right,
+	                          Vec3 up,
+	                          const UCol& ucResCol,
+	                          const uint8 uBlendType,
+	                          const Vec3& vAmbientColor,
+	                          Vec3 vPos,
+	                          const int nAfterWater,
+	                          CVegetation* pVegetation,
+	                          const SRenderingPassInfo& passInfo);
 
 private:
 	static IGeometry* s_pSphere;

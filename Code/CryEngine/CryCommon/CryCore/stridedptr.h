@@ -1,9 +1,12 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
-#ifndef _STRIDED_PTR_H_
-#define _STRIDED_PTR_H_
+#pragma once
 
-template<class dtype> class strided_pointer
+#include <type_traits>
+#include <CryCore/CryEndian.h>
+
+template<class dtype>
+class strided_pointer
 {
 public:
 	strided_pointer()
@@ -51,19 +54,16 @@ private:
 	template<typename dtype1>
 	ILINE void set(dtype1* pdata, int32 stride)
 	{
-#if !defined(eLittleEndian)
-	#error eLittleEndian is not defined, please include CryEndian.h.
-#endif
-		COMPILE_TIME_ASSERT(metautils::is_const<dtype>::value || !metautils::is_const<dtype1>::value);
+		static_assert(std::is_const<dtype>::value || !std::is_const<dtype1>::value, "Invalid const modifiers!");
 		// note: we allow xint32 -> xint16 converting
-		COMPILE_TIME_ASSERT(
-		  (metautils::is_same<typename metautils::remove_const<dtype1>::type, typename metautils::remove_const<dtype>::type>::value ||
-		   ((metautils::is_same<typename metautils::remove_const<dtype1>::type, sint32>::value ||
-		     metautils::is_same<typename metautils::remove_const<dtype1>::type, uint32>::value ||
-		     metautils::is_same<typename metautils::remove_const<dtype1>::type, sint16>::value ||
-		     metautils::is_same<typename metautils::remove_const<dtype1>::type, uint16>::value) &&
-		    (metautils::is_same<typename metautils::remove_const<dtype>::type, sint16>::value ||
-		     metautils::is_same<typename metautils::remove_const<dtype>::type, uint16>::value))));
+		static_assert(
+		  (std::is_same<typename std::remove_const<dtype1>::type, typename std::remove_const<dtype>::type>::value ||
+		   ((std::is_same<typename std::remove_const<dtype1>::type, sint32>::value ||
+		     std::is_same<typename std::remove_const<dtype1>::type, uint32>::value ||
+		     std::is_same<typename std::remove_const<dtype1>::type, sint16>::value ||
+		     std::is_same<typename std::remove_const<dtype1>::type, uint16>::value) &&
+		    (std::is_same<typename std::remove_const<dtype>::type, sint16>::value ||
+		     std::is_same<typename std::remove_const<dtype>::type, uint16>::value))), "Invalid type!");
 		data = (dtype*)pdata + (sizeof(dtype1) / sizeof(dtype) - 1) * (int)eLittleEndian;
 		iStride = stride;
 	}
@@ -94,5 +94,3 @@ public:
 	dtype* data;
 	int32  iStride;
 };
-
-#endif //_STRIDED_PTR_H_

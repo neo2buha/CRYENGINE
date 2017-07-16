@@ -8,7 +8,7 @@
 //  Description:
 // -------------------------------------------------------------------------
 //  History:
-//	- 03:2006				 : Modified by Jan Müller (Serialization)
+//	- 03:2006				 : Modified by Jan MÃ¼ller (Serialization)
 //
 ////////////////////////////////////////////////////////////////////////////
 
@@ -256,6 +256,10 @@ public:
 	{
 		return m_RenderFlags;
 	}
+	static float GetMaxAngularDensity(const CCamera& camera)
+	{
+		return camera.GetAngularResolution() / max(GetCVars()->e_ParticlesMinDrawPixels, 0.125f) * 2.0f;
+	}
 	bool CanAccessFiles(cstr sObject, cstr sSource = "") const;
 
 	// light profiler functions
@@ -338,12 +342,14 @@ private:
 	uint32               m_nAllowedEnvironmentFlags;        // Which particle features are allowed.
 	TrinaryFlags<uint64> m_RenderFlags;                     // OS_ and FOB_ flags.
 
+	bool                 m_bParticleTessellation = false;   // tessellation feature is allowed to use.
+
 	SPhysEnviron         m_PhysEnv;                         // Per-frame computed physics area information.
 
 	bool IsRuntime() const
 	{
 		ESystemGlobalState eState = gEnv->pSystem->GetSystemGlobalState();
-		return !gEnv->IsEditing() && (eState == ESYSTEM_GLOBAL_STATE_RUNNING || eState >= ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_END);
+		return !gEnv->IsEditing() && (eState > ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_END);
 	}
 
 	void UpdateEngineData();

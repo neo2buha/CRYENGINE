@@ -115,11 +115,6 @@ inline bool IsModPath(const char* originalPath)
 }
 #endif
 
-#if CRY_PLATFORM_ANDROID && defined(ANDROID_OBB)
-extern const char* androidGetMainExpName();
-extern const char* androidGetPatchExpName();
-#endif
-
 //////////////////////////////////////////////////////////////////////////
 // IResourceList implementation class.
 //////////////////////////////////////////////////////////////////////////
@@ -142,9 +137,6 @@ public:
 	virtual void Add(const char* sResourceFile)
 	{
 		stack_string filename = UnifyFilename(sResourceFile);
-
-		if (strncmp(filename.c_str(), "editor/", 7) == 0)        // we don't want to track editor directory, on demand loading caused errors
-			return;
 
 		CryAutoLock<CryCriticalSection> lock(m_lock);
 		m_set.insert(filename);
@@ -432,7 +424,7 @@ CCryPak::CCryPak(IMiniLog* pLog, PakVars* pPakVars, const bool bLvlRes, const IG
 
 	m_mainThreadId = GetCurrentThreadId();
 
-	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this);
+	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this,"CCryPak");
 
 #ifdef INCLUDE_LIBTOMCRYPT
 	if (pGameStartup)
@@ -481,7 +473,8 @@ bool CCryPak::CheckFileAccessDisabled(const char* name, const char* mode)
 			}
 			if (logInvalidFileAccess && name)
 			{
-				CDebugAllowFileAccess afa;
+				SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
+
 				CryWarning(VALIDATOR_MODULE_SYSTEM, VALIDATOR_ERROR, "File: %s opened when runtime file access is disabled (mode %s)", name, mode);
 
 				//strip off dir to reduce warning size
@@ -508,7 +501,17 @@ bool CCryPak::CheckFileAccessDisabled(const char* name, const char* mode)
 				{
 					char acTmp[2048];
 					cry_sprintf(acTmp, "Invalid File Access: %s '%s'", nameShort, mode);
-					gEnv->pSystem->DisplayErrorMessage(acTmp, 5.f);
+					gEnv->pSystem->DisplayErrorMessage(acTmp, 5.0f);
+
+					static bool bPrintOnce = true;
+
+					if (bPrintOnce)
+					{
+						gEnv->pSystem->DisplayErrorMessage("FILE ACCESS FROM MAIN OR RENDER THREAD DETECTED", 60.0f, 0, false);
+						gEnv->pSystem->DisplayErrorMessage("THIS IMPACTS PERFORMANCE AND NEEDS TO BE REVISED", 60.0f, 0, false);
+						gEnv->pSystem->DisplayErrorMessage("To disable this message set sys_PakLogInvalidFileAccess = 0 (not recommended)", 60.0f, 0, false);
+						bPrintOnce = false;
+					}
 				}
 
 				CryPerfHUDWarning(5.f, "File Access: %s '%s'", nameShort, mode);
@@ -798,6 +801,12 @@ void CCryPak::SetLocalizationFolder(char const* const szLocalizationFolder)
 //////////////////////////////////////////////////////////////////////////
 void CCryPak::SetAlias(const char* szName, const char* szAlias, bool bAdd)
 {
+	// Strip ./ or .\ at the beginning of the szAlias path.
+	if (szAlias && szAlias[0] == '.' && (szAlias[1] == '/' || szAlias[1] == '\\'))
+	{
+		szAlias += 2;
+	}
+
 	// find out if it is already there
 	TAliasList::iterator it;
 	tNameAlias* tPrev = NULL;
@@ -855,6 +864,7 @@ void CCryPak::SetAlias(const char* szName, const char* szAlias, bool bAdd)
 #if !CRY_PLATFORM_IOS && !CRY_PLATFORM_LINUX && !CRY_PLATFORM_ANDROID
 		strlwr(tNew->szAlias);
 #endif
+		std::replace(tNew->szAlias, tNew->szAlias + tNew->nLen2 + 1, g_cNonNativeSlash, g_cNativeSlash);
 		m_arrAliases.push_back(tNew);
 	}
 }
@@ -1043,6 +1053,8 @@ inline bool CheckFileExistOnDisk(const char* filename)
 
 const char* CCryPak::AdjustFileName(const char* src, char dst[g_nMaxPath], unsigned nFlags)
 {
+	CRY_ASSERT(src);
+
 	bool bSkipMods = false;
 
 	if (g_cvars.sys_filesystemCaseSensitivity > 0)
@@ -1054,8 +1066,8 @@ const char* CCryPak::AdjustFileName(const char* src, char dst[g_nMaxPath], unsig
 	    ((nFlags & FLAGS_PATH_REAL) == 0) &&
 	    ((nFlags & FLAGS_FOR_WRITING) == 0) &&
 	    (!m_arrMods.empty()) &&
-	    (*src != '%') &&                                                                   // If path starts from % it is a special alias.
-	    ((m_pPakVars->nPriority != ePakPriorityPakOnly) || (nFlags & FLAGS_NEVER_IN_PAK))) // When priority is Pak only, we only check Mods directories if we're looking for a file that can't be in a pak
+	    (*src != '%') &&                                                                   // If path starts with '%' it is a special alias.
+	    ((m_pPakVars->nPriority != ePakPriorityPakOnly) || (nFlags & FLAGS_NEVER_IN_PAK) || (*src == '%'))) // When priority is Pak only, we only check Mods directories if we're looking for a file that can't be in a pak
 	{
 		// Scan mod folders
 		std::vector<string>::reverse_iterator it;
@@ -1264,9 +1276,9 @@ const char* CCryPak::AdjustFileNameInternal(const char* src, char* dst, unsigned
 		if (filehelpers::CheckPrefix(szNewSrc, "./") ||
 		    filehelpers::CheckPrefix(szNewSrc, ".\\"))
 		{
-			const int nLen = min(sizeof(szNewSrc), strlen(szNewSrc) - 2);
-			memmove(szNewSrc, szNewSrc + 2, nLen);
-			szNewSrc[nLen] = 0;
+			size_t len = std::min<size_t>(sizeof(szNewSrc), strlen(szNewSrc) - 2);
+			memmove(szNewSrc, szNewSrc + 2, len);
+			szNewSrc[len] = 0;
 		}
 	}
 	//////////////////////////////////////////////////////////////////////////
@@ -1299,26 +1311,22 @@ const char* CCryPak::AdjustFileNameInternal(const char* src, char* dst, unsigned
 		}
 		else if (filehelpers::CheckPrefix(szNewSrc, "." CRY_NATIVE_PATH_SEPSTR))
 		{
-			const int nLen = min(sizeof(szNewSrc), strlen(szNewSrc) - 2);
-			memmove(szNewSrc, szNewSrc + 2, nLen);
-			szNewSrc[nLen] = 0;
+			size_t len = std::min<size_t>(sizeof(szNewSrc), strlen(szNewSrc) - 2);
+			memmove(szNewSrc, szNewSrc + 2, len);
+			szNewSrc[len] = 0;
 		}
 	}
+
+#if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_IOS	
+	// Only lower case after the root path
+	uint rootAdj = strncmp(m_szEngineRootDir, szNewSrc, m_szEngineRootDirStrLen) == 0 ? m_szEngineRootDirStrLen : 0;
+	ConvertFilenameNoCase(szNewSrc + rootAdj);
+#endif
 
 	strcpy(dst, szNewSrc);
 	const int dstLen = strlen(dst);
 
 	char* pEnd = dst + dstLen;
-
-#if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_IOS
-	//we got to adjust the filename and fetch the case sensitive one
-	char sourceName[MAX_PATH];
-	cry_strcpy(sourceName, dst);
-	// Note: we'll copy the adjustedFilename even if the filename can not be
-	// matched against an existing file. This is because getFilenameNoCase() will
-	// adjust leading path components (e.g. ".../game/..." => ".../Game/...").
-	GetFilenameNoCase(sourceName, dst, false);
-#endif
 
 #if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE
 	if ((nFlags & FLAGS_ADD_TRAILING_SLASH) && pEnd > dst && (pEnd[-1] != g_cNativeSlash && pEnd[-1] != g_cNonNativeSlash))
@@ -1510,7 +1518,7 @@ FILE* CCryPak::FOpenRaw(const char* pName, const char* mode)
 //////////////////////////////////////////////////////////////////////////
 FILE* CCryPak::FOpen(const char* pName, const char* szMode, char* szFileGamePath, int nLen)
 {
-	LOADING_TIME_PROFILE_SECTION;
+	LOADING_TIME_PROFILE_SECTION_ARGS(pName);
 
 	SAutoCollectFileAcessTime accessTime(this);
 
@@ -1536,8 +1544,7 @@ FILE* CCryPak::FOpen(const char* pName, const char* szMode, char* szFileGamePath
 //////////////////////////////////////////////////////////////////////////
 FILE* CCryPak::FOpen(const char* pName, const char* szMode, unsigned nInputFlags)
 {
-
-	LOADING_TIME_PROFILE_SECTION;
+	LOADING_TIME_PROFILE_SECTION_ARGS(pName);
 
 	if (strlen(pName) >= g_nMaxPath)
 		return 0;
@@ -1769,7 +1776,6 @@ FILE* CCryPak::FOpen(const char* pName, const char* szMode, unsigned nInputFlags
 			continue;
 		if (nFile == m_arrOpenFiles.size())
 		{
-			ScopedSwitchToGlobalHeap globalHeap;
 			m_arrOpenFiles.resize(nFile + 1);
 		}
 		if (pFileData != NULL && (nInputFlags & FOPEN_HINT_DIRECT_OPERATION) && !pFileData->m_pZip->IsInMemory())
@@ -2598,7 +2604,7 @@ bool CCryPak::ClosePack(const char* pName, unsigned nFlags)
 			//
 			// the pZip (cache) can be referenced from stream engine and pseudo-files.
 			// the archive can be referenced from outside
-			bool bResult = (it->pZip->NumRefs() == 2) && it->pArchive->NumRefs() == 1;
+			bool bResult = (it->pZip->NumRefs() == 2) && it->pArchive->Unique();
 			if (bResult)
 			{
 				m_arrZips.erase(it);
@@ -2815,6 +2821,9 @@ bool CCryPak::InitPack(const char* szBasePath, unsigned nFlags)
 		SetAlias("%USER%", buffer, true);
 	}
 #endif
+	CryFindEngineRootFolder(CRY_ARRAY_COUNT(m_szEngineRootDir), m_szEngineRootDir);
+	m_szEngineRootDirStrLen = strlen(m_szEngineRootDir);
+
 	return true;
 }
 
@@ -3528,32 +3537,8 @@ void CCryPakFindData::GetMemoryUsage(ICrySizer* pSizer) const
 	pSizer->AddObject(m_mapFiles);
 }
 
-bool CCryPak::MakeDir(const char* szPathIn, bool bGamePathMapping)
+bool CCryPak::MakeDir(const char* szPath, bool bGamePathMapping)
 {
-	stack_string pathStr = szPathIn;
-	// Determine if there is a period ('.') after the last slash to determine if the path contains a file.
-	// This used to be a strchr on the whole path which could contain a period in a path, such as network domain paths (domain.user).
-	bool bPathContainsFile = false;
-	size_t findDotFromPos = pathStr.rfind(g_cNativeSlash);
-	if (findDotFromPos == stack_string::npos)
-	{
-		findDotFromPos = pathStr.rfind(g_cNonNativeSlash);
-		if (findDotFromPos == stack_string::npos)
-		{
-			findDotFromPos = 0;
-		}
-	}
-	size_t dotPos = pathStr.find('.', findDotFromPos);
-	if (dotPos != stack_string::npos)
-	{
-		pathStr = PathUtil::GetPath(stack_string(szPathIn));
-	}
-	else
-	{
-		pathStr = szPathIn;
-	}
-
-	const char* szPath = pathStr;
 	if (0 == szPath[0])
 	{
 		return true;
@@ -3700,76 +3685,14 @@ ICryArchive* CCryPak::OpenArchive(
 	ZipDir::CachePtr pZip = NULL;
 #endif
 
-	// if valid data is given and read only, then don't check if file excists
+	// if valid data is given and read only, then don't check if file exists
 	if (pData && nFlags & ICryArchive::FLAGS_OPTIMIZED_READ_ONLY)
 	{
 		bFileExists = true;
 	}
 	else
 	{
-#if CRY_PLATFORM_ANDROID && defined(ANDROID_OBB)
-		/// There are four type of pak files:
-		/// 1. Physical pak file:  pak file exists in file system
-		///    bContainedInPakFile = false;
-		///    bContainedInApkPackage = false;
-		/// 2. Uncompressed Asset file contained in Apk package (assets.ogg):
-		///    bContainedInPakFile = false;
-		///    bContainedInApkPackage = true;
-		/// 3. Pak file contained in physical pak file:
-		///    bContainedInPakFile = true;
-		///    bContainedInApkPackage = false;
-		/// 4. Pak file contained in asset:
-		///    bContainedInPakFile = true;
-		///    bContainedInApkPackage = true;
-		/// Directory cache will be created using different functions in
-		/// ZipDirCacheFactory according to the file type.
-
-		if (access(szFullPath, R_OK) == 0)
-		{
-			/// Found the requested file on file system
-			bFileExists = true;
-			bContainedInPakFile = false;
-			bContainedInApkPackage = false;
-
-			const char* filename = PathUtil::GetFile(szFullPath);
-
-			if (strcmp(filename, androidGetMainExpName()) == 0)
-			{
-				bIsMainObbExpFile = true;
-			}
-			else if (strcmp(filename, androidGetPatchExpName()) == 0)
-			{
-				bIsPatchObbExpFile = true;
-			}
-		}
-		else
-		{
-			unsigned int nDumbFlags;
-			pFileEntry = FindPakFileEntry(szFullPath, nDumbFlags, &pZip);
-			if (pFileEntry != NULL)
-			{
-				/// Found requested pak file inside opened pak file,
-				bFileExists = true;
-				bContainedInPakFile = true;
-
-				/// It is contained in APK package if its containing
-				/// pak file have a positive offset relative to the
-				/// beginning of apk package.
-				bContainedInApkPackage = (pZip->GetAssetOffset() > 0);
-			}
-			else
-			{
-				AAsset* pAsset = AAssetManager_open(m_pAssetManager, szFullPath, AASSET_MODE_RANDOM);
-				if (pAsset)
-				{
-					bFileExists = true;
-					bContainedInPakFile = false;
-					bContainedInApkPackage = true;
-					AAsset_close(pAsset);
-				}
-			}
-		}
-#elif CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE
+#if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE
 		if (access(szFullPath, R_OK) == 0)
 			bFileExists = true;
 #else
@@ -4724,7 +4647,7 @@ void CCryPak::CPakFileWidget::Update()
 bool CCryPak::ForEachArchiveFolderEntry(const char* szArchivePath, const char* szFolderPath, const ArchiveEntrySinkFunction& callback)
 {
 	char szFullPathBuf[CCryPak::g_nMaxPath];
-	const char* szFullPath = AdjustFileName(szArchivePath, szFullPathBuf, FLAGS_PATH_REAL);
+	const char* szFullPath = AdjustFileName(szArchivePath, szFullPathBuf, FLAGS_NEVER_IN_PAK);
 
 	ICryArchive* pArchive = FindArchive(szFullPath);
 	if (!pArchive)

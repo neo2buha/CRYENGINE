@@ -9,9 +9,7 @@
 #endif
 
 #include <CryCore/Platform/platform.h> // Needed for LARGE_INTEGER (for consoles).
-
 #include <CryCore/Assert/CryAssert.h>
-#include <CryCore/Assert/CompileTimeAssert.h>
 
 #include <CrySystem/XML/IXml.h> // <> required for Interfuscator
 #include "IValidator.h"         // <> required for Interfuscator
@@ -22,7 +20,10 @@
 #include <CryMemory/IMemory.h>          // <> required for Interfuscator
 #include <CrySystem/ISystemScheduler.h> // <> required for Interfuscator
 
-struct ISystem;
+#include <CryMath/LCGRandom.h>
+#include <CryExtension/ICryFactory.h>
+#include <CryExtension/ICryUnknown.h>
+
 struct ILog;
 struct IProfileLogSystem;
 struct IEntitySystem;
@@ -30,7 +31,6 @@ struct IEntity;
 struct ICryPak;
 struct IKeyboard;
 struct IMouse;
-struct IConsole;
 struct IRemoteConsole;
 struct IInput;
 struct IRenderer;
@@ -42,19 +42,23 @@ struct ITelemetrySystem;
 struct IProcess;
 struct I3DEngine;
 struct ITimer;
-struct IGame;
+struct IGameFramework;
 struct IGameStartup;
 struct IScriptSystem;
 struct IAISystem;
 struct IFlash;
 struct INetwork;
-struct IOnline;
+struct INetContext;
 struct ICryLobby;
 struct ICryFont;
 struct IMovieSystem;
 struct IPhysicalWorld;
 struct IMemoryManager;
+namespace CryAudio
+{
 struct IAudioSystem;
+}
+struct ISystem;
 struct IFrameProfileSystem;
 struct IStatoscope;
 class IDiskProfiler;
@@ -99,10 +103,14 @@ struct IOverloadSceneManager;
 struct IFlashUI;
 struct IThreadManager;
 struct IServiceNetwork;
+struct IUserAnalyticsSystem;
 struct IRemoteCommandManager;
 struct IWindowMessageHandler;
 struct SFunctor;
 struct IScaleformHelper;
+struct ICryPluginManager;
+struct IProjectManager;
+class IImeManager;
 
 class CBootProfilerRecord;
 
@@ -121,7 +129,7 @@ struct IManager;
 struct IHost;
 }
 
-struct IMonoRuntime;
+struct IMonoEngineModule;
 
 struct ILocalMemoryUsage;
 
@@ -140,6 +148,8 @@ struct ICryPerfHUD;
 namespace JobManager {
 struct IJobManager;
 }
+
+struct ICrySchematycCore;
 
 #define PROC_MENU     1
 #define PROC_3DENGINE 2
@@ -207,9 +217,7 @@ struct sUpdateTimes
 
 enum ESystemGlobalState
 {
-	ESYSTEM_GLOBAL_STATE_UNKNOWN,
 	ESYSTEM_GLOBAL_STATE_INIT,
-	ESYSTEM_GLOBAL_STATE_RUNNING,
 	ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START_PREPARE,
 	ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START,
 	ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START_MATERIALS,
@@ -220,19 +228,14 @@ enum ESystemGlobalState
 	ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START_PRECACHE,
 	ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_START_TEXTURES,
 	ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_END,
-	ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_COMPLETE
+	ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_ENDING,
+	ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_COMPLETE,
+	ESYSTEM_GLOBAL_STATE_RUNNING,
 };
 
 //! System wide events.
 enum ESystemEvent
 {
-	//! Seeds all random number generators to the same seed number, WParam will hold seed value.
-	//! ##@{
-	ESYSTEM_EVENT_RANDOM_SEED = 1,
-	ESYSTEM_EVENT_RANDOM_ENABLE,
-	ESYSTEM_EVENT_RANDOM_DISABLE,
-	//! ##@}.
-
 	//! Changes to main window focus.
 	//! wparam is not 0 is focused, 0 if not focused.
 	ESYSTEM_EVENT_CHANGE_FOCUS = 10,
@@ -308,6 +311,9 @@ enum ESystemEvent
 	//! Called when the game framework has been initialized, not loading should happen in this event.
 	ESYSTEM_EVENT_GAME_POST_INIT_DONE,
 
+	//! Called when the sanbox has finished initialization
+	ESYSTEM_EVENT_SANDBOX_POST_INIT_DONE,
+
 	//! Sent when the system is doing a full shutdown.
 	ESYSTEM_EVENT_FULL_SHUTDOWN,
 
@@ -327,18 +333,6 @@ enum ESystemEvent
 
 	//! End 3D post rendering.
 	ESYSTEM_EVENT_3D_POST_RENDERING_END,
-
-	//! Called before switching to level memory heap.
-	ESYSTEM_EVENT_SWITCHING_TO_LEVEL_HEAP,
-
-	//! Called after switching to level memory heap.
-	ESYSTEM_EVENT_SWITCHED_TO_LEVEL_HEAP,
-
-	//! Called before switching to global memory heap.
-	ESYSTEM_EVENT_SWITCHING_TO_GLOBAL_HEAP,
-
-	//! Called after switching to global memory heap.
-	ESYSTEM_EVENT_SWITCHED_TO_GLOBAL_HEAP,
 
 	//! Sent after precaching of the streaming system has been done.
 	ESYSTEM_EVENT_LEVEL_PRECACHE_END,
@@ -459,6 +453,23 @@ enum ESystemEvent
 
 	//! Sent if the CrySystem module initialized successfully.
 	ESYSTEM_EVENT_CRYSYSTEM_INIT_DONE,
+
+	//! Sent before initializing the renderer.
+	ESYSTEM_EVENT_PRE_RENDERER_INIT,
+
+	//! Sent if the window containing the running game loses focus, but application itself still has focus
+	//! This is needed because some sub-systems still want to work even without focus on main application
+	//! while others would prefer to suspend their operation
+	ESYSTEM_EVENT_GAMEWINDOW_ACTIVATE,
+
+	// Sent when flow nodes should be registered
+	ESYSTEM_EVENT_REGISTER_FLOWNODES,
+
+	//! Sent if the CryAction module initialized successfully. (Remark: Sent after ESYSTEM_EVENT_CRYSYSTEM_INIT_DONE and after (potential) game init was called)
+	ESYSTEM_EVENT_GAME_FRAMEWORK_INIT_DONE,
+
+	//! Sent if the CryAction module is about to shutdown
+	ESYSTEM_EVENT_GAME_FRAMEWORK_ABOUT_TO_SHUTDOWN
 };
 
 //! User defined callback, which can be passed to ISystem.
@@ -469,10 +480,6 @@ struct ISystemUserCallback
 
 	//! This method is called at the earliest point the ISystem pointer can be used the log might not be yet there.
 	virtual void OnSystemConnect(ISystem* pSystem) {}
-
-	//! Signals to User that engine error occurred.
-	//! \return true to Halt execution or false to ignore this error.
-	virtual bool OnError(const char* szErrorString) = 0;
 
 	//! If working in Editor environment notify user that engine want to Save current document.
 	//! This happens if critical error have occurred and engine gives a user way to save data and not lose it due to crash.
@@ -501,7 +508,7 @@ struct ISystemUserCallback
 	virtual void OnUpdate() {}
 
 	//! Show message by provider.
-	virtual int ShowMessage(const char* text, const char* caption, unsigned int uType) { return CryMessageBox(text, caption, uType); }
+	virtual EQuestionResult ShowMessage(const char* text, const char* caption, EMessageBox uType) { return eQR_None; }
 
 	//! Collects the memory information in the user program/application.
 	virtual void GetMemoryUsage(ICrySizer* pSizer) = 0;
@@ -523,7 +530,7 @@ struct ISystemEventDispatcher
 {
 	// <interfuscator:shuffle>
 	virtual ~ISystemEventDispatcher(){}
-	virtual bool RegisterListener(ISystemEventListener* pListener) = 0;
+	virtual bool RegisterListener(ISystemEventListener* pListener, const char* szName) = 0;
 	virtual bool RemoveListener(ISystemEventListener* pListener) = 0;
 
 	virtual void OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lparam, bool force_queue = false) = 0;
@@ -596,7 +603,6 @@ struct SControllerPairingChanged
 //! Structure passed to Init method of ISystem interface.
 struct SSystemInitParams
 {
-	void*                hInstance;
 	void*                hWnd;
 	ILog*                pLog;           //!< You can specify your own ILog to be used by System.
 	ILogCallback*        pLogCallback;   //!< You can specify your own ILogCallback to be added on log creation (used by Editor).
@@ -610,11 +616,10 @@ struct SSystemInitParams
 	char                 szSystemCmdLine[2048]; //!< Command line.
 	char                 szUserPath[256];       //!< User alias path relative to My Documents folder.
 	char                 szBinariesDir[256];
-	char                 szProjectDllDir[256];
 
 	bool                 bEditor;             //!< When running in Editor mode.
+	bool                 bManualEngineLoop;   //!< Whether or not the engine should manage the engine loop by itself
 	bool                 bPreview;            //!< When running in Preview mode (Minimal initialization).
-	bool                 bTestMode;           //!< When running in Automated testing mode.
 	bool                 bDedicatedServer;    //!< When running a dedicated server.
 	bool                 bExecuteCommandLine; //!< can be switched of to suppress the feature or do it later during the initialization.
 	bool                 bUIFramework;
@@ -626,7 +631,7 @@ struct SSystemInitParams
 	bool                 bSkipWebsocketServer; //!< Don't create the WebSocket server.
 	bool                 bMinimal;             //!< Don't load banks.
 	bool                 bSkipInput;           //!< do not load CryInput.
-	bool                 bTesting;             //!< CryUnit.
+	bool                 bTesting;             //!< When running CryUnitTest.
 	bool                 bNoRandom;            //!< use fixed generator init/seed.
 	bool                 bShaderCacheGen;      //!< When running in shadercache gen mode.
 	bool                 bUnattendedMode;      //!< When running as part of a build on build-machines: Prevent popping up of any dialog.
@@ -635,8 +640,9 @@ struct SSystemInitParams
 	const EPLM_Event* pLastPLMEvent;
 #endif
 
-	ISystem*      pSystem;                //!< Pointer to existing ISystem interface, it will be reused if not NULL.
-	IGameStartup* pGameStartup;           //!< Pointer to the calling GameStartup instance, to allow use of some game specific data during engine init.
+	ISystem*        pSystem;              //!< Pointer to existing ISystem interface, it will be reused if not NULL.
+	IGameStartup*   pGameStartup;         //!< Pointer to the calling GameStartup instance, to allow use of some game specific data during engine init.
+	IGameFramework* pGameFramework;       //!< Pointer to the framework that started the engine
 	//! Char szLocalIP[256];              //! local IP address (needed if we have several servers on one machine).
 #if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE
 	void (* pCheckFunc)(void*);            //!< Authentication function (must be set).
@@ -652,7 +658,6 @@ struct SSystemInitParams
 	//! Initialization defaults.
 	SSystemInitParams()
 	{
-		hInstance = NULL;
 		hWnd = NULL;
 		pLog = NULL;
 		pLogCallback = NULL;
@@ -666,10 +671,9 @@ struct SSystemInitParams
 		memset(szSystemCmdLine, 0, sizeof(szSystemCmdLine));
 		memset(szUserPath, 0, sizeof(szUserPath));
 		memset(szBinariesDir, 0, sizeof(szBinariesDir));
-		memset(szProjectDllDir, 0, sizeof(szProjectDllDir));
 		bEditor = false;
+		bManualEngineLoop = false;
 		bPreview = false;
-		bTestMode = false;
 		bDedicatedServer = false;
 		bExecuteCommandLine = true;
 		bUIFramework = false;
@@ -752,6 +756,19 @@ struct SPlatformInfo
 #endif
 };
 
+/// Cpu Features
+#define CPUF_FPUEMULATION 1
+#define CPUF_FP16         2
+#define CPUF_MMX          4
+#define CPUF_3DNOW        8
+#define CPUF_SSE          0x10
+#define CPUF_SSE2         0x20
+#define CPUF_SSE3         0x40
+#define CPUF_SSE4         0x80
+#define CPUF_AVX          0x100
+#define CPUF_AVX2         0x200
+#define CPUF_FMA          0x400
+
 //! Holds info about system update stats over perior of time (cvar-tweakable)
 struct SSystemUpdateStats
 {
@@ -783,7 +800,7 @@ struct SSystemGlobalEnvironment
 	IDialogSystem*               pDialogSystem;
 	I3DEngine*                   p3DEngine;
 	INetwork*                    pNetwork;
-	IOnline*                     pOnline;
+	INetContext*                 pNetContext;
 	ICryLobby*                   pLobby;
 	IScriptSystem*               pScriptSystem;
 	IPhysicalWorld*              pPhysicalWorld;
@@ -798,11 +815,11 @@ struct SSystemGlobalEnvironment
 	IFrameProfileSystem*         pFrameProfileSystem;
 	ITimer*                      pTimer;
 	ICryFont*                    pCryFont;
-	IGame*                       pGame;
+	IGameFramework*              pGameFramework;
 	ILocalMemoryUsage*           pLocalMemoryUsage;
 	IEntitySystem*               pEntitySystem;
 	IConsole*                    pConsole;
-	IAudioSystem*                pAudioSystem;
+	CryAudio::IAudioSystem*      pAudioSystem;
 	ISystem*                     pSystem;
 	ICharacterManager*           pCharacterManager;
 	IAISystem*                   pAISystem;
@@ -823,6 +840,7 @@ struct SSystemGlobalEnvironment
 	DRS::IDynamicResponseSystem* pDynamicResponseSystem;
 	IThreadManager*              pThreadManager;
 	IScaleformHelper*            pScaleformHelper; // nullptr when Scaleform support is not enabled
+	ICrySchematycCore*           pSchematyc;
 
 #if CRY_PLATFORM_DURANGO
 	void*      pWindow;
@@ -835,7 +853,7 @@ struct SSystemGlobalEnvironment
 	LiveCreate::IManager* pLiveCreateManager;
 	LiveCreate::IHost*    pLiveCreateHost;
 
-	IMonoRuntime*         pMonoRuntime;
+	IMonoEngineModule*    pMonoRuntime;
 
 	threadID              mMainThreadId;      //!< The main thread ID is used in multiple systems so should be stored globally.
 
@@ -872,6 +890,7 @@ struct SSystemGlobalEnvironment
 	bool bIgnoreAllAsserts;
 	bool bNoAssertDialog;
 	bool bTesting;
+	bool bStoppedOnAssert;
 	//////////////////////////////////////////////////////////////////////////
 
 	bool          bNoRandomSeed;
@@ -954,10 +973,7 @@ struct SSystemGlobalEnvironment
 	ILINE const bool IsEditing() const
 	{
 #if CRY_PLATFORM_DESKTOP
-		if (!pGame)
-			return bEditor;
-		else
-			return bEditor && !bEditorGameMode;
+		return bEditor && !bEditorGameMode;
 #else
 		return false;
 #endif
@@ -1129,6 +1145,8 @@ struct ISystem
 	//! it may call this method to render the essential statistics.
 	virtual void RenderStatistics() = 0;
 	virtual void RenderPhysicsStatistics(IPhysicalWorld* pWorld) = 0;
+	//! Renders physics helper, e.g. physics proxies
+	virtual void RenderPhysicsHelpers() = 0;
 
 	//! Returns the current used memory.
 	virtual uint32 GetUsedMemory() = 0;
@@ -1137,7 +1155,7 @@ struct ISystem
 	virtual const char* GetUserName() = 0;
 
 	//! Gets current supported CPU features flags. (CPUF_SSE, CPUF_SSE2, CPUF_3DNOW, CPUF_MMX)
-	virtual int GetCPUFlags() = 0;
+	virtual uint32 GetCPUFlags() = 0;
 
 	//! Gets number of CPUs
 	virtual int GetLogicalCPUCount() = 0;
@@ -1185,47 +1203,55 @@ struct ISystem
 
 	//! Report message by provider or by using CryMessageBox.
 	//! Doesn't terminate the execution.
-	virtual int ShowMessage(const char* text, const char* caption, unsigned int uType) = 0;
+	virtual EQuestionResult ShowMessage(const char* text, const char* caption, EMessageBox uType) = 0;
 
 	//! Compare specified verbosity level to the one currently set.
 	virtual bool CheckLogVerbosity(int verbosity) = 0;
 
 	virtual bool IsUIFrameworkMode() { return false; }
 
+	//! Fills the output array by random numbers using CMTRand_int32 generator
+	virtual void     FillRandomMT(uint32* pOutWords, uint32 numWords) = 0;
+
+	virtual CRndGen& GetRandomGenerator() = 0;
+
 	// Return the related subsystem interface.
 
-	virtual IZLibCompressor*       GetIZLibCompressor() = 0;
-	virtual IZLibDecompressor*     GetIZLibDecompressor() = 0;
-	virtual ILZ4Decompressor*      GetLZ4Decompressor() = 0;
-	virtual ICryPerfHUD*           GetPerfHUD() = 0;
-	virtual IPlatformOS*           GetPlatformOS() = 0;
-	virtual INotificationNetwork*  GetINotificationNetwork() = 0;
-	virtual IHardwareMouse*        GetIHardwareMouse() = 0;
-	virtual IDialogSystem*         GetIDialogSystem() = 0;
-	virtual IFlowSystem*           GetIFlowSystem() = 0;
-	virtual IBudgetingSystem*      GetIBudgetingSystem() = 0;
-	virtual INameTable*            GetINameTable() = 0;
-	virtual IDiskProfiler*         GetIDiskProfiler() = 0;
-	virtual IFrameProfileSystem*   GetIProfileSystem() = 0;
-	virtual IValidator*            GetIValidator() = 0;
-	virtual IPhysicsDebugRenderer* GetIPhysicsDebugRenderer() = 0;
-	virtual IPhysRenderer*         GetIPhysRenderer() = 0;
-	virtual ICharacterManager*     GetIAnimationSystem() = 0;
-	virtual IStreamEngine*         GetStreamEngine() = 0;
-	virtual ICmdLine*              GetICmdLine() = 0;
-	virtual ILog*                  GetILog() = 0;
-	virtual ICryPak*               GetIPak() = 0;
-	virtual ICryFont*              GetICryFont() = 0;
-	virtual IEntitySystem*         GetIEntitySystem() = 0;
-	virtual IMemoryManager*        GetIMemoryManager() = 0;
-	virtual IAISystem*             GetAISystem() = 0;
-	virtual IMovieSystem*          GetIMovieSystem() = 0;
-	virtual IPhysicalWorld*        GetIPhysicalWorld() = 0;
-	virtual IAudioSystem*          GetIAudioSystem() = 0;
-	virtual I3DEngine*             GetI3DEngine() = 0;
-	virtual IScriptSystem*         GetIScriptSystem() = 0;
-	virtual IConsole*              GetIConsole() = 0;
-	virtual IRemoteConsole*        GetIRemoteConsole() = 0;
+	virtual IZLibCompressor*        GetIZLibCompressor() = 0;
+	virtual IZLibDecompressor*      GetIZLibDecompressor() = 0;
+	virtual ILZ4Decompressor*       GetLZ4Decompressor() = 0;
+	virtual ICryPerfHUD*            GetPerfHUD() = 0;
+	virtual IPlatformOS*            GetPlatformOS() = 0;
+	virtual INotificationNetwork*   GetINotificationNetwork() = 0;
+	virtual IHardwareMouse*         GetIHardwareMouse() = 0;
+	virtual IDialogSystem*          GetIDialogSystem() = 0;
+	virtual IFlowSystem*            GetIFlowSystem() = 0;
+	virtual IBudgetingSystem*       GetIBudgetingSystem() = 0;
+	virtual INameTable*             GetINameTable() = 0;
+	virtual IDiskProfiler*          GetIDiskProfiler() = 0;
+	virtual IFrameProfileSystem*    GetIProfileSystem() = 0;
+	virtual IValidator*             GetIValidator() = 0;
+	virtual IPhysicsDebugRenderer*  GetIPhysicsDebugRenderer() = 0;
+	virtual IPhysRenderer*          GetIPhysRenderer() = 0;
+	virtual ICharacterManager*      GetIAnimationSystem() = 0;
+	virtual IStreamEngine*          GetStreamEngine() = 0;
+	virtual ICmdLine*               GetICmdLine() = 0;
+	virtual ILog*                   GetILog() = 0;
+	virtual ICryPak*                GetIPak() = 0;
+	virtual ICryFont*               GetICryFont() = 0;
+	virtual IEntitySystem*          GetIEntitySystem() = 0;
+	virtual IMemoryManager*         GetIMemoryManager() = 0;
+	virtual IAISystem*              GetAISystem() = 0;
+	virtual IMovieSystem*           GetIMovieSystem() = 0;
+	virtual IPhysicalWorld*         GetIPhysicalWorld() = 0;
+	virtual CryAudio::IAudioSystem* GetIAudioSystem() = 0;
+	virtual I3DEngine*              GetI3DEngine() = 0;
+	virtual IScriptSystem*          GetIScriptSystem() = 0;
+	virtual IConsole*               GetIConsole() = 0;
+	virtual IRemoteConsole*         GetIRemoteConsole() = 0;
+	virtual IUserAnalyticsSystem*   GetIUserAnalyticsSystem() = 0;
+	virtual ICryPluginManager*      GetIPluginManager() = 0;
+	virtual IProjectManager*        GetIProjectManager() = 0;
 
 	//! \return Can be NULL, because it only exists when running through the editor, not in pure game mode.
 	virtual IResourceManager*                  GetIResourceManager() = 0;
@@ -1236,28 +1262,25 @@ struct ISystem
 
 	virtual WIN_HWND                           GetHWND() = 0;
 
-	virtual IGame*                             GetIGame() = 0;
 	virtual INetwork*                          GetINetwork() = 0;
 	virtual IRenderer*                         GetIRenderer() = 0;
 	virtual IInput*                            GetIInput() = 0;
 	virtual ITimer*                            GetITimer() = 0;
 
 	virtual IThreadManager*                    GetIThreadManager() = 0;
-	virtual IMonoRuntime*                      GetIMonoRuntime() = 0;
+	virtual IMonoEngineModule*                 GetIMonoEngineModule() = 0;
 
 	virtual void                               SetLoadingProgressListener(ILoadingProgressListener* pListener) = 0;
 	virtual ISystem::ILoadingProgressListener* GetLoadingProgressListener() const = 0;
 
-	//! Game is created after System init, so has to be set explicitly.
-	virtual void SetIGame(IGame* pGame) = 0;
-	virtual void SetIFlowSystem(IFlowSystem* pFlowSystem) = 0;
-	virtual void SetIDialogSystem(IDialogSystem* pDialogSystem) = 0;
-	virtual void SetIMaterialEffects(IMaterialEffects* pMaterialEffects) = 0;
-	virtual void SetIParticleManager(IParticleManager* pParticleManager) = 0;
-	virtual void SetIOpticsManager(IOpticsManager* pOpticsManager) = 0;
-	virtual void SetIFileChangeMonitor(IFileChangeMonitor* pFileChangeMonitor) = 0;
-	virtual void SetIFlashUI(IFlashUI* pFlashUI) = 0;
-	virtual void SetIUIFramework(UIFramework::IUIFramework* pUIFramework) = 0;
+	virtual void                               SetIFlowSystem(IFlowSystem* pFlowSystem) = 0;
+	virtual void                               SetIDialogSystem(IDialogSystem* pDialogSystem) = 0;
+	virtual void                               SetIMaterialEffects(IMaterialEffects* pMaterialEffects) = 0;
+	virtual void                               SetIParticleManager(IParticleManager* pParticleManager) = 0;
+	virtual void                               SetIOpticsManager(IOpticsManager* pOpticsManager) = 0;
+	virtual void                               SetIFileChangeMonitor(IFileChangeMonitor* pFileChangeMonitor) = 0;
+	virtual void                               SetIFlashUI(IFlashUI* pFlashUI) = 0;
+	virtual void                               SetIUIFramework(UIFramework::IUIFramework* pUIFramework) = 0;
 
 	//! Changes current user sub path, the path is always relative to the user documents folder.
 	//! Example: "My Games\Crysis"
@@ -1310,9 +1333,6 @@ struct ISystem
 	//! \return Pointer to the current active process.
 	virtual IProcess* GetIProcess() = 0;
 
-	//! \return true if system running in Test mode.
-	virtual bool IsTestMode() const = 0;
-
 	//! Frame profiler functions.
 	virtual void SetFrameProfiler(bool on, bool display, char* prefix) = 0;
 
@@ -1325,10 +1345,10 @@ struct ISystem
 	virtual void EndLoadingSectionProfiling(CLoadingTimeProfiler* pProfiler) = 0;
 
 	//! Starts function profiling with bootprofiler (session must be started).
-	virtual CBootProfilerRecord* StartBootSectionProfiler(const char* name, const char* args, unsigned int& sessionIndex) = 0;
+	virtual CBootProfilerRecord* StartBootSectionProfiler(const char* name, const char* args) = 0;
 
 	//! Ends function profiling with bootprofiler.
-	virtual void StopBootSectionProfiler(CBootProfilerRecord* record, const unsigned int sessionIndex) = 0;
+	virtual void StopBootSectionProfiler(CBootProfilerRecord* record) = 0;
 
 	// Summary:
 	//	 Starts bootprofiler session.
@@ -1530,12 +1550,31 @@ struct ISystem
 	//! Initializes Steam if needed and returns if it was successful.
 	virtual bool SteamInit() = 0;
 
+	//! Loads a dynamic library and returns the first factory with the specified interface id contained inside the module
+	virtual ICryFactory* LoadModuleWithFactory(const char* szDllName, const CryInterfaceID& moduleInterfaceId) = 0;
+
+	//! Loads a dynamic library and creates an instance of the first factory contained inside the module
+	template<typename T>
+	inline std::shared_ptr<T> LoadModuleAndCreateFactoryInstance(const char* szDllName, const SSystemInitParams& initParams)
+	{
+		if (ICryFactory* pFactory = LoadModuleWithFactory(szDllName, cryiidof<T>()))
+		{
+			// Create an instance of the implementation
+			std::shared_ptr<T> pModule = cryinterface_cast<T, ICryUnknown>(pFactory->CreateClassInstance());
+
+			pModule->Initialize(*GetGlobalEnvironment(), initParams);
+
+			return pModule;
+		}
+
+		return nullptr;
+	}
+
 	//! Loads a dynamic library, creates and initializes an instance of the module class
-	//! \note HintEaaS is used to load EaaS release configuration, it's ignored in all other configurations; pass true if the sourcecode for the module is available to EaaS users.
-	virtual bool InitializeEngineModule(const char* dllName, const char* moduleClassName, const SSystemInitParams& initParams, bool bQuitIfNotFound) = 0;
+	virtual bool InitializeEngineModule(const char* szDllName, const CryInterfaceID& moduleInterfaceId, bool bQuitIfNotFound) = 0;
 
 	//! Unloads a dynamic library as well as the corresponding instance of the module class
-	virtual bool UnloadEngineModule(const char* dllName, const char* moduleClassName) = 0;
+	virtual bool UnloadEngineModule(const char* szDllName) = 0;
 
 	//! Gets the root window message handler function.
 	//! The returned pointer is platform-specific: for Windows OS, the pointer is of type WNDPROC
@@ -1559,6 +1598,9 @@ struct ISystem
 	//! Note: This flag depends on compile-time settings, it cannot be enabled or disabled at runtime
 	//! However, the support itself can typically be enabled/disabled through CVar
 	virtual bool IsImeSupported() const = 0;
+
+	//! Returns the IME manager in use.
+	virtual IImeManager* GetImeManager() const = 0;
 };
 
 //! This is a very important function for the dedicated server - it lets us run >1000 players per piece of server hardware.
@@ -1636,19 +1678,35 @@ class CSYSBootProfileBlock
 {
 	ISystem*             m_pSystem;
 	CBootProfilerRecord* m_pRecord;
-	unsigned int         m_sessionIndex;
 public:
-	CSYSBootProfileBlock(ISystem* pSystem, const char* name, const char* args = NULL) : m_pSystem(pSystem), m_sessionIndex(~0U)
+	CSYSBootProfileBlock(ISystem* pSystem, const char* name, const char* args = NULL) : m_pSystem(pSystem)
 	{
-		m_pRecord = m_pSystem ? m_pSystem->StartBootSectionProfiler(name, args, m_sessionIndex) : nullptr;
+		m_pRecord = m_pSystem ? m_pSystem->StartBootSectionProfiler(name, args) : nullptr;
 	}
 
 	~CSYSBootProfileBlock()
 	{
 		if (m_pRecord)
 		{
-			m_pSystem->StopBootSectionProfiler(m_pRecord, m_sessionIndex);
+			m_pSystem->StopBootSectionProfiler(m_pRecord);
 		}
+	}
+};
+
+class CSYSBootProfileAutoSession
+{
+	ISystem*    m_pSystem;
+	const char* m_szSessionName;
+public:
+	CSYSBootProfileAutoSession(ISystem* pSystem, const char* szSessionName)
+		: m_pSystem(pSystem), m_szSessionName(szSessionName)
+	{
+		m_pSystem->StartBootProfilerSession(m_szSessionName);
+	}
+
+	~CSYSBootProfileAutoSession()
+	{
+		m_pSystem->StopBootProfilerSession(m_szSessionName);
 	}
 };
 
@@ -1656,6 +1714,7 @@ public:
 	#define LOADING_TIME_PROFILE_SECTION_ARGS(args)                    CSYSBootProfileBlock _profileBlockLine_args(gEnv->pSystem, __FUNC__, args);
 	#define LOADING_TIME_PROFILE_SECTION_NAMED(sectionName)            CSYSBootProfileBlock _profileBlockLine_named(gEnv->pSystem, sectionName);
 	#define LOADING_TIME_PROFILE_SECTION_NAMED_ARGS(sectionName, args) CSYSBootProfileBlock _profileBlockLine_named_args(gEnv->pSystem, sectionName, args);
+	#define LOADING_TIME_PROFILE_AUTO_SESSION(sessionName)             CSYSBootProfileAutoSession _profileAutoSession(gEnv->pSystem, (sessionName));
 
 #else
 
@@ -1663,9 +1722,7 @@ public:
 	#define LOADING_TIME_PROFILE_SECTION_ARGS(args)
 	#define LOADING_TIME_PROFILE_SECTION_NAMED(sectionName)
 	#define LOADING_TIME_PROFILE_SECTION_NAMED_ARGS(sectionName, args)
-	#define LOADING_TIME_PROFILE_SESSION_SECTION(sessionName)
-	#define LOADING_TIME_PROFILE_SESSION_START(sessionName)
-	#define LOADING_TIME_PROFILE_SESSION_STOP(sessionName)
+	#define LOADING_TIME_PROFILE_AUTO_SESSION(sessionName)
 
 #endif
 
@@ -1745,6 +1802,121 @@ inline void CryWarning(EValidatorModule module, EValidatorSeverity severity, con
 	#define CONST_CVAR_FLAGS (VF_CHEAT)
 #endif
 
+#include <CrySystem/IConsole.h>
+
+#if (defined(_LAUNCHER) && defined(CRY_IS_MONOLITHIC_BUILD)) || !defined(_LIB)
+extern std::vector<const char*> g_moduleCommands;
+extern std::vector<const char*> g_moduleCVars;
+#define MODULE_REGISTER_COMMAND(name) g_moduleCommands.push_back(name)
+#define MODULE_REGISTER_CVAR(name) g_moduleCVars.push_back(name)
+#else
+#define MODULE_REGISTER_COMMAND(name) static_cast<void>(0)
+#define MODULE_REGISTER_CVAR(name) static_cast<void>(0)
+#endif
+
+struct ConsoleRegistrationHelper
+{
+	static CRY_FORCE_INLINE void AddCommand(const char* szCommand, ConsoleCommandFunc func, int flags = 0, const char* szHelp = nullptr, bool bIsManagedExternally = false)
+	{
+		CRY_ASSERT(gEnv && gEnv->pConsole);
+		MODULE_REGISTER_COMMAND(szCommand);
+		gEnv->pConsole->AddCommand(szCommand, func, flags, szHelp, bIsManagedExternally);
+	}
+	static CRY_FORCE_INLINE void AddCommand(const char* szName, const char* szScriptFunc, int flags = 0, const char* szHelp = nullptr)
+	{
+		CRY_ASSERT(gEnv && gEnv->pConsole);
+		MODULE_REGISTER_COMMAND(szName);
+		gEnv->pConsole->AddCommand(szName, szScriptFunc, flags, szHelp);
+	}
+
+	static CRY_FORCE_INLINE ICVar* RegisterString(const char* szName, const char* szValue, int flags, const char* szHelp = "", ConsoleVarFunc pChangeFunc = nullptr)
+	{
+		CRY_ASSERT(gEnv && gEnv->pConsole);
+		if (gEnv && gEnv->pConsole)
+		{
+			MODULE_REGISTER_CVAR(szName);
+			return gEnv->pConsole->RegisterString(szName, szValue, flags, szHelp, pChangeFunc);
+		}
+		else
+		{
+			return nullptr;
+		}
+	}
+	static CRY_FORCE_INLINE ICVar* RegisterInt(const char* szName, int value, int flags, const char* szHelp = "", ConsoleVarFunc pChangeFunc = nullptr)
+	{
+		CRY_ASSERT(gEnv && gEnv->pConsole);
+		if (gEnv && gEnv->pConsole)
+		{
+			MODULE_REGISTER_CVAR(szName);
+			return gEnv->pConsole->RegisterInt(szName, value, flags, szHelp, pChangeFunc);
+		}
+		else
+		{
+			return nullptr;
+		}
+	}
+	static CRY_FORCE_INLINE ICVar* RegisterInt64(const char* szName, int64 value, int flags, const char* szHelp = "", ConsoleVarFunc pChangeFunc = nullptr)
+	{
+		CRY_ASSERT(gEnv && gEnv->pConsole);
+		if (gEnv && gEnv->pConsole)
+		{
+			MODULE_REGISTER_CVAR(szName);
+			return gEnv->pConsole->RegisterInt64(szName, value, flags, szHelp, pChangeFunc);
+		}
+		else
+		{
+			return nullptr;
+		}
+	}
+	static CRY_FORCE_INLINE ICVar* RegisterFloat(const char* szName, float value, int flags, const char* szHelp = "", ConsoleVarFunc pChangeFunc = nullptr)
+	{
+		CRY_ASSERT(gEnv && gEnv->pConsole);
+		if (gEnv && gEnv->pConsole)
+		{
+			MODULE_REGISTER_CVAR(szName);
+			return gEnv->pConsole->RegisterFloat(szName, value, flags, szHelp, pChangeFunc);
+		}
+		else
+		{
+			return nullptr;
+		}
+	}
+
+	template<class T, class U>
+	static CRY_FORCE_INLINE ICVar* Register(const char* szName, T* pSrc, U defaultValue, int flags = 0, const char* szHelp = "", ConsoleVarFunc pChangeFunc = nullptr, bool bAllowModify = true)
+	{
+		static_assert(std::is_same<T, int>::value || std::is_same<T, float>::value || std::is_same<T, const char*>::value, "Invalid template type!");
+		static_assert(std::is_convertible<U, T>::value, "Invalid default value type!");
+
+		CRY_ASSERT(gEnv && gEnv->pConsole);
+		if (gEnv && gEnv->pConsole)
+		{
+			MODULE_REGISTER_CVAR(szName);
+			return gEnv->pConsole->Register(szName, pSrc, static_cast<T>(defaultValue), flags, szHelp, pChangeFunc, bAllowModify);
+		}
+		else
+		{
+			return nullptr;
+		}
+	}
+	static CRY_FORCE_INLINE ICVar* Register(ICVar* pVar)
+	{
+		CRY_ASSERT(gEnv && gEnv->pConsole);
+		if (gEnv && gEnv->pConsole)
+		{
+			MODULE_REGISTER_CVAR(pVar->GetName());
+			return gEnv->pConsole->Register(pVar);
+		}
+		else
+		{
+			return nullptr;
+		}
+	}
+};
+
+#undef MODULE_REGISTER_COMMAND
+#undef MODULE_REGISTER_CVAR
+
 #if defined(_RELEASE) && !CRY_PLATFORM_DESKTOP
 	#ifndef LOG_CONST_CVAR_ACCESS
 		#error LOG_CONST_CVAR_ACCESS should be defined in ProjectDefines.h
@@ -1802,56 +1974,56 @@ struct SDummyCVar : ICVar
 	#endif
 	}
 
-	void            Release()                                             {}
-	int             GetIVal() const                                       { WarnUse(); return static_cast<int>(value); }
-	int64           GetI64Val() const                                     { WarnUse(); return static_cast<int64>(value); }
-	float           GetFVal() const                                       { WarnUse(); return static_cast<float>(value); }
-	const char*     GetString() const                                     { return ""; }
-	const char*     GetDataProbeString() const                            { return ""; }
-	void            Set(const char* s)                                    { if (SQueryTypeEnum<T>::ParseString(s) != value) InvalidAccess(); }
-	void            ForceSet(const char* s)                               { Set(s); }
-	void            Set(const float f)                                    { if (static_cast<T>(f) != value) InvalidAccess(); }
-	void            Set(const int i)                                      { if (static_cast<T>(i) != value) InvalidAccess(); }
-	void            ClearFlags(int flags)                                 {}
-	int             GetFlags() const                                      { return VF_CONST_CVAR | VF_READONLY; }
-	int             SetFlags(int flags)                                   { return 0; }
-	int             GetType()                                             { return SQueryTypeEnum<T>::type; }
-	const char*     GetHelp()                                             { return NULL; }
-	bool            IsConstCVar() const                                   { return true; }
-	void            SetOnChangeCallback(ConsoleVarFunc pChangeFunc)       { (void)pChangeFunc; }
-	void            AddOnChangeFunctor(const SFunctor& /*changeFunctor*/) {}
-	uint64          GetNumberOfOnChangeFunctors() const                   { return 0; }
-	const SFunctor& GetOnChangeFunctor(uint64 nFunctorIndex) const        { InvalidAccess(); return *(const SFunctor*)NULL; }
-	bool            RemoveOnChangeFunctor(const uint64 nElement)          { return true; }
-	ConsoleVarFunc  GetOnChangeCallback() const                           { InvalidAccess(); return NULL; }
-	void            GetMemoryUsage(class ICrySizer* pSizer) const         {}
-	int             GetRealIVal() const                                   { return GetIVal(); }
-	void            SetDataProbeString(const char* pDataProbeString)      { InvalidAccess(); }
+	void            Release() override                                             {}
+	int             GetIVal() const override                                       { WarnUse(); return static_cast<int>(value); }
+	int64           GetI64Val() const override                                     { WarnUse(); return static_cast<int64>(value); }
+	float           GetFVal() const override                                       { WarnUse(); return static_cast<float>(value); }
+	const char*     GetString() const override                                     { return ""; }
+	const char*     GetDataProbeString() const override                            { return ""; }
+	void            Set(const char* s) override                                    { if (SQueryTypeEnum<T>::ParseString(s) != value) InvalidAccess(); }
+	void            ForceSet(const char* s) override                               { Set(s); }
+	void            Set(const float f) override                                    { if (static_cast<T>(f) != value) InvalidAccess(); }
+	void            Set(const int i) override                                      { if (static_cast<T>(i) != value) InvalidAccess(); }
+	void            ClearFlags(int flags) override                                 {}
+	int             GetFlags() const override                                      { return VF_CONST_CVAR | VF_READONLY; }
+	int             SetFlags(int flags) override                                   { return 0; }
+	int             GetType() override                                             { return SQueryTypeEnum<T>::type; }
+	const char*     GetHelp() override                                             { return NULL; }
+	bool            IsConstCVar() const override                                   { return true; }
+	void            SetOnChangeCallback(ConsoleVarFunc pChangeFunc) override       { (void)pChangeFunc; }
+	uint64          AddOnChangeFunctor(const SFunctor& /*changeFunctor*/) override { return 0;  }
+	uint64          GetNumberOfOnChangeFunctors() const override                   { return 0; }
+	const SFunctor& GetOnChangeFunctor(uint64 nFunctorIndex) const override        { InvalidAccess();  static SFunctor oDummy; return oDummy; }
+	bool            RemoveOnChangeFunctor(const uint64 nElement) override          { return true; }
+	ConsoleVarFunc  GetOnChangeCallback() const override                           { InvalidAccess(); return NULL; }
+	void            GetMemoryUsage(class ICrySizer* pSizer) const override         {}
+	int             GetRealIVal() const override                                   { return GetIVal(); }
+	void            SetDataProbeString(const char* pDataProbeString)               { InvalidAccess(); }
 };
 }
 
-	#define REGISTER_DUMMY_CVAR(type, name, value)                                       \
-	  do {                                                                               \
-	    static struct DummyCVar : Detail::SDummyCVar<type>                               \
-	    {                                                                                \
-	      DummyCVar() : Detail::SDummyCVar<type>(value) {}                               \
-	      const char* GetName() const { return name; }                                   \
-	    } DummyStaticInstance;                                                           \
-	    if (!(gEnv->pConsole != 0 ? gEnv->pConsole->Register(&DummyStaticInstance) : 0)) \
-	    {                                                                                \
-	      __debugbreak();                                                                \
-	      CryFatalError("Can not register dummy CVar");                                  \
-	    }                                                                                \
+	#define REGISTER_DUMMY_CVAR(type, name, value)                                                        \
+	  do {                                                                                                \
+	    static struct DummyCVar : Detail::SDummyCVar<type>                                                \
+	    {                                                                                                 \
+	      DummyCVar() : Detail::SDummyCVar<type>(value) {}                                                \
+	      const char* GetName() const { return name; }                                                    \
+	    } DummyStaticInstance;                                                                            \
+	    if (!(gEnv->pConsole != nullptr ? ConsoleRegistrationHelper::Register(&DummyStaticInstance) : 0)) \
+	    {                                                                                                 \
+	      __debugbreak();                                                                                 \
+	      CryFatalError("Can not register dummy CVar");                                                   \
+	    }                                                                                                 \
 	  } while (0)
 
 	#define CONSOLE_CONST_CVAR_MODE
 	#define DeclareConstIntCVar(name, defaultValue)                          enum : int { name = (defaultValue) }
 	#define DeclareStaticConstIntCVar(name, defaultValue)                    enum : int { name = (defaultValue) }
-	#define DefineConstIntCVarName(strname, name, defaultValue, flags, help) { COMPILE_TIME_ASSERT((int)(defaultValue) == (int)(name)); REGISTER_DUMMY_CVAR(int, strname, defaultValue); }
-	#define DefineConstIntCVar(name, defaultValue, flags, help)              { COMPILE_TIME_ASSERT((int)(defaultValue) == (int)(name)); REGISTER_DUMMY_CVAR(int, ( # name), defaultValue); }
+	#define DefineConstIntCVarName(strname, name, defaultValue, flags, help) { static_assert(static_cast<int>(defaultValue) == static_cast<int>(name), "Unexpected value!"); REGISTER_DUMMY_CVAR(int, strname, defaultValue); }
+	#define DefineConstIntCVar(name, defaultValue, flags, help)              { static_assert(static_cast<int>(defaultValue) == static_cast<int>(name), "Unexpected value!"); REGISTER_DUMMY_CVAR(int, ( # name), defaultValue); }
 
 //! DefineConstIntCVar2 is deprecated, any such instance can be converted to the 3 variant by removing the quotes around the first parameter.
-	#define DefineConstIntCVar3(name, _var_, defaultValue, flags, help) { COMPILE_TIME_ASSERT((int)(defaultValue) == (int)(_var_)); REGISTER_DUMMY_CVAR(int, name, defaultValue); }
+	#define DefineConstIntCVar3(name, _var_, defaultValue, flags, help) { static_assert(static_cast<int>(defaultValue) == static_cast<int>(_var_), "Unexpected value!"); REGISTER_DUMMY_CVAR(int, name, defaultValue); }
 	#define AllocateConstIntCVar(scope, name)
 
 	#define DefineConstFloatCVar(name, flags, help) { REGISTER_DUMMY_CVAR(float, ( # name), name ## Default); }
@@ -1863,73 +2035,62 @@ struct SDummyCVar : ICVar
 
 	#define DeclareConstIntCVar(name, defaultValue)       int name
 	#define DeclareStaticConstIntCVar(name, defaultValue) static int name
-	#define DefineConstIntCVarName(strname, name, defaultValue, flags, help) \
-	  (gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(strname, &name, defaultValue, flags | CONST_CVAR_FLAGS, CVARHELP(help)))
-	#define DefineConstIntCVar(name, defaultValue, flags, help) \
-	  (gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(( # name), &name, defaultValue, flags | CONST_CVAR_FLAGS, CVARHELP(help), 0, false))
+	#define DefineConstIntCVarName(strname, name, defaultValue, flags, help) ConsoleRegistrationHelper::Register(strname, &name, defaultValue, flags | CONST_CVAR_FLAGS, CVARHELP(help))
+	#define DefineConstIntCVar(name, defaultValue, flags, help) ConsoleRegistrationHelper::Register(( # name), &name, defaultValue, flags | CONST_CVAR_FLAGS, CVARHELP(help), nullptr, false)
 
 //! DefineConstIntCVar2 is deprecated, any such instance can be converted to the 3 variant by removing the quotes around the first parameter.
-	#define DefineConstIntCVar3(_name, _var, _def_val, _flags, help) \
-	  (gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(_name, &(_var), (_def_val), (_flags) | CONST_CVAR_FLAGS, CVARHELP(help), 0, false))
+	#define DefineConstIntCVar3(_name, _var, _def_val, _flags, help) ConsoleRegistrationHelper::Register(_name, &(_var), (_def_val), (_flags) | CONST_CVAR_FLAGS, CVARHELP(help), nullptr, false)
 	#define AllocateConstIntCVar(scope, name) int scope::name
 
-	#define DefineConstFloatCVar(name, flags, help) \
-	  (gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(( # name), &name, name ## Default, flags | CONST_CVAR_FLAGS, CVARHELP(help), 0, false))
+	#define DefineConstFloatCVar(name, flags, help) ConsoleRegistrationHelper::Register(( # name), &name, name ## Default, flags | CONST_CVAR_FLAGS, CVARHELP(help), nullptr, false)
 	#define DeclareConstFloatCVar(name)         float name
 	#define DeclareStaticConstFloatCVar(name)   static float name
 	#define AllocateConstFloatCVar(scope, name) float scope::name
 #endif
 
-#if defined(USE_CRY_ASSERT)
-static void AssertConsoleExists(void)
-{
-	CRY_ASSERT(gEnv->pConsole != NULL);
-}
-	#define ASSERT_CONSOLE_EXISTS AssertConsoleExists()
-#else
-	#define ASSERT_CONSOLE_EXISTS 0
-#endif // defined(USE_CRY_ASSERT)
-
 //! The following macros allow the help text to be easily stripped out.
 
 //! Preferred way to register a CVar
-#define REGISTER_CVAR(_var, _def_val, _flags, _comment) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(( # _var), &(_var), (_def_val), (_flags), CVARHELP(_comment)))
+#define REGISTER_CVAR(_var, _def_val, _flags, _comment) ConsoleRegistrationHelper::Register(( # _var), &(_var), (_def_val), (_flags), CVARHELP(_comment))
 
 //! Preferred way to register a CVar with a callback
-#define REGISTER_CVAR_CB(_var, _def_val, _flags, _comment, _onchangefunction) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(( # _var), &(_var), (_def_val), (_flags), CVARHELP(_comment), _onchangefunction))
+#define REGISTER_CVAR_CB(_var, _def_val, _flags, _comment, _onchangefunction) ConsoleRegistrationHelper::Register(( # _var), &(_var), (_def_val), (_flags), CVARHELP(_comment), _onchangefunction)
 
 //! Preferred way to register a string CVar
-#define REGISTER_STRING(_name, _def_val, _flags, _comment) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->RegisterString(_name, (_def_val), (_flags), CVARHELP(_comment)))
+#define REGISTER_STRING(_name, _def_val, _flags, _comment) ConsoleRegistrationHelper::RegisterString(_name, (_def_val), (_flags), CVARHELP(_comment))
 
 //! Preferred way to register a string CVar with a callback
-#define REGISTER_STRING_CB(_name, _def_val, _flags, _comment, _onchangefunction) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->RegisterString(_name, (_def_val), (_flags), CVARHELP(_comment), _onchangefunction))
+#define REGISTER_STRING_CB(_name, _def_val, _flags, _comment, _onchangefunction) ConsoleRegistrationHelper::RegisterString(_name, (_def_val), (_flags), CVARHELP(_comment), _onchangefunction)
 
 //! Preferred way to register an int CVar
-#define REGISTER_INT(_name, _def_val, _flags, _comment) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->RegisterInt(_name, (_def_val), (_flags), CVARHELP(_comment)))
+#define REGISTER_INT(_name, _def_val, _flags, _comment) ConsoleRegistrationHelper::RegisterInt(_name, (_def_val), (_flags), CVARHELP(_comment))
 
 //! Preferred way to register an int CVar with a callback
-#define REGISTER_INT_CB(_name, _def_val, _flags, _comment, _onchangefunction) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->RegisterInt(_name, (_def_val), (_flags), CVARHELP(_comment), _onchangefunction))
+#define REGISTER_INT_CB(_name, _def_val, _flags, _comment, _onchangefunction) ConsoleRegistrationHelper::RegisterInt(_name, (_def_val), (_flags), CVARHELP(_comment), _onchangefunction)
 
 //! Preferred way to register an int64 CVar
-#define REGISTER_INT64(_name, _def_val, _flags, _comment) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->RegisterInt64(_name, (_def_val), (_flags), CVARHELP(_comment)))
+#define REGISTER_INT64(_name, _def_val, _flags, _comment) ConsoleRegistrationHelper::RegisterInt64(_name, (_def_val), (_flags), CVARHELP(_comment))
 
 //! Preferred way to register a float CVar
-#define REGISTER_FLOAT(_name, _def_val, _flags, _comment) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->RegisterFloat(_name, (_def_val), (_flags), CVARHELP(_comment)))
+#define REGISTER_FLOAT(_name, _def_val, _flags, _comment) ConsoleRegistrationHelper::RegisterFloat(_name, (_def_val), (_flags), CVARHELP(_comment))
 
 //! Offers more flexibility but more code is required
-#define REGISTER_CVAR2(_name, _var, _def_val, _flags, _comment) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(_name, _var, (_def_val), (_flags), CVARHELP(_comment)))
+#define REGISTER_CVAR2(_name, _var, _def_val, _flags, _comment) ConsoleRegistrationHelper::Register(_name, _var, (_def_val), (_flags), CVARHELP(_comment))
 
 //! Offers more flexibility but more code is required
-#define REGISTER_CVAR2_CB(_name, _var, _def_val, _flags, _comment, _onchangefunction) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(_name, _var, (_def_val), (_flags), CVARHELP(_comment), _onchangefunction))
+#define REGISTER_CVAR2_CB(_name, _var, _def_val, _flags, _comment, _onchangefunction) ConsoleRegistrationHelper::Register(_name, _var, (_def_val), (_flags), CVARHELP(_comment), _onchangefunction)
 
 //! Offers more flexibility but more code is required, explicit address taking of destination variable
-#define REGISTER_CVAR3(_name, _var, _def_val, _flags, _comment) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(_name, &(_var), (_def_val), (_flags), CVARHELP(_comment)))
+#define REGISTER_CVAR3(_name, _var, _def_val, _flags, _comment) ConsoleRegistrationHelper::Register(_name, &(_var), (_def_val), (_flags), CVARHELP(_comment))
 
 //! Offers more flexibility but more code is required, explicit address taking of destination variable
-#define REGISTER_CVAR3_CB(_name, _var, _def_val, _flags, _comment, _onchangefunction) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? 0 : gEnv->pConsole->Register(_name, &(_var), (_def_val), (_flags), CVARHELP(_comment), _onchangefunction))
+#define REGISTER_CVAR3_CB(_name, _var, _def_val, _flags, _comment, _onchangefunction) ConsoleRegistrationHelper::Register(_name, &(_var), (_def_val), (_flags), CVARHELP(_comment), _onchangefunction)
 
 //! Preferred way to register a console command
-#define REGISTER_COMMAND(_name, _func, _flags, _comment) (ASSERT_CONSOLE_EXISTS, gEnv->pConsole == 0 ? (void)0 : gEnv->pConsole->AddCommand(_name, _func, (_flags), CVARHELP(_comment)))
+#define REGISTER_COMMAND(_name, _func, _flags, _comment) ConsoleRegistrationHelper::AddCommand(_name, _func, (_flags), CVARHELP(_comment))
+
+//! Preferred way to register an externally managed console command
+#define REGISTER_MANAGED_COMMAND(_name, _func, _flags, _comment) ConsoleRegistrationHelper::AddCommand(_name, _func, (_flags), CVARHELP(_comment), true)
 
 ////////////////////////////////////////////////////////////////////////////////
 //! Development only cvars.
@@ -1942,33 +2103,33 @@ static void AssertConsoleExists(void)
 #define ILLEGAL_DEV_FLAGS (VF_NET_SYNCED | VF_CHEAT | VF_CHEAT_ALWAYS_CHECK | VF_CHEAT_NOCHECK | VF_READONLY | VF_CONST_CVAR)
 
 #if defined(_RELEASE)
-	#define REGISTER_CVAR_DEV_ONLY(_var, _def_val, _flags, _comment)                               NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0); _var = _def_val
-	#define REGISTER_CVAR_CB_DEV_ONLY(_var, _def_val, _flags, _comment, _onchangefunction)         NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0); _var = _def_val /* _onchangefunction consumed; callback not available */
-	#define REGISTER_STRING_DEV_ONLY(_name, _def_val, _flags, _comment)                            NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)                  /* consumed; pure cvar not available */
-	#define REGISTER_STRING_CB_DEV_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)      NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)                  /* consumed; pure cvar not available */
-	#define REGISTER_INT_DEV_ONLY(_name, _def_val, _flags, _comment)                               NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)                  /* consumed; pure cvar not available */
-	#define REGISTER_INT_CB_DEV_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)         NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)                  /* consumed; pure cvar not available */
-	#define REGISTER_INT64_DEV_ONLY(_name, _def_val, _flags, _comment)                             NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)                  /* consumed; pure cvar not available */
-	#define REGISTER_FLOAT_DEV_ONLY(_name, _def_val, _flags, _comment)                             NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)                  /* consumed; pure cvar not available */
-	#define REGISTER_CVAR2_DEV_ONLY(_name, _var, _def_val, _flags, _comment)                       NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0); *(_var) = _def_val
-	#define REGISTER_CVAR2_CB_DEV_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0); *(_var) = _def_val
-	#define REGISTER_CVAR3_DEV_ONLY(_name, _var, _def_val, _flags, _comment)                       NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0); _var = _def_val
-	#define REGISTER_CVAR3_CB_DEV_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) NULL; COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0); _var = _def_val
+	#define REGISTER_CVAR_DEV_ONLY(_var, _def_val, _flags, _comment)                               NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!"); _var = _def_val
+	#define REGISTER_CVAR_CB_DEV_ONLY(_var, _def_val, _flags, _comment, _onchangefunction)         NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!"); _var = _def_val /* _onchangefunction consumed; callback not available */
+	#define REGISTER_STRING_DEV_ONLY(_name, _def_val, _flags, _comment)                            NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")                  /* consumed; pure cvar not available */
+	#define REGISTER_STRING_CB_DEV_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)      NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")                  /* consumed; pure cvar not available */
+	#define REGISTER_INT_DEV_ONLY(_name, _def_val, _flags, _comment)                               NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")                  /* consumed; pure cvar not available */
+	#define REGISTER_INT_CB_DEV_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)         NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")                  /* consumed; pure cvar not available */
+	#define REGISTER_INT64_DEV_ONLY(_name, _def_val, _flags, _comment)                             NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")                  /* consumed; pure cvar not available */
+	#define REGISTER_FLOAT_DEV_ONLY(_name, _def_val, _flags, _comment)                             NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")                  /* consumed; pure cvar not available */
+	#define REGISTER_CVAR2_DEV_ONLY(_name, _var, _def_val, _flags, _comment)                       NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!"); *(_var) = _def_val
+	#define REGISTER_CVAR2_CB_DEV_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!"); *(_var) = _def_val
+	#define REGISTER_CVAR3_DEV_ONLY(_name, _var, _def_val, _flags, _comment)                       NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!"); _var = _def_val
+	#define REGISTER_CVAR3_CB_DEV_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) NULL; static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!"); _var = _def_val
 	#define REGISTER_COMMAND_DEV_ONLY(_name, _func, _flags, _comment)                              /* consumed; command not available */
 #else
-	#define REGISTER_CVAR_DEV_ONLY(_var, _def_val, _flags, _comment)                               REGISTER_CVAR(_var, _def_val, ((_flags) | VF_DEV_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR_CB_DEV_ONLY(_var, _def_val, _flags, _comment, _onchangefunction)         REGISTER_CVAR_CB(_var, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_STRING_DEV_ONLY(_name, _def_val, _flags, _comment)                            REGISTER_STRING(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_STRING_CB_DEV_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)      REGISTER_STRING_CB(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_INT_DEV_ONLY(_name, _def_val, _flags, _comment)                               REGISTER_INT(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_INT_CB_DEV_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)         REGISTER_INT_CB(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_INT64_DEV_ONLY(_name, _def_val, _flags, _comment)                             REGISTER_INT64(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_FLOAT_DEV_ONLY(_name, _def_val, _flags, _comment)                             REGISTER_FLOAT(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR2_DEV_ONLY(_name, _var, _def_val, _flags, _comment)                       REGISTER_CVAR2(_name, _var, _def_val, ((_flags) | VF_DEV_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR2_CB_DEV_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) REGISTER_CVAR2_CB(_name, _var, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR3_DEV_ONLY(_name, _var, _def_val, _flags, _comment)                       REGISTER_CVAR3(_name, _var, _def_val, ((_flags) | VF_DEV_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR3_CB_DEV_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) REGISTER_CVAR3_CB(_name, _var, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_COMMAND_DEV_ONLY(_name, _func, _flags, _comment)                              REGISTER_COMMAND(_name, _func, ((_flags) | VF_DEV_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
+	#define REGISTER_CVAR_DEV_ONLY(_var, _def_val, _flags, _comment)                               REGISTER_CVAR(_var, _def_val, ((_flags) | VF_DEV_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR_CB_DEV_ONLY(_var, _def_val, _flags, _comment, _onchangefunction)         REGISTER_CVAR_CB(_var, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_STRING_DEV_ONLY(_name, _def_val, _flags, _comment)                            REGISTER_STRING(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_STRING_CB_DEV_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)      REGISTER_STRING_CB(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_INT_DEV_ONLY(_name, _def_val, _flags, _comment)                               REGISTER_INT(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_INT_CB_DEV_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)         REGISTER_INT_CB(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_INT64_DEV_ONLY(_name, _def_val, _flags, _comment)                             REGISTER_INT64(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_FLOAT_DEV_ONLY(_name, _def_val, _flags, _comment)                             REGISTER_FLOAT(_name, _def_val, ((_flags) | VF_DEV_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR2_DEV_ONLY(_name, _var, _def_val, _flags, _comment)                       REGISTER_CVAR2(_name, _var, _def_val, ((_flags) | VF_DEV_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR2_CB_DEV_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) REGISTER_CVAR2_CB(_name, _var, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR3_DEV_ONLY(_name, _var, _def_val, _flags, _comment)                       REGISTER_CVAR3(_name, _var, _def_val, ((_flags) | VF_DEV_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR3_CB_DEV_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) REGISTER_CVAR3_CB(_name, _var, _def_val, ((_flags) | VF_DEV_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_COMMAND_DEV_ONLY(_name, _func, _flags, _comment)                              REGISTER_COMMAND(_name, _func, ((_flags) | VF_DEV_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
 #endif // defined(_RELEASE)
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1977,19 +2138,19 @@ static void AssertConsoleExists(void)
 //! (1) Registered as real cvars in all non release builds
 //! (2) Registered as real cvars in release on dedi servers only, otherwise treated as DEV_ONLY type cvars (see above)
 #if defined(_RELEASE) && defined(DEDICATED_SERVER)
-	#define REGISTER_CVAR_DEDI_ONLY(_var, _def_val, _flags, _comment)                               REGISTER_CVAR(_var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR_CB_DEDI_ONLY(_var, _def_val, _flags, _comment, _onchangefunction)         REGISTER_CVAR_CB(_var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_STRING_DEDI_ONLY(_name, _def_val, _flags, _comment)                            REGISTER_STRING(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_STRING_CB_DEDI_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)      REGISTER_STRING_CB(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_INT_DEDI_ONLY(_name, _def_val, _flags, _comment)                               REGISTER_INT(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_INT_CB_DEDI_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)         REGISTER_INT_CB(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_INT64_DEDI_ONLY(_name, _def_val, _flags, _comment)                             REGISTER_INT64(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_FLOAT_DEDI_ONLY(_name, _def_val, _flags, _comment)                             REGISTER_FLOAT(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR2_DEDI_ONLY(_name, _var, _def_val, _flags, _comment)                       REGISTER_CVAR2(_name, _var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR2_CB_DEDI_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) REGISTER_CVAR2_CB(_name, _var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR3_DEDI_ONLY(_name, _var, _def_val, _flags, _comment)                       REGISTER_CVAR3(_name, _var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_CVAR3_CB_DEDI_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) REGISTER_CVAR3_CB(_name, _var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
-	#define REGISTER_COMMAND_DEDI_ONLY(_name, _func, _flags, _comment)                              REGISTER_COMMAND(_name, _func, ((_flags) | VF_DEDI_ONLY), _comment); COMPILE_TIME_ASSERT(((_flags) & ILLEGAL_DEV_FLAGS) == 0)
+	#define REGISTER_CVAR_DEDI_ONLY(_var, _def_val, _flags, _comment)                               REGISTER_CVAR(_var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR_CB_DEDI_ONLY(_var, _def_val, _flags, _comment, _onchangefunction)         REGISTER_CVAR_CB(_var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_STRING_DEDI_ONLY(_name, _def_val, _flags, _comment)                            REGISTER_STRING(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_STRING_CB_DEDI_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)      REGISTER_STRING_CB(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_INT_DEDI_ONLY(_name, _def_val, _flags, _comment)                               REGISTER_INT(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_INT_CB_DEDI_ONLY(_name, _def_val, _flags, _comment, _onchangefunction)         REGISTER_INT_CB(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_INT64_DEDI_ONLY(_name, _def_val, _flags, _comment)                             REGISTER_INT64(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_FLOAT_DEDI_ONLY(_name, _def_val, _flags, _comment)                             REGISTER_FLOAT(_name, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR2_DEDI_ONLY(_name, _var, _def_val, _flags, _comment)                       REGISTER_CVAR2(_name, _var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR2_CB_DEDI_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) REGISTER_CVAR2_CB(_name, _var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR3_DEDI_ONLY(_name, _var, _def_val, _flags, _comment)                       REGISTER_CVAR3(_name, _var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_CVAR3_CB_DEDI_ONLY(_name, _var, _def_val, _flags, _comment, _onchangefunction) REGISTER_CVAR3_CB(_name, _var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
+	#define REGISTER_COMMAND_DEDI_ONLY(_name, _func, _flags, _comment)                              REGISTER_COMMAND(_name, _func, ((_flags) | VF_DEDI_ONLY), _comment); static_assert((_flags & ILLEGAL_DEV_FLAGS) == 0, "Flags must not contain any development flags!")
 #else
 	#define REGISTER_CVAR_DEDI_ONLY(_var, _def_val, _flags, _comment)                               REGISTER_CVAR_DEV_ONLY(_var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment)
 	#define REGISTER_CVAR_CB_DEDI_ONLY(_var, _def_val, _flags, _comment, _onchangefunction)         REGISTER_CVAR_CB_DEV_ONLY(_var, _def_val, ((_flags) | VF_DEDI_ONLY), _comment, _onchangefunction)
@@ -2070,7 +2231,7 @@ inline void CryLogAlways(const char* format, ...)
 
 //! Complex delegation required because it is not really easy to export a external standalone symbol like a memcpy function when building with modules.
 //! Dlls pay an extra indirection cost for calling this function.
-#if !defined(_LIB) || defined(IS_EAAS)
+#if !defined(_LIB)
 	#define CRY_ASYNC_MEMCPY_DELEGATE_TO_CRYSYSTEM
 #endif
 #define CRY_ASYNC_MEMCPY_API extern "C"
@@ -2097,3 +2258,11 @@ CRY_ASYNC_MEMCPY_API void cryAsyncMemcpy(
 #endif
 
 #include <CrySystem/Profilers/FrameProfiler/FrameProfiler.h>
+
+inline CryGUID CryGUID::Create()
+{
+	CryGUID guid;
+	gEnv->pSystem->FillRandomMT(reinterpret_cast<uint32*>(&guid), sizeof(guid) / sizeof(uint32));
+	MEMORY_RW_REORDERING_BARRIER;
+	return guid;
+}

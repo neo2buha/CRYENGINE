@@ -3,19 +3,70 @@
 #include "StdAfx.h"
 #include "VolumesManager.h"
 
-bool CVolumesManager::RegisterArea(const char* volumeName)
+bool CVolumesManager::RegisterArea(const char* volumeName, NavigationVolumeID& outVolumeId)
 {
+	NavigationVolumeID volumeId = NavigationVolumeID();
+	bool bResult = false;
+
 	VolumesMap::const_iterator it = m_volumeAreas.find(volumeName);
 	if (it == m_volumeAreas.end())
 	{
-		m_volumeAreas[volumeName] = NavigationVolumeID();
+		{
+			VolumesMap::const_iterator it = m_loadedVolumeAreas.find(volumeName);
+			if (it != m_loadedVolumeAreas.end())
+			{
+				volumeId = it->second;
+				AILogComment("CVolumesManager::RegisterArea: area '%s' is already loaded with the id = %u", volumeName, (uint32)volumeId);
+				m_loadedVolumeAreas.erase(it);
+			}
+		}
+
+		m_volumeAreas[volumeName] = volumeId;
+
+		AILogComment("CVolumesManager::RegisterArea: registering new area '%s' with the id = %u", volumeName, (uint32)volumeId);
+		bResult = true;
 	}
 	else
 	{
-		AIWarning("You are trying to register the area %s but it's already registered.", volumeName);
-		return false;
+		AIWarning("You are trying to register the area %s but it's already registered with id = %u.", volumeName, it->second);
+		bResult = false;
 	}
-	return true;
+
+	outVolumeId = volumeId;
+	return bResult;
+}
+
+void CVolumesManager::RegisterAreaFromLoadedData(const char* szVolumeName, NavigationVolumeID id)
+{
+	if (m_loadedVolumeAreas.find(szVolumeName) != m_loadedVolumeAreas.end())
+	{
+		AIWarning("You are trying to register the loaded area '%s' but it's already registered.", szVolumeName);
+	}
+	AILogComment("CVolumesManager::RegisterAreaFromLoadedData %s = %u", szVolumeName, (uint32)id);
+	m_loadedVolumeAreas[szVolumeName] = id;
+}
+
+void CVolumesManager::ClearLoadedAreas()
+{
+	m_loadedVolumeAreas.clear();
+}
+
+void CVolumesManager::ValidateAndSanitizeLoadedAreas(const INavigationSystem& navigationSystem)
+{
+	for (auto iter = m_loadedVolumeAreas.begin(); iter != m_loadedVolumeAreas.end(); )
+	{
+		if (!navigationSystem.ValidateVolume(iter->second))
+		{
+			AIWarning("CVolumesManager::ValidateAndSanitizeLoadedAreas: Loaded area '%s' referenced volume '%u', which was not created for loaded navigation mesh. Reference is removed.",
+			          iter->first.c_str(), (uint32)iter->second);
+
+			iter = m_loadedVolumeAreas.erase(iter);
+		}
+		else
+		{
+			++iter;
+		}
+	}
 }
 
 bool CVolumesManager::SetAreaID(const char* volumeName, NavigationVolumeID id)
@@ -37,6 +88,12 @@ void CVolumesManager::UnRegisterArea(const char* volumeName)
 	VolumesMap::iterator it = m_volumeAreas.find(volumeName);
 	if (it != m_volumeAreas.end())
 		m_volumeAreas.erase(it);
+}
+
+void CVolumesManager::Clear()
+{
+	m_volumeAreas.clear();
+	m_loadedVolumeAreas.clear();
 }
 
 bool CVolumesManager::IsAreaPresent(const char* volumeName) const
@@ -107,5 +164,38 @@ void CVolumesManager::GetVolumesNames(std::vector<string>& names) const
 	for (; it != end; ++it)
 	{
 		names.push_back(it->first);
+	}
+}
+
+bool CVolumesManager::IsLoadedAreaPresent(const char* volumeName) const
+{
+	VolumesMap::const_iterator it = m_loadedVolumeAreas.find(volumeName);
+	return it != m_loadedVolumeAreas.end();
+}
+
+NavigationVolumeID CVolumesManager::GetLoadedAreaID(const char* volumeName) const
+{
+	NavigationVolumeID areaID;
+	VolumesMap::const_iterator it = m_loadedVolumeAreas.find(volumeName);
+	if (it != m_loadedVolumeAreas.end())
+		areaID = it->second;
+	return areaID;
+}
+
+void CVolumesManager::GetLoadedUnregisteredVolumes(std::vector<NavigationVolumeID>& volumes) const
+{
+	volumes.clear();
+	if (m_loadedVolumeAreas.size() > m_volumeAreas.size())
+	{
+		volumes.reserve(m_loadedVolumeAreas.size() - m_volumeAreas.size());
+	}
+
+	for (const auto& volumeNameIdPair : m_loadedVolumeAreas)
+	{
+		const string& name = volumeNameIdPair.first;
+		if (m_volumeAreas.find(name) == m_volumeAreas.end())
+		{
+			volumes.push_back(volumeNameIdPair.second);
+		}
 	}
 }

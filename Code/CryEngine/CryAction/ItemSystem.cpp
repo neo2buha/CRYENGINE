@@ -46,7 +46,7 @@ struct SItemListAutoComplete : public IConsoleArgumentAutoComplete
 	// Gets number of matches for the argument to auto complete.
 	virtual int GetCount() const
 	{
-		IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+		IGameFramework* pGameFramework = gEnv->pGameFramework;
 		IItemSystem* pItemSystem = pGameFramework->GetIItemSystem();
 		return pItemSystem->GetItemParamsCount();
 	}
@@ -54,7 +54,7 @@ struct SItemListAutoComplete : public IConsoleArgumentAutoComplete
 	// Gets argument value by index, nIndex must be in 0 <= nIndex < GetCount()
 	virtual const char* GetValue(int nIndex) const
 	{
-		IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+		IGameFramework* pGameFramework = gEnv->pGameFramework;
 		IItemSystem* pItemSystem = pGameFramework->GetIItemSystem();
 		return pItemSystem->GetItemParamName(nIndex);
 	}
@@ -664,7 +664,7 @@ EntityId CItemSystem::GiveItem(IActor* pActor, const char* item, bool sound, boo
 
 	CRY_ASSERT(item && pActor);
 
-	INDENT_LOG_DURING_SCOPE(true, "Giving %s a new item of class %s (sound=%u select=%u keepHistory=%u setup='%s')", pActor->GetEntity()->GetEntityTextDescription(), item, sound, select, keepHistory, setup ? setup : "N/A");
+	INDENT_LOG_DURING_SCOPE(true, "Giving %s a new item of class %s (sound=%u select=%u keepHistory=%u setup='%s')", pActor->GetEntity()->GetEntityTextDescription().c_str(), item, sound, select, keepHistory, setup ? setup : "N/A");
 
 	static char itemName[65];
 	cry_sprintf(itemName, "%s%.03u", item, ++m_spawnCount);
@@ -749,11 +749,11 @@ void CItemSystem::SetActorItem(IActor* pActor, EntityId itemId, bool keepHistory
 		notifier->OnSetActorItem(pActor, pItem);
 	}
 
-	if (pItem == NULL && itemId != 0)
+	if (pItem == nullptr && itemId != INVALID_ENTITYID)
 	{
 #ifndef _RELEASE
 		IEntity* pEntity = gEnv->pEntitySystem->GetEntity(itemId);
-		CryWarning(VALIDATOR_MODULE_SYSTEM, VALIDATOR_WARNING, "%s tried to select item ID %u but that ID does not belong to an item, it belongs to %s", pActor->GetEntity()->GetName(), itemId, pEntity ? pEntity->GetEntityTextDescription() : "nothing");
+		CryWarning(VALIDATOR_MODULE_SYSTEM, VALIDATOR_WARNING, "%s tried to select item ID %u but that ID does not belong to an item, it belongs to %s", pActor->GetEntity()->GetName(), itemId, pEntity ? pEntity->GetEntityTextDescription().c_str() : "nothing");
 #endif
 		return;
 	}
@@ -1139,7 +1139,7 @@ void CItemSystem::GiveItemCmd(IConsoleCmdArgs* args)
 	if (args->GetArgCount() < 2)
 		return;
 
-	IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+	IGameFramework* pGameFramework = gEnv->pGameFramework;
 	IActorSystem* pActorSystem = pGameFramework->GetIActorSystem();
 	IItemSystem* pItemSystem = pGameFramework->GetIItemSystem();
 
@@ -1177,7 +1177,7 @@ void CItemSystem::GiveItemCmd(IConsoleCmdArgs* args)
 //------------------------------------------------------------------------
 void CItemSystem::DropItemCmd(IConsoleCmdArgs* args)
 {
-	IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+	IGameFramework* pGameFramework = gEnv->pGameFramework;
 	IActorSystem* pActorSystem = pGameFramework->GetIActorSystem();
 	IItemSystem* pItemSystem = pGameFramework->GetIItemSystem();
 
@@ -1212,7 +1212,7 @@ void CItemSystem::DropItemCmd(IConsoleCmdArgs* args)
 //------------------------------------------------------------------------
 void CItemSystem::ListItemNames(IConsoleCmdArgs* args)
 {
-	IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+	IGameFramework* pGameFramework = gEnv->pGameFramework;
 	IItemSystem* pItemSystem = pGameFramework->GetIItemSystem();
 
 	const char* itemName = NULL;
@@ -1231,7 +1231,7 @@ void CItemSystem::GiveItemsHelper(IConsoleCmdArgs* args, bool useGiveable, bool 
 	if (args->GetArgCount() < 1)
 		return;
 
-	IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+	IGameFramework* pGameFramework = gEnv->pGameFramework;
 	IActorSystem* pActorSystem = pGameFramework->GetIActorSystem();
 	CItemSystem* pItemSystem = static_cast<CItemSystem*>(pGameFramework->GetIItemSystem());
 
@@ -1310,7 +1310,7 @@ void CItemSystem::GiveDebugItemsCmd(IConsoleCmdArgs* args)
 //------------------------------------------------------------------------
 void CItemSystem::SaveWeaponPositionCmd(IConsoleCmdArgs* args)
 {
-	IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+	IGameFramework* pGameFramework = gEnv->pGameFramework;
 	if (IActor* pActor = pGameFramework->GetClientActor())
 	{
 		if (IItem* pItem = pActor->GetCurrentItem())
@@ -1332,7 +1332,7 @@ void CItemSystem::GiveAmmoCmd(IConsoleCmdArgs* args)
 	if (!pClass)
 		return;
 
-	IActor* pActor = gEnv->pGame->GetIGameFramework()->GetClientActor();
+	IActor* pActor = gEnv->pGameFramework->GetClientActor();
 	if (!pActor)
 		return;
 
@@ -1429,12 +1429,11 @@ void CItemSystem::SerializePlayerLTLInfo(bool bReading)
 
 	if (!bReading)
 	{
-		ScopedSwitchToGlobalHeap globalHeap;
 		m_playerLevelToLevelSave = gEnv->pSystem->CreateXmlNode("Inventory");
 	}
 
 	IXmlSerializer* pSerializer = gEnv->pSystem->GetXmlUtils()->CreateXmlSerializer();
-	IActor* pActor = gEnv->pGame->GetIGameFramework()->GetClientActor();
+	IActor* pActor = gEnv->pGameFramework->GetClientActor();
 	ISerialize* pSer = NULL;
 	if (!bReading)
 		pSer = pSerializer->GetWriter(m_playerLevelToLevelSave);
@@ -1446,7 +1445,6 @@ void CItemSystem::SerializePlayerLTLInfo(bool bReading)
 	TSerialize ser = TSerialize(pSer);
 	if (pActor)
 	{
-		ScopedSwitchToGlobalHeap globalHeap;
 		pActor->SerializeLevelToLevel(ser);
 	}
 	pSerializer->Release();
@@ -1680,10 +1678,10 @@ void CItemSystem::DisplayItemSystemStats()
 	float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 
 	//Global
-	gEnv->pRenderer->Draw2dLabel(50.0f, 50.0f, 1.5f, white, false, "Item system mem:		%.2f Kb.", itemSystemMem * kbInvert);
+	IRenderAuxText::Draw2dLabel(50.0f, 50.0f, 1.5f, white, false, "Item system mem:		%.2f Kb.", itemSystemMem * kbInvert);
 
-	gEnv->pRenderer->Draw2dLabel(50.0f, 65.0f, 1.5f, white, false, "Num. Item instances:		%d.		Total mem: %.2f Kb", itemCount, (float)(pSizer->GetTotalSize() - itemSystemMem) * kbInvert);
-	gEnv->pRenderer->Draw2dLabel(50.0f, 80.0f, 1.5f, white, false, "Num. Weapon instances:	%d.		Total mem: %.2f Kb", weaponCount, (float)weaponMemSize * kbInvert);
+	IRenderAuxText::Draw2dLabel(50.0f, 65.0f, 1.5f, white, false, "Num. Item instances:		%d.		Total mem: %.2f Kb", itemCount, (float)(pSizer->GetTotalSize() - itemSystemMem) * kbInvert);
+	IRenderAuxText::Draw2dLabel(50.0f, 80.0f, 1.5f, white, false, "Num. Weapon instances:	%d.		Total mem: %.2f Kb", weaponCount, (float)weaponMemSize * kbInvert);
 
 	//Per item class
 	TDebugClassesMem::const_iterator cit2 = debugClassesMap.begin();
@@ -1695,7 +1693,7 @@ void CItemSystem::DisplayItemSystemStats()
 		float grey[4] = { 0.7f, 0.7f, 0.7f, 1.0f };
 
 		float midSize = (float)cit2->second.memSize / (float)cit2->second.countOfClass;
-		gEnv->pRenderer->Draw2dLabel(50.0f, 100.0f + (10.0f * i), 1.2f, grey, false, "Class %s:	Instances: %d.	MemSize: %.2f Kb.	Instance Size:%.3f Kb", cit2->first->GetName(), cit2->second.countOfClass, (float)cit2->second.memSize * kbInvert, midSize * kbInvert);
+		IRenderAuxText::Draw2dLabel(50.0f, 100.0f + (10.0f * i), 1.2f, grey, false, "Class %s:	Instances: %d.	MemSize: %.2f Kb.	Instance Size:%.3f Kb", cit2->first->GetName(), cit2->second.countOfClass, (float)cit2->second.memSize * kbInvert, midSize * kbInvert);
 
 		++cit2;
 		i++;
@@ -1884,7 +1882,7 @@ void CItemSystem::ItemSystemErrorMessage(const char* fileName, const char* error
 
 	if (displayErrorDialog)
 	{
-		gEnv->pSystem->ShowMessage(messageBuffer.c_str(), "Error", 0);
+		gEnv->pSystem->ShowMessage(messageBuffer.c_str(), "Error", eMB_Error);
 	}
 }
 

@@ -694,7 +694,7 @@ float3 NRand3( float2 seed )
 	return frac(sin(dot(seed.xy, float2(34.483, 89.637))) * float3(29156.4765, 38273.5639, 47843.7546));
 }
 
-float4 MotionBlurPS(vtxOut IN) : COLOR0 
+float4 MotionBlurPS(vtxOut IN) : SV_Target0 
 {
 #if %_RT_SAMPLE2
   const int numSamples = 24; // High spec
@@ -715,12 +715,14 @@ float4 MotionBlurPS(vtxOut IN) : COLOR0
 	float rndValue = NRand3(IN.baseTC.xy).x - 0.5;
 	float2 tileOffset = tileBorderDist * rndValue;
 	
-	float3 maxVel = tex2Dlod(_tex2, float4(IN.baseTC.xy + tileOffset * vMotionBlurParams.xy, 0, 0));
+	float2 screenTC = MapViewportToRaster(IN.baseTC.xy);
+
+	float3 maxVel = tex2Dlod(_tex2, float4(screenTC.xy + tileOffset * vMotionBlurParams.xy, 0, 0));
 	maxVel.xy = DecodeMotionVector(maxVel.xy);
 	const float2 blurStep = maxVel.xy * weightStep;
  
- 	const float2 centerLenDepth = UnpackLengthAndDepth(tex2Dlod(_tex1, float4(IN.baseTC.xy, 0, 0)).zw);
-	const float4 sampleCenter = tex2Dlod(_tex0, float4(IN.baseTC.xy, 0, 0));
+ 	const float2 centerLenDepth = UnpackLengthAndDepth(tex2Dlod(_tex1, float4(screenTC.xy, 0, 0)).zw);
+	const float4 sampleCenter = tex2Dlod(_tex0, float4(screenTC.xy, 0, 0));
 	
 	// Early out when no motion (disabled to have more predictable costs)
 	//if (length(maxVel.xy) < 0.0001f) return float4(sampleCenter.rgb, 1.0f);
@@ -731,8 +733,11 @@ float4 MotionBlurPS(vtxOut IN) : COLOR0
 	for (int s = 0; s < numSamples/2; ++s)
 	{
 		const float curStep = (s + samplingDither);
-		const float2 tc0 = IN.baseTC.xy + blurStep * curStep;
-		const float2 tc1 = IN.baseTC.xy - blurStep * curStep;
+		float2 tc0 = IN.baseTC.xy + blurStep * curStep;
+		float2 tc1 = IN.baseTC.xy - blurStep * curStep;
+
+		tc0 = MapViewportToRaster(tc0);
+		tc1 = MapViewportToRaster(tc1);
 	
 		float2 lenDepth0 = UnpackLengthAndDepth(tex2Dlod(_tex1, float4(tc0.xy, 0, 0)).zw);
 		float2 lenDepth1 = UnpackLengthAndDepth(tex2Dlod(_tex1, float4(tc1.xy, 0, 0)).zw);
@@ -757,6 +762,7 @@ technique MotionBlur
   pass p0
   {
     VertexShader = FullscreenTriVS() PostMotionBlurVS;
+    GeometryShader = $AutoGS_MultiRes();
     PixelShader = MotionBlurPS() PostMotionBlurPS;
     CullMode = None;        
   }
@@ -816,7 +822,7 @@ technique PackVelocities
 
 Texture2D<float4> MB_Tex0 : register(t0);
 
-float3 VelocityTileGenPS(vtxOut IN) : COLOR0
+float4 VelocityTileGenPS(vtxOut IN) : SV_Target0
 {
 	float2 pixelCoords = IN.baseTC.xy * vMotionBlurParams.xy;
 	float2 dir = vMotionBlurParams.w == 0 ? float2(1, 0) : float2(0, 1);
@@ -828,7 +834,7 @@ float3 VelocityTileGenPS(vtxOut IN) : COLOR0
 		if (vel.b > maxVel.b) maxVel = vel;
 	}
 	
-	return maxVel;
+	return float4(maxVel, 0);
 }
 
 technique VelocityTileGen
@@ -843,7 +849,7 @@ technique VelocityTileGen
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-float3 VelocityTileNeighborhoodPS(vtxOut IN) : COLOR0
+float4 VelocityTileNeighborhoodPS(vtxOut IN) : SV_Target0
 {
 	float3 maxVel = tex2D(_tex0, IN.baseTC.xy + float2(0, 0) * vMotionBlurParams.xy).xyz;
 	float3 vel = tex2D(_tex0, IN.baseTC.xy + float2( 0, -1) * vMotionBlurParams.xy).xyz;
@@ -865,7 +871,7 @@ float3 VelocityTileNeighborhoodPS(vtxOut IN) : COLOR0
 	vel = tex2D(_tex0, IN.baseTC.xy + float2( 1,  1) * vMotionBlurParams.xy).xyz;
 	if (vel.b > maxVel.b && dot(DecodeMotionVector(vel.xy).xy, -float2( 1,  1)) > 0) maxVel = vel;
 	
-	return maxVel;
+	return float4(maxVel, 0);
 }
 
 technique VelocityTileNeighborhood

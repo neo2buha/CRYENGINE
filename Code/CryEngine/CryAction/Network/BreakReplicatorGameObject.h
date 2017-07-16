@@ -19,7 +19,6 @@ public:
 	virtual inline void                 PostInitClient(int channelId)                                                   {}
 	virtual inline bool                 ReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params);
 	virtual inline void                 PostReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params) {}
-	virtual inline bool                 GetEntityPoolSignature(TSerialize signature);
 	virtual inline void                 Release()                                                                       { delete this; }
 
 	virtual inline void                 FullSerialize(TSerialize ser)                                                   {}
@@ -30,8 +29,8 @@ public:
 	virtual inline void                 Update(SEntityUpdateContext& ctx, int)                                          {}
 	virtual inline void                 HandleEvent(const SGameObjectEvent& event)                                      {}
 	virtual inline void                 ProcessEvent(SEntityEvent& event)                                               {}
+	virtual uint64                      GetEventMask() const final { return 0; };
 	virtual inline void                 SetChannelId(uint16 id)                                                         {}
-	virtual inline void                 SetAuthority(bool auth)                                                         {}
 	virtual inline void                 PostUpdate(float frameTime)                                                     {}
 	virtual inline void                 PostRemoteSpawn()                                                               {}
 	virtual inline void                 GetMemoryUsage(ICrySizer* s) const                                              { s->Add(*this); }
@@ -46,12 +45,6 @@ inline bool CBreakRepGameObject::Init(IGameObject* pGameObject)
 	SetGameObject(pGameObject);
 	m_removed = false;
 	m_wasRemoved = false;
-	return true;
-}
-
-inline bool CBreakRepGameObject::GetEntityPoolSignature(TSerialize signature)
-{
-	CRY_ASSERT_MESSAGE(false, "CBreakRepGameObject::GetEntityPoolSignature not implemented");
 	return true;
 }
 

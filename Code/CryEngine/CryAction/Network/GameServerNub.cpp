@@ -7,7 +7,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 24:8:2004   10:54 : Created by Márcio Martins
+   - 24:8:2004   10:54 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -125,7 +125,7 @@ SCreateChannelResult CGameServerNub::CreateChannel(INetChannel* pChannel, const 
 	if (info.isMigrating && CCryAction::GetCryAction()->IsGameSessionMigrating())
 	{
 		// Enable the game rules to find the migrating player details by channel id
-		IGameFramework* pGameFramework = gEnv->pGame->GetIGameFramework();
+		IGameFramework* pGameFramework = gEnv->pGameFramework;
 		IGameRules* pGameRules = pGameFramework->GetIGameRulesSystem()->GetCurrentGameRules();
 
 		if (pGameRules)
@@ -157,7 +157,7 @@ SCreateChannelResult CGameServerNub::CreateChannel(INetChannel* pChannel, const 
 //------------------------------------------------------------------------
 void CGameServerNub::Update()
 {
-	const int timeout = MAX(0, sv_timeout_disconnect->GetIVal());
+	const int timeout = std::max(0, sv_timeout_disconnect->GetIVal());
 
 	CTimeValue now = gEnv->pTimer->GetFrameStartTime();
 
@@ -306,10 +306,12 @@ void CGameServerNub::RemoveOnHoldChannel(CGameServerChannel* pServerChannel, boo
 		if (it->second.channelId == pServerChannel->GetChannelId())
 		{
 			m_onhold.erase(it);
-			if (!renewed)//let gamerules know we should get rid of it...
+			if (!renewed)//let listeners know we should get rid of it...
 			{
-				IGameRules* pGameRules = CCryAction::GetCryAction()->GetIGameRulesSystem()->GetCurrentGameRules();
-				pGameRules->OnClientDisconnect(pServerChannel->GetChannelId(), eDC_Timeout, "OnHold timed out", false);
+				for (INetworkedClientListener* pListener : CCryAction::GetCryAction()->GetNetworkClientListeners())
+				{
+					pListener->OnClientDisconnected(pServerChannel->GetChannelId(), eDC_Timeout, "OnHold timed out", false);
+				}
 			}
 			break;
 		}
@@ -328,8 +330,11 @@ void CGameServerNub::ResetOnHoldChannels()
 {
 	for (THoldChannelMap::iterator it = m_onhold.begin(); it != m_onhold.end(); ++it)
 	{
-		IGameRules* pGameRules = CCryAction::GetCryAction()->GetIGameRulesSystem()->GetCurrentGameRules();
-		pGameRules->OnClientDisconnect(it->first, eDC_Timeout, "OnHold reseted", false);
+		for (INetworkedClientListener* pListener : CCryAction::GetCryAction()->GetNetworkClientListeners())
+		{
+			pListener->OnClientDisconnected(it->first, eDC_Timeout, "OnHold was reset", false);
+		}
+
 		TServerChannelMap::iterator ch_it = m_channels.find(it->first);
 		if (ch_it != m_channels.end())
 		{

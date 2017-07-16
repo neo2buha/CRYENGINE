@@ -10,6 +10,7 @@
 
 #include <CrySystem/File/CryFile.h>  // Includes CryPath.h in correct order.
 #include <QtUtil.h>
+#include <CrySandbox/CrySignal.h>
 
 #include <QMimeData>
 #include <QDataStream>
@@ -24,10 +25,18 @@ char const* const QAudioSystemModel::ms_szMimeType = "application/cryengine-audi
 QAudioSystemModel::QAudioSystemModel()
 	: m_pAudioSystem(CAudioControlsEditorPlugin::GetAudioSystemEditorImpl())
 {
-	connect(CAudioControlsEditorPlugin::GetImplementationManger(), &CImplementationManager::ImplementationChanged, [&]()
+
+	CAudioControlsEditorPlugin::GetImplementationManger()->signalImplementationChanged.Connect([&]()
 		{
 			m_pAudioSystem = CAudioControlsEditorPlugin::GetAudioSystemEditorImpl();
 			beginResetModel();
+			endResetModel();
+	  });
+
+	CAudioControlsEditorPlugin::GetImplementationManger()->signalImplementationAboutToChange.Connect([&]()
+		{
+			beginResetModel();
+			m_pAudioSystem = nullptr;
 			endResetModel();
 	  });
 }
@@ -77,14 +86,15 @@ QVariant QAudioSystemModel::data(const QModelIndex& index, int role) const
 					case Qt::DisplayRole:
 						return (const char*)pItem->GetName();
 					case Qt::DecorationRole:
-						return QIcon((QtUtil::ToQString(PathUtil::GetEnginePath()) + PathUtil::GetSlash()) + m_pAudioSystem->GetTypeIcon(pItem->GetType()));
+						return QIcon((QtUtil::ToQString(PathUtil::GetEnginePath()) + CRY_NATIVE_PATH_SEPSTR) + m_pAudioSystem->GetTypeIcon(pItem->GetType()));
 					case Qt::ForegroundRole:
 						if (pItem->IsLocalised())
 						{
 							return QColor(36, 180, 245);
 						}
-						else if (!pItem->IsConnected())
+						else if (!pItem->IsConnected() && m_pAudioSystem->ImplTypeToATLType(pItem->GetType()) != eItemType_Invalid)
 						{
+							// Tint non connected controls that can actually be connected to something (ie. exclude folders)
 							return QColor(255, 143, 0);
 						}
 						break;
@@ -130,7 +140,7 @@ Qt::ItemFlags QAudioSystemModel::flags(const QModelIndex& index) const
 	if (index.isValid() && m_pAudioSystem)
 	{
 		IAudioSystemItem* pItem = ItemFromIndex(index);
-		if (pItem && !pItem->IsPlaceholder() && m_pAudioSystem->ImplTypeToATLType(pItem->GetType()) != eACEControlType_NumTypes)
+		if (pItem && !pItem->IsPlaceholder() && m_pAudioSystem->ImplTypeToATLType(pItem->GetType()) != eItemType_NumTypes)
 		{
 			flag |= Qt::ItemIsDragEnabled;
 		}
@@ -149,7 +159,7 @@ QModelIndex QAudioSystemModel::index(int row, int column, const QModelIndex& par
 			{
 				pParent = m_pAudioSystem->GetRoot();
 			}
-			if (pParent)
+			if (pParent && pParent->ChildCount() > row)
 			{
 				IAudioSystemItem* pItem = pParent->GetChildAt(row);
 				if (pItem)
@@ -273,7 +283,7 @@ bool QAudioSystemModelProxyFilter::rowMatchesFilter(int source_row, const QModel
 					return false;
 				}
 			}
-			return sourceModel()->data(index, QAudioSystemModel::eAudioSystemAttributes_Type).toInt() & m_allowedControlsMask;
+			return true;
 		}
 	}
 	return false;
@@ -290,4 +300,49 @@ void QAudioSystemModelProxyFilter::SetHideConnected(bool bHideConnected)
 	m_bHideConnected = bHideConnected;
 	invalidate();
 }
+
+bool QAudioSystemModelProxyFilter::lessThan(const QModelIndex& left, const QModelIndex& right) const
+{
+	if (left.column() == right.column())
+	{
+		const bool bLeftHasChildren = (sourceModel()->rowCount(left) > 0);
+		const bool bRightHasChildren = (sourceModel()->rowCount(right) > 0);
+
+		if (bLeftHasChildren == bRightHasChildren)
+		{
+			QVariant valueLeft = sourceModel()->data(left, Qt::DisplayRole);
+			QVariant valueRight = sourceModel()->data(right, Qt::DisplayRole);
+			return valueLeft < valueRight;
+		}
+		else
+		{
+			return !bRightHasChildren; //high priority to the one that has children
+		}
+	}
+	return QSortFilterProxyModel::lessThan(left, right);
+}
+
+namespace AudioModelUtils
+{
+void DecodeImplMimeData(const QMimeData* pData, std::vector<IAudioSystemItem*>& outItems)
+{
+	ACE::IAudioSystemEditor* pAudioSystemEditorImpl = CAudioControlsEditorPlugin::GetAudioSystemEditorImpl();
+	QByteArray encoded = pData->data(QAudioSystemModel::ms_szMimeType);
+	QDataStream stream(&encoded, QIODevice::ReadOnly);
+	while (!stream.atEnd())
+	{
+		CID id;
+		stream >> id;
+		if (id != ACE_INVALID_ID)
+		{
+			IAudioSystemItem* pAudioSystemControl = pAudioSystemEditorImpl->GetControl(id);
+			if (pAudioSystemControl)
+			{
+				outItems.push_back(pAudioSystemControl);
+			}
+		}
+	}
+}
+}
+
 }

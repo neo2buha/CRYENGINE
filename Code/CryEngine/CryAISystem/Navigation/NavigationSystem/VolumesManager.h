@@ -18,8 +18,14 @@ class CVolumesManager
 public:
 	CVolumesManager() {}
 
-	bool               RegisterArea(const char* volumeName);
+	bool               RegisterArea(const char* volumeName, NavigationVolumeID& outVolumeId);
 	void               UnRegisterArea(const char* volumeName);
+
+	void               Clear();
+
+	void               RegisterAreaFromLoadedData(const char* szVolumeName, NavigationVolumeID id);
+	void               ClearLoadedAreas();
+	void               ValidateAndSanitizeLoadedAreas(const INavigationSystem& navigationSystem);
 
 	bool               SetAreaID(const char* volumeName, NavigationVolumeID id);
 	void               InvalidateID(NavigationVolumeID id);
@@ -31,9 +37,13 @@ public:
 
 	void               GetVolumesNames(std::vector<string>& names) const;
 
+	bool               IsLoadedAreaPresent(const char* volumeName) const;
+	NavigationVolumeID GetLoadedAreaID(const char* volumeName) const;
+	void               GetLoadedUnregisteredVolumes(std::vector<NavigationVolumeID>& volumes) const;
 private:
 	typedef std::map<string, NavigationVolumeID> VolumesMap;
 	VolumesMap m_volumeAreas;
+	VolumesMap m_loadedVolumeAreas;
 };
 
 #endif // __VolumesManager_h__

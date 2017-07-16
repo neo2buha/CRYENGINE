@@ -560,15 +560,15 @@ bool ConvertDXBCToGLSL(const void* pvSourceData, size_t uSourceSize, SGLSLConver
 	unsigned int uFlags(HLSLCC_FLAG_UNIFORM_BUFFER_OBJECT);
 	GlExtensions kExtensions = { 0 };
 
-		#if CRY_OPENGL_ADAPT_CLIP_SPACE
+		#if OGL_ADAPT_CLIP_SPACE
 	uFlags |= HLSLCC_FLAG_CONVERT_CLIP_SPACE_Z;
-			#if CRY_OPENGL_FLIP_Y
+			#if OGL_FLIP_Y
 	DXGL_TODO("Only do this if the shader is expected to be used to render into a texture so that a final blit for flipping is not required")
 	uFlags |= HLSLCC_FLAG_INVERT_CLIP_SPACE_Y;
 			#else
 	uFlags |= HLSLCC_FLAG_ORIGIN_UPPER_LEFT;
 			#endif
-		#endif //CRY_OPENGL_ADAPT_CLIP_SPACE
+		#endif //OGL_ADAPT_CLIP_SPACE
 
 	DXGL_TODO("Currently we always specify bindings at run-time (slot ranges are determined during startup), and leave the default location for resources (mainly to prevent collisions between resources with the same register index in different non-separable shader stages). Evaluate the possibility of coding them into the shader source.");
 	uFlags |= HLSLCC_FLAG_AVOID_RESOURCE_BINDINGS_AND_LOCATIONS;
@@ -660,6 +660,86 @@ bool InitializeShaderReflectionFromInput(SShaderReflection* pReflection, const v
 #endif
 }
 
+
+#if defined(OPENGL_ES)
+bool ReplaceEntries(const std::string* stringsToSearch, const std::string* stringsToReplace, size_t count, std::string& out, const GLchar* in, size_t inStrLen)
+{
+	out = std::string(in, 0, inStrLen);
+	bool linesChanged = false;
+	for (int j = 0; j < count; ++j)
+	{
+		const std::string& searchStr = stringsToSearch[j];
+		const std::string& replaceString = stringsToReplace[j];
+		size_t np = out.find(searchStr);
+		while (np != string::npos)
+		{
+			linesChanged = true;
+			out.replace(np, searchStr.size(), replaceString);
+			np = out.find(searchStr);
+		}
+	}
+	return linesChanged;
+}
+
+
+
+bool CompileShaderFromSources(GLuint* puName, const GLchar* aszSources[], GLint aiSourceLengths[], uint32 uNumSources, GLenum eGLShaderType)
+{
+
+	//GLESHACK Fix shader compilation error where numerical values are out of bounds or floating point vector has for some reason been interpreted as vector of integers                                                     
+	const std::string searchStrings[] = { "ivec4(4290838528, 4290838528, 4290838528, 0)", "4294967232", "4290772992", "2147483648", "4294967295" };
+	const std::string replaceStrings[] = { "vec4(0.000000000, 0.00000000, 0.0000000,0.0)", "65535", "65535", "65535", "65535" };
+
+
+	std::string sources[4];
+	const GLchar* sourcesC[4];
+	GLint srcLengths[4];
+	for (int i = 0; i < uNumSources; ++i)
+	{
+
+		const GLchar* src = aszSources[i];
+
+		bool linesChanged = ReplaceEntries(searchStrings, replaceStrings, sizeof(searchStrings) / sizeof(std::string), sources[i], src, aiSourceLengths[i]);
+
+		sourcesC[i] = sources[i].c_str();
+		srcLengths[i] = sources[i].size();
+	}
+
+
+
+
+	if (SupportSeparablePrograms())
+	{
+		*puName = glCreateShaderProgramv(eGLShaderType, uNumSources, sourcesC);
+
+		if ((*puName) == 0)
+			return false;
+
+		if (!VerifyProgramStatus(*puName, GL_LINK_STATUS))
+			return false;
+	}
+	else
+	{
+		*puName = glCreateShader(eGLShaderType);
+		if ((*puName) == 0)
+			return false;
+		glShaderSource(*puName, uNumSources, sourcesC, srcLengths);
+		glCompileShader(*puName);
+
+		if (!VerifyShaderStatus(*puName, GL_COMPILE_STATUS))
+			return false;
+
+#if defined(glReleaseShaderCompiler)
+		DXGL_TODO("Check whether this is actually useful")
+			glReleaseShaderCompiler();
+#endif //defined(glReleaseShaderCompiler)
+	}
+	return true;
+}
+
+#else
+
+
 bool CompileShaderFromSources(GLuint* puName, const GLchar* aszSources[], GLint aiSourceLengths[], uint32 uNumSources, GLenum eGLShaderType)
 {
 	if (SupportSeparablePrograms())
@@ -685,11 +765,12 @@ bool CompileShaderFromSources(GLuint* puName, const GLchar* aszSources[], GLint 
 
 #if defined(glReleaseShaderCompiler)
 		DXGL_TODO("Check whether this is actually useful")
-		glReleaseShaderCompiler();
+			glReleaseShaderCompiler();
 #endif //defined(glReleaseShaderCompiler)
 	}
 	return true;
 }
+#endif
 
 bool FindShaderSymbolByType(const uint32* puSymbols, uint32 uNumSymbols, SYMBOL_TYPE eType, uint32* puID, uint32* puValue)
 {
@@ -742,7 +823,9 @@ uint32 WriteShaderDecimal(char* acOutput, uint32 uValue)
 
 void BuildVersionString(SPipelineCompilationBuffer* pBuffer, CDevice* pDevice)
 {
-#if DXGL_REQUIRED_VERSION >= DXGL_VERSION_44
+#if DXGL_REQUIRED_VERSION >= DXGL_VERSION_45
+	const char* szVersion = "#version 450\n";
+#elif DXGL_REQUIRED_VERSION >= DXGL_VERSION_44
 	const char* szVersion = "#version 440\n";
 	// Workaround for AMD Catalyst - as of version 15.7.1 using "#version 440" causes std140 uniform buffers
 	// to have random layouts (see https://community.amd.com/thread/185272)
@@ -1312,11 +1395,15 @@ bool InitializeTextureBindings(
 		bool bNormalSample = DecodeNormalSample(uSamplerField);
 		bool bCompareSample = DecodeCompareSample(uSamplerField);
 
-		uint32 uTextureSlot = TextureSlot(eStage, uTextureIndex);
-		uint32 uSamplerSlot = SamplerSlot(eStage, uSamplerIndex);
-		uint32 uTextureUnit = pPartition ? pPartition->m_akStages[eStage](uTextureUnitIndex) : uMapPosition + uElement;
+		const bool bSample(bNormalSample || bCompareSample);
+		const uint32 uTextureSlot = TextureSlot(eStage, uTextureIndex);
+		const uint32 uSamplerSlot = SamplerSlot(eStage, uSamplerIndex);
+		const uint32 uTextureUnit = pPartition ? pPartition->m_akStages[eStage](uTextureUnitIndex) : uMapPosition + uElement;
 
-		bool bSample(bNormalSample || bCompareSample);
+		assert(uTextureSlot < MAX_TEXTURE_SLOTS);
+		assert(uSamplerSlot < MAX_SAMPLER_SLOTS || (uSamplerIndex == MAX_RESOURCE_BINDINGS && !bSample));
+		assert(uTextureUnit < MAX_TEXTURE_UNITS);
+
 		if (bSample)
 			*pMapElementOut = SUnitMap::SElement::TextureWithSampler(uTextureSlot, uSamplerSlot, uTextureUnit);
 		else
@@ -1341,7 +1428,7 @@ bool InitializeTextureBindings(
 	return true;
 }
 
-template<bool pfBindResourceToUnit(GLuint uProgramName, uint32 uUnit, const char* szName), uint32 pfIndexToSlot(EShaderType eStage, uint32 uIndex)>
+template<bool pfBindResourceToUnit(GLuint uProgramName, uint32 uUnit, const char* szName), uint32 pfIndexToSlot(EShaderType eStage, uint32 uIndex), const uint32 slotLimit, const uint32 unitLimit>
 bool InitializeResourceBindings(
   SUnitMap* pMap,
   uint32 uMapPosition,
@@ -1364,6 +1451,9 @@ bool InitializeResourceBindings(
 
 		uint32 uResourceSlot = pfIndexToSlot(eStage, uResourceIndex);
 		uint32 uResourceUnit = pPartition ? pPartition->m_akStages[eStage](uResourceIndex) : uMapPosition + uElement;
+
+		assert(uResourceSlot < slotLimit);
+		assert(uResourceUnit < unitLimit);
 
 		*pMapElementOut = SUnitMap::SElement::Resource(uResourceSlot, uResourceUnit);
 
@@ -1430,7 +1520,7 @@ bool InitializePipelineResources(SPipeline* pPipeline, CContext* pContext)
 			const uint32* pUniformBuffers(reinterpret_cast<const uint32*>(pShader->m_kSource.m_pData + pShader->m_kReflection.m_uUniformBuffersOffset));
 			SUnitMap* pUniformBufferMap = aspUnitMaps[eRUT_UniformBuffer].get();
 
-			bSuccess &= InitializeResourceBindings<BindUniformBufferToUnit, ConstantBufferSlot>(
+			bSuccess &= InitializeResourceBindings<BindUniformBufferToUnit, ConstantBufferSlot, MAX_CONSTANT_BUFFER_SLOTS, MAX_UNIFORM_BUFFER_UNITS>(
 			  pUniformBufferMap, auUnitMapPositions[eRUT_UniformBuffer],
 			  pUniformBuffers, uNumUniformBuffers, (EShaderType)uShader,
 			  szGLSL, uProgramName, apUnitPartitions[eRUT_UniformBuffer]);
@@ -1446,7 +1536,7 @@ bool InitializePipelineResources(SPipeline* pPipeline, CContext* pContext)
 			const uint32* pStorageBuffers(reinterpret_cast<const uint32*>(pShader->m_kSource.m_pData + pShader->m_kReflection.m_uStorageBuffersOffset));
 			SUnitMap* pStorageBufferMap = aspUnitMaps[eRUT_StorageBuffer].get();
 
-			bSuccess &= InitializeResourceBindings<BindStorageBufferToUnit, StorageBufferSlot>(
+			bSuccess &= InitializeResourceBindings<BindStorageBufferToUnit, StorageBufferSlot, MAX_STORAGE_BUFFER_SLOTS, MAX_STORAGE_BUFFER_UNITS>(
 			  pStorageBufferMap, auUnitMapPositions[eRUT_StorageBuffer],
 			  pStorageBuffers, uNumStorageBuffers, (EShaderType)uShader,
 			  szGLSL, uProgramName, apUnitPartitions[eRUT_StorageBuffer]);
@@ -1463,7 +1553,7 @@ bool InitializePipelineResources(SPipeline* pPipeline, CContext* pContext)
 			const uint32* pImages(reinterpret_cast<const uint32*>(pShader->m_kSource.m_pData + pShader->m_kReflection.m_uImagesOffset));
 			SUnitMap* pImageMap = aspUnitMaps[eRUT_Image].get();
 
-			bSuccess &= InitializeResourceBindings<BindUniformToUnit, ImageSlot>(
+			bSuccess &= InitializeResourceBindings<BindUniformToUnit, ImageSlot, MAX_IMAGE_SLOTS, MAX_IMAGE_UNITS>(
 			  pImageMap, auUnitMapPositions[eRUT_Image],
 			  pImages, uNumImages, (EShaderType)uShader,
 			  szGLSL, uProgramName, apUnitPartitions[eRUT_Image]);

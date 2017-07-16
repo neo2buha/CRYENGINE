@@ -15,8 +15,6 @@ struct ISimpleExtension : public IGameObjectExtension
 	virtual void                   PostInitClient(int channelId) override                                                   {}
 	virtual bool                   ReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params) override     { return true; }
 	virtual void                   PostReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params) override {}
-	virtual bool                   GetEntityPoolSignature(TSerialize signature) override                                    { return false; }
-	virtual void                   Release() override                                                                       { delete this; }
 	virtual void                   FullSerialize(TSerialize ser) override                                                   {}
 	virtual bool                   NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int pflags) override  { return true; }
 	virtual void                   PostSerialize() override                                                                 {}
@@ -24,11 +22,9 @@ struct ISimpleExtension : public IGameObjectExtension
 	virtual ISerializableInfoPtr   GetSpawnInfo() override                                                                  { return nullptr; }
 	virtual void                   Update(SEntityUpdateContext& ctx, int updateSlot) override                               {}
 	virtual void                   SetChannelId(uint16 id) override                                                         {}
-	virtual void                   SetAuthority(bool auth) override                                                         {}
 	virtual void                   PostUpdate(float frameTime) override                                                     {}
 	virtual void                   PostRemoteSpawn() override                                                               {}
 	virtual void                   GetMemoryUsage(ICrySizer* pSizer) const override                                         {}
-	virtual ComponentEventPriority GetEventPriority(const int eventID) const override                                       { return EEntityEventPriority_GameObject; }
 	//~IGameObjectExtension
 
 	ISimpleExtension() {}

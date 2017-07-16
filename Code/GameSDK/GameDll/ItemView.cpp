@@ -7,7 +7,7 @@ $DateTime$
 
 -------------------------------------------------------------------------
 History:
-- 30:8:2005   12:52 : Created by Márcio Martins
+- 30:8:2005   12:52 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -294,10 +294,8 @@ void CItem::CopyRenderFlags(IEntity *pOwner)
 	if (!pOwner || !GetRenderProxy())
 		return;
 
-	IRenderNode *pRenderNode = GetRenderProxy()->GetRenderNode();
-	if (pRenderNode)
 	{
-		IEntityRenderProxy *pOwnerRenderProxy = (IEntityRenderProxy *)pOwner->GetProxy(ENTITY_PROXY_RENDER);
+		IEntityRender *pOwnerRenderProxy = (IEntityRender *)pOwner->GetRenderInterface();
 		IRenderNode *pOwnerRenderNode = pOwnerRenderProxy?pOwnerRenderProxy->GetRenderNode():NULL;
 		if (pOwnerRenderNode)
 		{
@@ -309,8 +307,8 @@ void CItem::CopyRenderFlags(IEntity *pOwner)
 				lodRatio = (int)((float)lodRatio * g_pGameCVars->g_itemsLodRatioScale);
 			}
 
-			pRenderNode->SetViewDistRatio(viewDistRatio);
-			pRenderNode->SetLodRatio(lodRatio);
+			GetEntity()->SetViewDistRatio(viewDistRatio);
+			GetEntity()->SetLodRatio(lodRatio);
 
 			uint32 flags = pOwner->GetFlags()&(ENTITY_FLAG_CASTSHADOW);
 			uint32 mflags = GetEntity()->GetFlags()&(~(ENTITY_FLAG_CASTSHADOW));

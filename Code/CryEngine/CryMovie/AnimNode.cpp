@@ -265,6 +265,14 @@ IAnimTrack* CAnimNode::CreateTrackInternal(const CAnimParamType& paramType, EAni
 		pTrack = new CAudioFileTrack;
 		break;
 
+	case eAnimParamType_AudioParameter:
+		pTrack = new CAudioParameterTrack;
+		break;
+
+	case eAnimParamType_AudioSwitch:
+		pTrack = new CAudioSwitchTrack;
+		break;
+
 	case eAnimParamType_DynamicResponseSignal:
 		pTrack = new CDynamicResponseSignalTrack;
 		break;
@@ -284,11 +292,7 @@ IAnimTrack* CAnimNode::CreateTrackInternal(const CAnimParamType& paramType, EAni
 	case eAnimParamType_Console:
 		pTrack = new CConsoleTrack;
 		break;
-	/*
-	   case eAnimParamType_Music:
-	    pTrack = new CMusicTrack;
-	    break;
-	 */
+
 	case eAnimParamType_LookAt:
 		pTrack = new CLookAtTrack;
 		break;
@@ -447,7 +451,7 @@ void CAnimNode::SerializeAnims(XmlNodeRef& xmlNode, bool bLoading, bool bLoadEmp
 				}
 			}
 
-			if (paramTypeVersion <= 5)
+			if (paramTypeVersion <= 5 && !(GetSequence()->GetFlags() & IAnimSequence::eSeqFlags_LightAnimationSet))
 			{
 				// In old versions there was special code for lights that is now handled
 				// by generic entity node code if this is not a light animation set sequence

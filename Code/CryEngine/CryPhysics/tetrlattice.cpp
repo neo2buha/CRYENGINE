@@ -85,8 +85,10 @@ CTetrLattice::CTetrLattice(CTetrLattice *src, int bCopyData)
 		memcpy(m_pVtx = new Vec3[m_nVtx=src->m_nVtx], src->m_pVtx, src->m_nVtx*sizeof(m_pVtx[0]));
 		memcpy(m_pVtxFlags = new int[m_nVtx], src->m_pVtxFlags, m_nVtx*sizeof(m_pVtxFlags[0]));
 		memcpy(m_pTetr = new STetrahedron[m_nTetr=src->m_nTetr], src->m_pTetr, src->m_nTetr*sizeof(m_pTetr[0]));
-		memcpy(m_pGridTet0 = new int[m_szGrid.GetVolume()+1], src->m_pGridTet0, (m_szGrid.GetVolume()+1)*sizeof(m_pGridTet0[0]));
-		memcpy(m_pGrid = new int[m_pGridTet0[m_szGrid.GetVolume()]], src->m_pGrid, m_pGridTet0[m_szGrid.GetVolume()]*sizeof(m_pGrid[0]));
+		if (src->m_pGrid) {
+			memcpy(m_pGridTet0 = new int[m_szGrid.GetVolume()+1], src->m_pGridTet0, (m_szGrid.GetVolume()+1)*sizeof(m_pGridTet0[0]));
+			memcpy(m_pGrid = new int[m_pGridTet0[m_szGrid.GetVolume()]], src->m_pGrid, m_pGridTet0[m_szGrid.GetVolume()]*sizeof(m_pGrid[0]));
+		}
 		m_nRemovedTets = src->m_nRemovedTets;
 	}
 }
@@ -898,8 +900,10 @@ void CBreakableGrid2d::Generate(Vec2 *ptsrc,int npt, const Vec2i &nCells, int bS
 	jgc.ppt = 0; jgc.pnorms = 0;
 	jgc.bMarkCenters = 0;
 
-	if (seed!=-1)
-		cry_random_seed((unsigned int)seed);
+	SScopedRandomSeedChange seedChange;
+
+	if (seed != -1)
+		seedChange.Seed((unsigned int)seed);
 
 	sz.set(nCells.x+2,nCells.y+3);
 	for(i=1,ptmin=ptmax=ptsrc[0]; i<npt; i++) {
@@ -1017,8 +1021,9 @@ int *CBreakableGrid2d::BreakIntoChunks(const Vec2 &pt, float r, Vec2 *&ptout, in
 	if (ry<=0.0f)
 		ry = r;
 
+	SScopedRandomSeedChange seedChange;
 	if (seed!=-1)
-		cry_random_seed((unsigned int)seed);
+		seedChange.Seed((unsigned int)seed);
 
 	nCells = m_coord.size.x*m_coord.size.y;
 	for(szQueue=8; szQueue<(nCells>>2); szQueue<<=1);

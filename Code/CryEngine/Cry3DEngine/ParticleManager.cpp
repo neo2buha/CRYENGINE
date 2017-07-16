@@ -8,7 +8,7 @@
 //  Description: Manage particle effects and emitters
 // -------------------------------------------------------------------------
 //  History:
-//	- 03:2006				 : Modified by Jan Müller (Serialization)
+//	- 03:2006				 : Modified by Jan MÃ¼ller (Serialization)
 //
 ////////////////////////////////////////////////////////////////////////////
 
@@ -170,6 +170,11 @@ struct SortEffectStats
 
 void CParticleManager::CollectEffectStats(TEffectStats& mapEffectStats, float SParticleCounts::* pSortField) const
 {
+	CRY_ASSERT_MESSAGE(false, "CParticleManager::CollectEffectStats is deprecated");
+
+	/* Disabled as sorting a std::sort on a map is not allowed
+	//
+
 	SParticleCounts countsTotal;
 	for (const auto& e : m_Emitters)
 	{
@@ -186,8 +191,10 @@ void CParticleManager::CollectEffectStats(TEffectStats& mapEffectStats, float SP
 	// Add total to list.
 	mapEffectStats[NULL] = countsTotal;
 
+	
 	// Re-sort by selected stat.
 	std::sort(mapEffectStats.begin(), mapEffectStats.end(), SortEffectStats(pSortField));
+	*/
 }
 
 void CParticleManager::GetCounts(SParticleCounts& counts)
@@ -265,12 +272,24 @@ void CParticleManager::Reset()
 //////////////////////////////////////////////////////////////////////////
 void CParticleManager::ClearRenderResources(bool bForceClear)
 {
+	const bool bClearEmitters = !GetCVars()->e_ParticlesPreload || bForceClear;
+
+#if !defined(_RELEASE)
+	if (bClearEmitters)
+	{
+		for (const auto& pEmitter : m_Emitters)
+		{
+			assert(pEmitter.Unique()); // All external references need to be released before this point to prevent leaks
+		}
+	}
+#endif
+
 	if (GetCVars()->e_ParticlesDebug & AlphaBit('m'))
 		PrintParticleMemory();
 
 	Reset();
 
-	if (!GetCVars()->e_ParticlesPreload || bForceClear)
+	if (bClearEmitters)
 	{
 		m_Effects.clear();
 		m_LoadedLibs.clear();
@@ -332,7 +351,6 @@ void CParticleManager::SetDefaultEffect(const IParticleEffect* pEffect)
 const ParticleParams& CParticleManager::GetDefaultParams(ParticleParams::EInheritance eInheritance, int nVersion) const
 {
 	static ParticleParams s_paramsStandard;
-	static ParticleParams s_paramsZero(ZERO);
 
 	if (eInheritance == eInheritance.System)
 	{
@@ -342,8 +360,6 @@ const ParticleParams& CParticleManager::GetDefaultParams(ParticleParams::EInheri
 				return pEffect->GetParticleParams();
 		}
 	}
-	else if (eInheritance == eInheritance.Zero)
-		return s_paramsZero;
 	return s_paramsStandard;
 }
 
@@ -445,13 +461,15 @@ IParticleEffect* CParticleManager::FindEffect(cstr sEffectName, cstr sSource, bo
 	assert(pEffect);
 	if (pEffect->IsEnabled() || pEffect->GetChildCount())
 	{
+		if (GetCVars()->e_ParticlesConvertPfx1)
+		{
+			auto pEffectPfx2 = m_pParticleSystem->ConvertEffect(pEffect, !!(GetCVars()->e_ParticlesConvertPfx1 & 2));
+			if (GetCVars()->e_ParticlesConvertPfx1 & 4)
+				return pEffectPfx2;
+		}
 		if (bLoad)
 			pEffect->LoadResources(true, sSource);
 
-		if (GetCVars()->e_ParticlesConvertPfx1)
-		{
-			m_pParticleSystem->ConvertEffect(pEffect);
-		}
 		return pEffect;
 	}
 
@@ -749,7 +767,7 @@ void CParticleManager::EraseEmitter(CParticleEmitter* pEmitter)
 		// Free resources.
 		pEmitter->Reset();
 
-		if (pEmitter->GetRefCount() == 1 && !pEmitter->m_pOcNode)
+		if (pEmitter->Unique() == 1 && !pEmitter->m_pOcNode)
 		{
 			// Free object itself if no other refs.
 			for (auto& pListener : m_ListenersList)
@@ -846,17 +864,21 @@ void CParticleManager::UpdateEngineData()
 	m_RenderFlags.SetState(GetCVars()->e_ParticlesAnimBlend - 1, OS_ANIM_BLEND);
 	m_RenderFlags.SetState(GetCVars()->e_ParticlesMotionBlur - 1, FOB_MOTION_BLUR);
 	m_RenderFlags.SetState(GetCVars()->e_ParticlesShadows - 1, FOB_INSHADOW);
-	m_RenderFlags.SetState(GetCVars()->e_ParticlesGI - 1, FOB_GLOBAL_ILLUMINATION);
 	m_RenderFlags.SetState(GetCVars()->e_ParticlesSoftIntersect - 1, FOB_SOFT_PARTICLE);
+
+	bool bInvalidateCachedRenderObjects = false;
 
 	if (GetRenderer())
 	{
 		bool bParticleTesselation = false;
 		GetRenderer()->EF_Query(EFQ_ParticlesTessellation, bParticleTesselation);
 		m_RenderFlags.SetState(int(bParticleTesselation) - 1, FOB_ALLOW_TESSELLATION);
+
+		bInvalidateCachedRenderObjects = (m_bParticleTessellation != bParticleTesselation);
+		m_bParticleTessellation = bParticleTesselation;
 	}
 
-	if (m_pLastDefaultParams != &GetDefaultParams())
+	if (m_pLastDefaultParams != &GetDefaultParams() || bInvalidateCachedRenderObjects)
 	{
 		// Default effect or config spec changed.
 		m_pLastDefaultParams = &GetDefaultParams();
@@ -1206,7 +1228,7 @@ void CParticleManager::ClearCachedLibraries()
 	{
 		// Purge all unused effects.
 		CParticleEffect* pEffect = it->second;
-		bool fxInUse = (pEffect->NumRefs() > 1) || (pEffect->ResourcesLoaded(true));
+		const bool fxInUse = !pEffect->Unique() || pEffect->ResourcesLoaded(true);
 		if (!fxInUse)
 			it = m_Effects.erase(it);
 		else
@@ -1265,6 +1287,7 @@ int CParticleManager::AddEventTiming(cstr sEvent, const CParticleContainer* pCon
 //////////////////////////////////////////////////////////////////////////
 void CParticleManager::Serialize(TSerialize ser)
 {
+	LOADING_TIME_PROFILE_SECTION;
 	ser.BeginGroup("ParticleEmitters");
 
 	if (ser.IsWriting())
@@ -1427,62 +1450,62 @@ void CParticleManager::DumpAndResetVertexIndexPoolUsage()
 		gEnv->pRenderer->EF_Query(EFQ_GetParticleIndexBufferSize, nParticleIndexBufferSize);
 		gEnv->pRenderer->EF_Query(EFQ_GetMaxParticleContainer, nMaxParticleContainer);
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "== Particle Profiler ==");
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "== Particle Profiler ==");
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Particle Object Pool (Size %4d KB)",
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Particle Object Pool (Size %4d KB)",
 		                             GetCVars()->e_ParticlesPoolSize);
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tUsed %4u Max Used %4u Free %4u (KB)",
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tUsed %4u Max Used %4u Free %4u (KB)",
 		                             uint(memParticles.nUsed >> 10), uint((memParticles.nUsed + memParticles.nPool)) >> 10, uint(memParticles.nFree() >> 10));
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Particle VertexBuffer (Size %3d KB * 2)",
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Particle VertexBuffer (Size %3d KB * 2)",
 		                             nParticleVertexBufferSize / 1024);
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tAvail. %3u Used %3u Free %3u",
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tAvail. %3u Used %3u Free %3u",
 		                             nParticleVertexBufferSize / (uint)sizeof(SVF_Particle), m_nRequieredVertexPoolMemory / (uint)sizeof(SVF_Particle),
 		                             m_nRequieredVertexPoolMemory >= nParticleVertexBufferSize ? 0 : (nParticleVertexBufferSize - m_nRequieredVertexPoolMemory) / (uint)sizeof(SVF_Particle));
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Particle IndexBuffer (Size %3d KB * 2)",
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Particle IndexBuffer (Size %3d KB * 2)",
 		                             nParticleIndexBufferSize / 1024);
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tAvail. %3u Used %3u Free %3u",
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tAvail. %3u Used %3u Free %3u",
 		                             nParticleIndexBufferSize / (uint)sizeof(uint16), m_nRequieredIndexPoolMemory / (uint)sizeof(uint16),
 		                             m_nRequieredIndexPoolMemory >= nParticleIndexBufferSize ? 0 : (nParticleIndexBufferSize - m_nRequieredIndexPoolMemory) / (uint)sizeof(uint16));
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Render Stats");
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Render Stats");
 		fTopOffset += 18.0f;
 
 		/*
-		    gEnv->pRenderer->Draw2dLabel( fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tContainer Rendered %3d (Limit %3d)",
+		    IRenderAuxText::Draw2dLabel( fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tContainer Rendered %3d (Limit %3d)",
 		      m_nNumContainerToRender, nMaxParticleContainer);
 		    fTopOffset += 18.0f;
 
-		    gEnv->pRenderer->Draw2dLabel( fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tParticles Culled   %3d",
+		    IRenderAuxText::Draw2dLabel( fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tParticles Culled   %3d",
 		      m_nParticlesCulled);
 		    fTopOffset += 18.0f;
 		 */
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Fill Rate (Particle Pixels per Screen Pixel)");
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Fill Rate (Particle Pixels per Screen Pixel)");
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tLimit    %3d", (int)GetCVars()->e_ParticlesMaxScreenFill);
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tLimit    %3d", (int)GetCVars()->e_ParticlesMaxScreenFill);
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tProcessed %3d", (int)(CurCounts.PixelsProcessed / fScreenPix));
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tProcessed %3d", (int)(CurCounts.PixelsProcessed / fScreenPix));
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tRendered  %3d", (int)(CurCounts.PixelsRendered / fScreenPix));
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "\tRendered  %3d", (int)(CurCounts.PixelsRendered / fScreenPix));
 		fTopOffset += 18.0f;
 		fTopOffset += 18.0f;
 
-		gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Top %d ParticleContainer in Vertex/Index Pool", nVertexIndexPoolUsageEntries);
+		IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "- Top %d ParticleContainer in Vertex/Index Pool", nVertexIndexPoolUsageEntries);
 		fTopOffset += 18.0f;
 
 		for (int i = 0; i < nVertexIndexPoolUsageEntries; ++i)
@@ -1490,7 +1513,7 @@ void CParticleManager::DumpAndResetVertexIndexPoolUsage()
 			if (m_arrVertexIndexPoolUsage[i].nVertexMemory == 0)
 				break;
 
-			gEnv->pRenderer->Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "Vert: %3d KB Ind: %3d KB Part: %3d %s", m_arrVertexIndexPoolUsage[i].nVertexMemory / 1024, m_arrVertexIndexPoolUsage[i].nIndexMemory / 1024, 0, m_arrVertexIndexPoolUsage[i].pContainerName);
+			IRenderAuxText::Draw2dLabel(fTextSideOffset, fTopOffset, fTextSize, pColor, false, "Vert: %3d KB Ind: %3d KB Part: %3d %s", m_arrVertexIndexPoolUsage[i].nVertexMemory / 1024, m_arrVertexIndexPoolUsage[i].nIndexMemory / 1024, 0, m_arrVertexIndexPoolUsage[i].pContainerName);
 			fTopOffset += 18.0f;
 		}
 	}

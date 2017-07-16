@@ -239,16 +239,19 @@ void CDedicatedInput::GiveItems()
 		nameIdx = cry_random(0, numberItems - 1);
 	}
 
-	IGameFramework *pGameFramework = gEnv->pGame->GetIGameFramework();
+	IGameFramework *pGameFramework = gEnv->pGameFramework;
 	IItemSystem		*pItemSystem = pGameFramework->GetIItemSystem();
 
 	//Check item name before giving (it will resolve case sensitive 'issues')
 	const char *itemName = (const char*)(pItemSystem->Query(eISQ_Find_Item_By_Name, itemNames[nameIdx]));
-	CRY_ASSERT_MESSAGE(itemName, string().Format("DummyPlayer : Trying to give DummyPlayer unknown/removed item '%s'", itemNames[nameIdx]).c_str() );
 	if(itemName)
 	{
 		pItemSystem->GiveItem(m_pPlayer, itemName, true, true, true);
 		CryLog( "Giving new weapon item %s", itemName);
+	}
+	else
+	{
+		CryWarning(VALIDATOR_MODULE_GAME, VALIDATOR_WARNING, "DummyPlayer : Trying to give DummyPlayer unknown/removed item '%s'", itemNames[nameIdx]);
 	}
 
 	const char *explosiveItemNames[] =
@@ -277,11 +280,14 @@ void CDedicatedInput::GiveItems()
 	}
 
 	itemName = (const char*)(pItemSystem->Query(eISQ_Find_Item_By_Name, explosiveItemNames[nameIdx]));
-	CRY_ASSERT_MESSAGE(itemName, string().Format("DummyPlayer : Trying to give DummyPlayer unknown/removed explosive item '%s'", explosiveItemNames[nameIdx]).c_str() );
 	if(itemName)
 	{
 		pItemSystem->GiveItem(m_pPlayer, itemName, true, false, true);
 		CryLog( "Giving new explosive item %s", itemName);
+	}
+	else
+	{
+		CryWarning(VALIDATOR_MODULE_GAME, VALIDATOR_WARNING, "DummyPlayer : Trying to give DummyPlayer unknown/removed explosive item '%s'", explosiveItemNames[nameIdx]);
 	}
 }
 
@@ -522,7 +528,7 @@ void CDedicatedInput::HandleDeathAndSuicide(CGameRules* const pGameRules)
 
 			IGameRulesSpawningModule *pSpawningModule = pGameRules->GetSpawningModule();
 
-			if (pSpawningModule)
+			if (pSpawningModule && pSpawningModule->GetRemainingLives(m_pPlayer->GetEntityId()) > 0)
 			{
 				pSpawningModule->ClRequestRevive(m_pPlayer->GetEntityId());
 			}

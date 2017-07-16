@@ -18,10 +18,9 @@
 #include "ObjMan.h"
 #include "VisAreas.h"
 #include "terrain_sector.h"
-#include "3dEngine.h"
-#include "3dEngine.h"
 #include "terrain.h"
 #include <CryMath/AABBSV.h>
+#include "3dEngine.h"
 
 #define DEFAULT_INITIAL_PORTALS   1
 #define DEFAULT_INITIAL_VISAREAS  1
@@ -511,7 +510,7 @@ void CVisAreaManager::PortalsDrawDebug()
 		for (int v = 0; v < m_lstVisAreas.Count(); v++)
 		{
 			DrawBBox(m_lstVisAreas[v]->m_boxArea.min, m_lstVisAreas[v]->m_boxArea.max); //, DPRIM_SOLID_BOX);
-			GetRenderer()->DrawLabelEx((m_lstVisAreas[v]->m_boxArea.min + m_lstVisAreas[v]->m_boxArea.max) * 0.5f, 1, (float*)&oneVec, 0, 1, "%s", m_lstVisAreas[v]->GetName());
+			IRenderAuxText::DrawLabelEx((m_lstVisAreas[v]->m_boxArea.min + m_lstVisAreas[v]->m_boxArea.max) * 0.5f, 1, (float*)&oneVec, 0, 1, m_lstVisAreas[v]->GetName());
 
 			GetRenderer()->SetMaterialColor(0, 1, 0, 0.25f);
 			DrawBBox(m_lstVisAreas[v]->m_boxStatics, Col_LightGray);
@@ -532,7 +531,7 @@ void CVisAreaManager::PortalsDrawDebug()
 			  64);
 			DrawBBox(pPortal->m_boxArea.min, pPortal->m_boxArea.max, col);
 
-			GetRenderer()->DrawLabelEx((pPortal->m_boxArea.min + pPortal->m_boxArea.max) * 0.5f, 1, (float*)&oneVec, 0, 1, "%s", pPortal->GetName());
+			IRenderAuxText::DrawLabelEx((pPortal->m_boxArea.min + pPortal->m_boxArea.max) * 0.5f, 1, (float*)&oneVec, 0, 1, pPortal->GetName());
 
 			Vec3 vCenter = (pPortal->m_boxArea.min + pPortal->m_boxArea.max) * 0.5f;
 			DrawBBox(vCenter - Vec3(0.1f, 0.1f, 0.1f), vCenter + Vec3(0.1f, 0.1f, 0.1f));
@@ -752,24 +751,17 @@ void CVisAreaManager::ActivatePortal(const Vec3& vPos, bool bActivate, const cha
 	   }
 	 */
 }
-/*
-   bool CVisAreaManager::IsEntityInVisibleArea(IRenderNodeState * pRS)
-   {
-   if( pRS && pRS->plstVisAreaId && pRS->plstVisAreaId->Count() )
-   {
-    PodArray<int> * pVisAreas = pRS->plstVisAreaId;
-    for(int n=0; n<pVisAreas->Count(); n++)
-      if( m_lstVisAreas[pVisAreas->GetAt(n)].m_nVisFrameId==passInfo.GetFrameID() )
-        break;
 
-    if(n==pVisAreas->Count())
-      return false; // no visible areas
-   }
-   else
-    return false; // entity is not inside
-
-   return true;
-   }	*/
+void CVisAreaManager::ActivateOcclusionAreas(IVisAreaTestCallback* pTest, bool bActivate)
+{
+	for (int v = 0; v < m_lstOcclAreas.Count(); v++)
+	{
+		if (pTest->TestVisArea(m_lstOcclAreas[v]))
+		{
+			m_lstOcclAreas[v]->m_bActive = bActivate;
+		}
+	}
+}
 
 bool CVisAreaManager::IsValidVisAreaPointer(CVisArea* pVisArea)
 {
@@ -1308,7 +1300,7 @@ void CVisAreaManager::DrawOcclusionAreasIntoCBuffer(const SRenderingPassInfo& pa
 		for (int i = 0; i < m_lstOcclAreas.Count(); i++)
 		{
 			CVisArea* pArea = m_lstOcclAreas[i];
-			if (passInfo.GetCamera().IsAABBVisible_E(pArea->m_boxArea))
+			if (pArea->m_bActive && passInfo.GetCamera().IsAABBVisible_E(pArea->m_boxArea))
 			{
 				float fRadius = (pArea->m_boxArea.min - pArea->m_boxArea.max).GetLength();
 				Vec3 vPos = (pArea->m_boxArea.min + pArea->m_boxArea.max) * 0.5f;
@@ -1331,6 +1323,8 @@ void CVisAreaManager::DrawOcclusionAreasIntoCBuffer(const SRenderingPassInfo& pa
 					}
 					else
 					{
+						CRY_ASSERT_MESSAGE(pArea->m_lstShapePoints.Count() == 2, "Occlusion area only supports planes or quads");
+
 						activeVerts.arrvActiveVerts[0] = pArea->m_lstShapePoints[0];
 						activeVerts.arrvActiveVerts[1] = pArea->m_lstShapePoints[0] + Vec3(0, 0, pArea->m_fHeight);
 						activeVerts.arrvActiveVerts[2] = pArea->m_lstShapePoints[1] + Vec3(0, 0, pArea->m_fHeight);
@@ -1884,8 +1878,8 @@ bool CVisAreaManager::IsAABBVisibleFromPoint(AABB& box, Vec3 pos)
 
 	bool bRes = FindShortestPathToVisArea(pAreaPos, pAreaBox, arrPortals, nRecursion, sv);
 
-	GetRenderer()->DrawLabel(box.GetCenter(), 2, "-%s-", bRes ? "Y" : "N");
-	GetRenderer()->DrawLabel(pos, 2, "-X-");
+	IRenderAuxText::DrawLabelF(box.GetCenter(), 2, "-%s-", bRes ? "Y" : "N");
+	IRenderAuxText::DrawLabel(pos, 2, "-X-");
 	DrawLine(pos, box.GetCenter());
 	DrawBBox(box, bRes ? Col_White : Col_NavyBlue);
 
@@ -1982,6 +1976,7 @@ void CVisAreaManager::ReleaseInactiveSegments()
 	for (int i = 0; i < m_arrDeletedVisArea.Count(); i++)
 	{
 		int nSlotID = m_arrDeletedVisArea[i];
+
 		SAFE_DELETE(m_visAreas[nSlotID]->m_pObjectsTree);
 	}
 	m_arrDeletedVisArea.Clear();
@@ -2040,22 +2035,14 @@ void CVisAreaManager::DeleteVisAreaSegment(int nSID,
 		int index = visAreasInSegment[i];
 		assert(index >= 0 && index < visAreas.Count());
 		CSWVisArea* pVisArea = (CSWVisArea*)visAreas[index];
-		pVisArea->Release();
-
-		// delete the visarea if it's ref count reaches zero
-		if (!pVisArea->NumRefs())
+		if (pVisArea->Unique())
+		{
+			lstVisAreas.Delete(pVisArea);
 			deletedVisAreas.push_back(index);
+		}
+		pVisArea->Release();		
 	}
 	visAreasInSegment.clear();
-
-	for (int i = 0; i < lstVisAreas.Count(); i++)
-	{
-		CSWVisArea* pVisArea = (CSWVisArea*)lstVisAreas[i];
-		if (!pVisArea->NumRefs())
-		{
-			lstVisAreas.Delete(i);
-		}
-	}
 }
 
 CVisArea* CVisAreaManager::FindVisAreaByGuid(VisAreaGUID guid, PodArray<CVisArea*>& lstVisAreas)

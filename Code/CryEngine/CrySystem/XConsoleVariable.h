@@ -74,31 +74,31 @@ public:
 
 	// interface ICVar --------------------------------------------------------------------------------------
 
-	virtual void            ClearFlags(int flags);
-	virtual int             GetFlags() const;
-	virtual int             SetFlags(int flags);
-	virtual const char*     GetName() const;
-	virtual const char*     GetHelp();
-	virtual void            Release();
-	virtual void            ForceSet(const char* s);
-	virtual void            SetOnChangeCallback(ConsoleVarFunc pChangeFunc);
-	virtual void            AddOnChangeFunctor(const SFunctor& pChangeFunctor);
-	virtual bool            RemoveOnChangeFunctor(const uint64 nElement);
-	virtual uint64          GetNumberOfOnChangeFunctors() const;
-	virtual const SFunctor& GetOnChangeFunctor(uint64 nFunctorIndex) const;
-	virtual ConsoleVarFunc  GetOnChangeCallback() const;
+	virtual void            ClearFlags(int flags) override;
+	virtual int             GetFlags() const override;
+	virtual int             SetFlags(int flags) override;
+	virtual const char*     GetName() const override;
+	virtual const char*     GetHelp() override;
+	virtual void            Release() override;
+	virtual void            ForceSet(const char* s) override;
+	virtual void            SetOnChangeCallback(ConsoleVarFunc pChangeFunc) override;
+	virtual uint64          AddOnChangeFunctor(const SFunctor& pChangeFunctor) override;
+	virtual bool            RemoveOnChangeFunctor(const uint64 nElement) override;
+	virtual uint64          GetNumberOfOnChangeFunctors() const override;
+	virtual const SFunctor& GetOnChangeFunctor(uint64 nFunctorIndex) const override;
+	virtual ConsoleVarFunc  GetOnChangeCallback() const override;
 
-	virtual int             GetRealIVal() const { return GetIVal(); }
-	virtual bool            IsConstCVar() const { return (m_nFlags & VF_CONST_CVAR) != 0; }
+	virtual int             GetRealIVal() const override { return GetIVal(); }
+	virtual bool            IsConstCVar() const override { return (m_nFlags & VF_CONST_CVAR) != 0; }
 #if defined(DEDICATED_SERVER)
-	virtual void            SetDataProbeString(const char* pDataProbeString)
+	virtual void            SetDataProbeString(const char* pDataProbeString) override
 	{
 		CRY_ASSERT(m_pDataProbeString == NULL);
 		m_pDataProbeString = new char[strlen(pDataProbeString) + 1];
 		strcpy(m_pDataProbeString, pDataProbeString);
 	}
 #endif
-	virtual const char* GetDataProbeString() const
+	virtual const char* GetDataProbeString() const override
 	{
 #if defined(DEDICATED_SERVER)
 		if (m_pDataProbeString)
@@ -128,6 +128,8 @@ protected: // ------------------------------------------------------------------
 
 	std::vector<SFunctor> m_cpChangeFunctors;
 	ConsoleVarFunc        m_pChangeFunc;            // Callback function that is called when this variable changes.
+
+
 	CXConsole*            m_pConsole;               // used for the callback OnBeforeVarChange()
 };
 
@@ -139,7 +141,6 @@ public:
 	CXConsoleVariableString(CXConsole* pConsole, const char* sName, const char* szDefault, int nFlags, const char* help)
 		: CXConsoleVariableBase(pConsole, sName, nFlags, help)
 	{
-		ScopedSwitchToGlobalHeap useGlobalHeap;
 		m_sValue = szDefault;
 	}
 
@@ -161,7 +162,6 @@ public:
 		{
 			m_nFlags |= VF_MODIFIED;
 			{
-				ScopedSwitchToGlobalHeap useGlobalHeap;
 				m_sValue = s;
 			}
 
@@ -611,7 +611,6 @@ public:
 		{
 			m_nFlags |= VF_MODIFIED;
 			{
-				ScopedSwitchToGlobalHeap useGlobalHeap;
 				m_sValue = s;
 				m_userPtr = m_sValue.c_str();
 			}

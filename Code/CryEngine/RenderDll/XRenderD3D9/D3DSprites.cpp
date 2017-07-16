@@ -7,7 +7,7 @@
 
 #include <Cry3DEngine/IStatObj.h>
 #include <Cry3DEngine/I3DEngine.h>
-#include <CryEntitySystem/IEntityRenderState.h>
+#include <Cry3DEngine/IRenderNode.h>
 
 #include "Common/RenderView.h"
 
@@ -51,14 +51,6 @@ void sFlushSprites(SSpriteGenInfo* pSGI, int nCurX, int nCurY, CTexture* pSrcTex
 	int ncX = 0;
 	int ncY = 0;
 	CD3D9Renderer* r = gcpRendD3D;
-	STexState pTexState;
-#ifndef SPRITES_2_TEXTURES
-	pTexState.SetFilterMode(FILTER_POINT);
-#else
-	pTexState.SetFilterMode(FILTER_LINEAR);
-#endif
-	pTexState.SetClampMode(TADDR_CLAMP, TADDR_CLAMP, TADDR_CLAMP);
-	int nTS = CTexture::GetTexState(pTexState);
 	r->Set2DMode(true, 1, 1);
 	CTexture* pCurRT = r->m_pNewTarget[0]->m_pTex;
 
@@ -160,7 +152,11 @@ void sFlushSprites(SSpriteGenInfo* pSGI, int nCurX, int nCurY, CTexture* pSrcTex
 		fSizeX *= 2;
 #endif
 
-		pSrcTex->Apply(0, nTS);
+#ifndef SPRITES_2_TEXTURES
+		pSrcTex->Apply(0, EDefaultSamplerStates::PointClamp);
+#else
+		pSrcTex->Apply(0, EDefaultSamplerStates::LinearClamp);
+#endif
 
 		float fZ = 0.5f;
 		r->DrawQuad3D(Vec3(0, 0, fZ), Vec3(1, 0, fZ), Vec3(1, 1, fZ), Vec3(0, 1, fZ), Col_White, fOffsX, fOffsY, fOffsX + fSizeX, fOffsY + fSizeY);
@@ -187,7 +183,7 @@ void sFlushSprites(SSpriteGenInfo* pSGI, int nCurX, int nCurY, CTexture* pSrcTex
 static void sRT_StartEf()
 {
 }
-static void sRT_AddEf(CRendElementBase* pRE, SShaderItem& SH, CRenderObject* pObj, int nList, int nAW, const SRenderingPassInfo& passInfo)
+static void sRT_AddEf(CRenderElement* pRE, SShaderItem& SH, CRenderObject* pObj, int nList, int nAW, const SRenderingPassInfo& passInfo)
 {
 	CShader* pSH = (CShader*)SH.m_pShader;
 	if (pSH->m_Flags & EF_NODRAW)
@@ -222,7 +218,6 @@ static void sRT_RenderObject(IStatObj* pEngObj, SRendParams& RP, const SRenderin
 	pObj->m_II.m_AmbColor = RP.AmbientColor;
 	pObj->m_ObjFlags |= FOB_INSHADOW;
 	pObj->m_fAlpha = RP.fAlpha;
-	pObj->m_nRenderQuality = (short)(RP.fRenderQuality * 65535.0f);
 	pObj->m_fDistance = RP.fDistance;
 	pObj->m_nMaterialLayers = RP.nMaterialLayersBlend;
 	pObj->m_pCurrMaterial = RP.pMaterial;
@@ -243,7 +238,7 @@ static void sRT_RenderObject(IStatObj* pEngObj, SRendParams& RP, const SRenderin
 	for (uint32 i = 0; i < ni; i++)
 	{
 		CRenderChunk* pChunk = &pChunks->at(i);
-		CRendElementBase* pREMesh = pChunk->pRE;
+		CRenderElement* pREMesh = pChunk->pRE;
 
 		SShaderItem& ShaderItem = pMaterial->GetShaderItem(pChunk->m_nMatID);
 		if (pREMesh && ShaderItem.m_pShader && ShaderItem.m_pShaderResources)
@@ -263,11 +258,11 @@ static void sRT_EndEf(const SRenderingPassInfo& passInfo)
 	CD3D9Renderer* rd = gcpRendD3D;
 	int nThreadID = rd->m_RP.m_nProcessThreadID;
 
-	rd->m_RP.m_ForceStateAnd |= GS_ALPHATEST_MASK;
+	rd->m_RP.m_ForceStateAnd |= GS_ALPHATEST;
 
 	rd->m_pRT->RC_RenderScene(passInfo.GetRenderView(), SHDF_ALLOWHDR, CD3D9Renderer::FX_FlushShader_General);
 
-	rd->m_RP.m_ForceStateAnd &= ~GS_ALPHATEST_MASK;
+	rd->m_RP.m_ForceStateAnd &= ~GS_ALPHATEST;
 }
 
 static void sCreateFT(bool bHDR)
@@ -333,7 +328,6 @@ void CD3D9Renderer::MakeSprites(TArray<SSpriteGenInfo>& SGI, const SRenderingPas
 	int nSprY = nHeight / nSpriteResInt;
 	int nCurX = 0;
 	int nCurY = 0;
-	SDepthTexture* pDepthSurfMSAA = &m_DepthBufferOrigMSAA;
 	SDepthTexture* pDepthSurf = &m_DepthBufferOrig;
 	if (m_RP.m_MSAAData.Type > 1)
 	{
@@ -347,7 +341,7 @@ void CD3D9Renderer::MakeSprites(TArray<SSpriteGenInfo>& SGI, const SRenderingPas
 	CRenderObject* pObj = m_RP.m_pCurObject;
 	SShaderTechnique* pTech = m_RP.m_pCurTechnique;
 	SShaderTechnique* pRootTech = m_RP.m_pRootTechnique;
-	CRendElementBase* pRE = m_RP.m_pRE;
+	CRenderElement* pRE = m_RP.m_pRE;
 
 	//int nPrevStr = CV_r_texturesstreamingsync;
 	int nPrevAsync = CV_r_shadersasynccompiling;
@@ -357,8 +351,6 @@ void CD3D9Renderer::MakeSprites(TArray<SSpriteGenInfo>& SGI, const SRenderingPas
 	CV_r_usezpass = 0;
 
 	rParms.dwFObjFlags |= FOB_TRANS_MASK;
-	rParms.nDLightMask = 1;
-	rParms.fRenderQuality = 0.0f;
 	rParms.pRenderNode = (struct IRenderNode*)(intptr_t)-1; // avoid random skipping of rendering
 
 	Vec3 cSkyBackup = gEnv->p3DEngine->GetSkyColor();
@@ -378,7 +370,7 @@ void CD3D9Renderer::MakeSprites(TArray<SSpriteGenInfo>& SGI, const SRenderingPas
 	uint32 saveFlags2 = m_RP.m_PersFlags2;
 	m_RP.m_TI[nThreadID].m_PersFlags |= RBPF_MAKESPRITE;
 	m_RP.m_PersFlags2 &= ~(RBPF2_NOALPHABLEND | RBPF2_NOALPHATEST);
-	m_RP.m_StateAnd |= (GS_BLEND_MASK | GS_ALPHATEST_MASK);
+	m_RP.m_StateAnd |= (GS_BLEND_MASK | GS_ALPHATEST);
 
 	EF_PushFog();
 	EF_PushMatrix();
@@ -461,7 +453,7 @@ void CD3D9Renderer::MakeSprites(TArray<SSpriteGenInfo>& SGI, const SRenderingPas
 		m_RP.m_TI[nThreadID].m_PersFlags |= RBPF_FP_MATRIXDIRTY;
 
 		*m_RP.m_TI[nThreadID].m_matView->GetTop() = mView;
-		m_CameraZeroMatrix[nThreadID] = mView;
+		m_RP.m_TI[nThreadID].m_matCameraZero = mView;
 
 		RT_SetCameraInfo();
 
@@ -972,14 +964,9 @@ void CD3D9Renderer::ObjSpritesFlush(SVF_P3F_C4B_T2F* pVerts, uint16* pInds, int 
 	if (!bZ)
 	{
 		if (bSunShadowExist)
-		{
-			CTexture* pTexMask = CTexture::s_ptexBackBuffer;
-			pTexMask->Apply(1, m_nPointState);
-		}
+			CTexture::s_ptexBackBuffer->Apply(1, EDefaultSamplerStates::PointClamp);
 		else
-		{
-			CTexture::s_ptexBlackAlpha->Apply(1, m_nPointState);
-		}
+			CTexture::s_ptexBlackAlpha->Apply(1, EDefaultSamplerStates::PointClamp);
 	}
 
 	SShaderPass* pPass = &pTech->m_Passes[0];
@@ -1036,16 +1023,13 @@ void CD3D9Renderer::DrawObjSprites(PodArray<SVegetationSpriteInfo>* pList, SSpri
 
 	if (bShadows)
 	{
-		int nColorMask = ((~(1 << 0)) << GS_COLMASK_SHIFT) & GS_COLMASK_MASK;
+		int nColorMask = ~(1 << GS_COLMASK_SHIFT) & GS_COLMASK_MASK;
 		nState |= nColorMask | GS_BLSRC_ONE | GS_BLDST_ONE;
 	}
 
 	FX_SetState(nState, nAlphaRef);
 
 	D3DSetCull(eCULL_None);
-
-	if (CRenderer::CV_r_HDRRendering)
-		m_RP.m_FlagsShader_RT |= g_HWSR_MaskBit[HWSR_HDR_MODE];
 
 	m_RP.m_FlagsShader_RT |= g_HWSR_MaskBit[HWSR_ALPHATEST];
 #ifdef SPRITES_2_TEXTURES
@@ -1061,14 +1045,11 @@ void CD3D9Renderer::DrawObjSprites(PodArray<SVegetationSpriteInfo>* pList, SSpri
 	m_RP.m_FlagsStreams_Decl = 0;
 	m_RP.m_FlagsStreams_Stream = 0;
 
-	EVertexFormat nf = eVF_P3F_C4B_T2F;
+	InputLayoutHandle nf = EDefaultInputLayouts::P3F_C4B_T2F;
 	m_RP.m_CurVFormat = nf;
 	m_RP.m_FlagsShader_MD = 0;
 	m_RP.m_FlagsShader_MDV = 0;
 	m_RP.m_FlagsShader_LT = 0;
-
-	if (!CV_r_usezpass)
-		m_RP.m_FlagsShader_RT |= g_HWSR_MaskBit[HWSR_NOZPASS];
 
 	m_cEF.s_ShaderTreeSprites->FXBegin(&m_RP.m_nNumRendPasses, bShadows ? FEF_DONTSETSTATES : FEF_DONTSETTEXTURES | FEF_DONTSETSTATES);
 	m_cEF.s_ShaderTreeSprites->FXBeginPass(0);
@@ -1100,14 +1081,12 @@ void CD3D9Renderer::DrawObjSprites(PodArray<SVegetationSpriteInfo>* pList, SSpri
 		m_pSpriteInds = (uint16*)(pMem + nMemV + 256);
 	}
 
-	int nTexState;
 #ifdef SPRITES_2_TEXTURES
-	nTexState = CTexture::GetTexState(STexState(FILTER_LINEAR, true));
+	SamplerStateHandle nTexState = EDefaultSamplerStates::LinearClamp;
 #else
-	nTexState = CTexture::GetTexState(STexState(FILTER_LINEAR /*POINT*/, true));
+	SamplerStateHandle nTexState = EDefaultSamplerStates::LinearClamp; // SAMPLERSTATE_POINT
 #endif
-
-	int nNoiseTexState = CTexture::GetTexState(STexState(FILTER_LINEAR /*POINT*/, false));
+	SamplerStateHandle nNoiseTexState = EDefaultSamplerStates::LinearWrap;
 
 	uint32 nPrevLMask = (uint32) - 1;
 	int nPasses = 0;
@@ -1181,13 +1160,13 @@ void CD3D9Renderer::DrawObjSprites(PodArray<SVegetationSpriteInfo>* pList, SSpri
 
 					CTexture* pTerrTex = CTexture::GetByID(pTexInfo->nTex0);
 
-					STexState pTerrainTexState = STexState(FILTER_LINEAR, true);
+					SSamplerState pTerrainTexState = SSamplerState(FILTER_LINEAR, true);
 					pTerrainTexState.m_bSRGBLookup = true;
-					int nTerrainTexState = CTexture::GetTexState(pTerrainTexState);
+					SamplerStateHandle nTerrainTexState = CDeviceObjectFactory::GetOrCreateSamplerStateHandle(pTerrainTexState);
 					pTerrTex->Apply(3, nTerrainTexState);
 
 					static CCryNameR SpritesOutdoorAOVertInfoName("SpritesOutdoorAOVertInfo");
-					const Vec4 cSPVal(pTexInfo->fTexOffsetX, pTexInfo->fTexOffsetY, pTexInfo->fTexScale, pTexInfo->fTerrainMinZ);
+					const Vec4 cSPVal(pTexInfo->fTexOffsetX, pTexInfo->fTexOffsetY, pTexInfo->fTexScale, 0);
 					m_cEF.s_ShaderTreeSprites->FXSetVSFloat(SpritesOutdoorAOVertInfoName, &cSPVal, 1);
 				}
 				else
@@ -1199,11 +1178,6 @@ void CD3D9Renderer::DrawObjSprites(PodArray<SVegetationSpriteInfo>* pList, SSpri
 					if (m_RP.RenderView()->GetDynamicLightsCount() > 0 &&
 					    m_RP.RenderView()->GetDynamicLight(0).m_Flags & DLF_SUN)
 						bSunExist = true;
-
-					if (!bSunExist)
-						m_RP.m_FlagsShader_RT |= g_HWSR_MaskBit[HWSR_AMBIENT];
-					else
-						m_RP.m_FlagsShader_RT &= ~g_HWSR_MaskBit[HWSR_AMBIENT];
 				}
 			}
 			pPrevTex = pTex;

@@ -5,49 +5,12 @@
 #include <CryCore/Platform/platform_impl.inl>
 #include <CryCore/Platform/CryLibrary.h>
 #include <CryInput/IHardwareMouse.h>
+#include <ILevelSystem.h>
 #include "game/Game.h"
 
-#if ENABLE_AUTO_TESTER
-static CAutoTester s_autoTesterSingleton;
-#endif
-
 #if defined(_LIB)
-extern "C" IGameFramework * CreateGameFramework();
+extern "C" IGameStartup* CreateGameStartup();
 #endif
-
-#define DLL_INITFUNC_CREATEGAME "CreateGameFramework"
-
-#if CRY_PLATFORM_WINDOWS
-void debugLogCallStack()
-{
-	// Print call stack for each find.
-	const char* funcs[32];
-	int nCount = 32;
-
-	CryLogAlways("    ----- CallStack () -----");
-	gEnv->pSystem->debug_GetCallStack(funcs, nCount);
-	for (int i = 1; i < nCount; i++) // start from 1 to skip this function.
-	{
-		CryLogAlways("    %02d) %s", i, funcs[i]);
-	}
-}
-#endif
-
-void GameStartupErrorObserver::OnAssert(const char* condition, const char* message, const char* fileName, unsigned int fileLineNumber)
-{
-}
-
-void GameStartupErrorObserver::OnFatalError(const char* message)
-{
-	CryLogAlways("---FATAL ERROR: message:%s", message);
-
-#if CRY_PLATFORM_WINDOWS
-	gEnv->pSystem->debug_LogCallStack();
-	CryLogAlways("----------------------------------------");
-#endif
-}
-
-//////////////////////////////////////////////////////////////////////////
 
 CGameStartup* CGameStartup::Create()
 {
@@ -57,12 +20,7 @@ CGameStartup* CGameStartup::Create()
 
 CGameStartup::CGameStartup()
 	: m_pGame(nullptr),
-	m_gameRef(&m_pGame),
-	m_quit(false),
-	m_gameDll(0),
-	m_frameworkDll(nullptr),
-	m_pFramework(nullptr),
-	m_fullScreenCVarSetup(false)
+	m_gameRef(&m_pGame)
 {
 }
 
@@ -73,90 +31,32 @@ CGameStartup::~CGameStartup()
 		m_pGame->Shutdown();
 		m_pGame = nullptr;
 	}
-
-	if (m_gameDll)
-	{
-		CryFreeLibrary(m_gameDll);
-		m_gameDll = 0;
-	}
-
-	ShutdownFramework();
 }
 
 IGameRef CGameStartup::Init(SSystemInitParams& startupParams)
 {
-	if (!InitFramework(startupParams))
-	{
-		return nullptr;
-	}
+#ifndef _LIB
+	gEnv = startupParams.pSystem->GetGlobalEnvironment();
+#endif // !_LIB
 
-	startupParams.pSystem = GetISystem();
-	IGameRef pOut = Reset();
+	CryRegisterFlowNodes();
 
-	if (!m_pFramework->CompleteInit())
-	{
-		pOut->Shutdown();
-		return nullptr;
-	}
-
-	if (startupParams.bExecuteCommandLine)
-		GetISystem()->ExecuteCommandLine();
-
-	GetISystem()->GetISystemEventDispatcher()->RegisterListener(this);
-	GetISystem()->RegisterErrorObserver(&m_errorObsever);
-
-#if defined(CRY_UNIT_TESTING)
-	#if defined(_LIB)
-	CryUnitTest::Test* pTest = CryUnitTest::Test::m_pFirst;
-	for (; pTest != 0; pTest = pTest->m_pNext)
-	{
-		CryUnitTest::IUnitTestManager* pTestManager = GetISystem()->GetITestSystem()->GetIUnitTestManager();
-		if (pTestManager)
-		{
-			pTest->m_unitTestInfo.module = "StaticBinary";
-			pTestManager->CreateTest(pTest->m_unitTestInfo);
-		}
-	}
-	#endif
-
-	CryUnitTest::IUnitTestManager* pTestManager = GetISystem()->GetITestSystem()->GetIUnitTestManager();
-	if (pTestManager)
-	{
-		const ICmdLineArg* pSkipUnitTest = GetISystem()->GetICmdLine()->FindArg(eCLAT_Pre, "skip_unit_tests");
-		if (!pSkipUnitTest)
-		{
-			const ICmdLineArg* pUseUnitTestExcelReporter = GetISystem()->GetICmdLine()->FindArg(eCLAT_Pre, "use_unit_test_excel_reporter");
-			if (pUseUnitTestExcelReporter)
-			{
-				GetISystem()->GetITestSystem()->GetIUnitTestManager()->RunAllTests(CryUnitTest::ExcelReporter);
-			}
-			else
-			{
-				GetISystem()->GetITestSystem()->GetIUnitTestManager()->RunAllTests(CryUnitTest::MinimalReporter);
-			}
-		}
-	}
-#endif
-
-	return pOut;
-}
-
-IGameRef CGameStartup::Reset()
-{
 	static char pGameBuffer[sizeof(CGame)];
 	m_pGame = new((void*)pGameBuffer)CGame();
 
-	if (m_pGame->Init(m_pFramework))
+	if (m_pGame->Init())
 	{
 		return m_gameRef;
 	}
 
-	return nullptr;
+	return IGameRef(&m_pGame);
 }
 
 void CGameStartup::Shutdown()
 {
+	CryUnregisterFlowNodes();
 	this->~CGameStartup();
+<<<<<<< HEAD
 }
 
 int CGameStartup::Update(bool haveFocus, unsigned int updateFlags)
@@ -348,3 +248,6 @@ void CGameStartup::ShutdownFramework()
 		m_pFramework = nullptr;
 	}
 }
+=======
+}
+>>>>>>> upstream/stabilisation

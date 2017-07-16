@@ -25,6 +25,7 @@
 	#include "System.h"
 
 	#include <CryExtension/CryCreateClassInstance.h>
+	#include <CryRenderer/IRenderAuxGeom.h>
 
 	#define PERFHUD_CONFIG_FILE "Config/PerfHud_PC.xml"
 
@@ -61,8 +62,6 @@ CPerfHUD::CPerfHUD() :
 {
 	m_widgets.reserve(ICryPerfHUDWidget::eWidget_Num);
 }
-
-CPerfHUD::~CPerfHUD() {}
 
 void CPerfHUD::Destroy()
 {
@@ -243,7 +242,7 @@ void CPerfHUD::Draw()
 			if ((gEnv->pRenderer->GetFrameID(false) % 40) < 20)
 			{
 				float col[4] = { 1.f, 1.f, 0.f, 1.f };
-				gEnv->pRenderer->Draw2dLabel(500.f, 220.f, 2.f, col, false, "PefHUD Paused");
+				IRenderAuxText::Draw2dLabel(500.f, 220.f, 2.f, col, false, "PefHUD Paused");
 			}
 		}
 		else //Update
@@ -390,7 +389,7 @@ void CPerfHUD::InitUI(IMiniGUI* pGUI)
 	CreateCVarMenuItem(pStatsMenu, "Poly / Lod info", "e_debugDraw", 0, 1);
 	CreateCVarMenuItem(pStatsMenu, "Texture Memory Usage", "e_debugDraw", 0, 4);
 	CreateCVarMenuItem(pStatsMenu, "Detailed Render Stats", "r_Stats", 0, 1);
-	CreateCVarMenuItem(pStatsMenu, "Shader Stats", "r_ProfileShaders", 0, 1);
+	CreateCVarMenuItem(pStatsMenu, "Shader Stats", "r_profiler", 0, 2);
 	CreateCVarMenuItem(pStatsMenu, "Flash Stats", "sys_flash_info", 0, 1);
 
 	//
@@ -407,7 +406,7 @@ void CPerfHUD::InitUI(IMiniGUI* pGUI)
 	}
 
 	CreateCVarMenuItem(pMenu, "Profiler", "profile", 0, 1);
-	CreateCVarMenuItem(pMenu, "Thread Summary", "r_showmt", 0, 1);
+	CreateCVarMenuItem(pMenu, "Thread Summary", "r_profiler", 0, 1);
 	CreateCVarMenuItem(pMenu, "Track File Access", "sys_PakLogInvalidFileAccess", 0, 1);
 
 	//FPS Buckets
@@ -746,8 +745,8 @@ bool CPerfHUD::OnInputEvent(const SInputEvent& rInputEvent)
 				}
 
 				float col[4] = { 1.f, 1.f, 1.f, 1.f };
-				gEnv->pRenderer->Draw2dLabel(450.f, 200.f, 2.f, col, false, "%s", hudStateStr);
-				gEnv->pRenderer->Draw2dLabel(450.f, 220.f, 2.f, col, false, "Press X to change Mode");
+				IRenderAuxText::Draw2dLabel(450.f, 200.f, 2.f, col, false, "%s", hudStateStr);
+				IRenderAuxText::Draw2dLabel(450.f, 220.f, 2.f, col, false, "Press X to change Mode");
 			}
 		}
 		else if (rInputEvent.state == eIS_Released)
@@ -1413,25 +1412,40 @@ void CRenderStatsWidget::Update()
 
 	switch (gEnv->pRenderer->GetRenderType())
 	{
-	case eRT_OpenGL:
-		pRenderType = "PC - OpenGL";
+#if CRY_PLATFORM_DURANGO
+	case ERenderType::Direct3D11:
+		pRenderType = "Xbox - DX11";
 		break;
-	case eRT_DX11:
+	case ERenderType::Direct3D12:
+		pRenderType = "Xbox - DX12";
+		break;
+#else
+	case ERenderType::Direct3D11:
 		pRenderType = "PC - DX11";
 		break;
-	case eRT_DX12:
+	case ERenderType::Direct3D12:
 		pRenderType = "PC - DX12";
 		break;
-	case eRT_XboxOne:
-		pRenderType = "Xbox One";
+#endif
+#if CRY_PLATFORM_MOBILE
+	case ERenderType::OpenGL:
+		pRenderType = "Mobile - OpenGL";
 		break;
-	case eRT_PS4:
-		pRenderType = "PS4";
+	case ERenderType::Vulkan:
+		pRenderType = "Mobile - Vulkan";
 		break;
-	case eRT_Null:
-		pRenderType = "Null";
+#else
+	case ERenderType::OpenGL:
+		pRenderType = "PC - OpenGL";
 		break;
-	case eRT_Undefined:
+	case ERenderType::Vulkan:
+		pRenderType = "PC - Vulkan";
+		break;
+#endif
+	case ERenderType::GNM:
+		pRenderType = "PS4 - GNM";
+		break;
+	case ERenderType::Undefined:
 	default:
 		assert(0);
 		pRenderType = "Undefined";
@@ -1441,11 +1455,11 @@ void CRenderStatsWidget::Update()
 	const char* buildType = NULL;
 
 	#if defined(_RELEASE)
-	buildType = "RELEASE";
+		buildType = "RELEASE";
 	#elif defined(_DEBUG)
-	buildType = "DEBUG";
+		buildType = "DEBUG";
 	#else
-	buildType = "PROFILE"; //Assume profile?
+		buildType = "PROFILE"; //Assume profile?
 	#endif
 
 	char entryBuffer[CMiniInfoBox::MAX_TEXT_LENGTH];

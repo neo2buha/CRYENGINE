@@ -1,17 +1,5 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
-// -------------------------------------------------------------------------
-//  File name:   TestExtensions.h
-//  Version:     v1.00
-//  Created:     02/25/2009 by CarstenW
-//  Description: Part of CryEngine's extension framework.
-// -------------------------------------------------------------------------
-//
-////////////////////////////////////////////////////////////////////////////
-
-#ifndef _TESTEXTENSIONS_H_
-#define _TESTEXTENSIONS_H_
-
 #pragma once
 
 //#define EXTENSION_SYSTEM_INCLUDE_TESTCASES
@@ -83,7 +71,7 @@ DECLARE_SHARED_POINTERS(ICustomC);
 
 struct IDontLikeMacros : public ICryUnknown
 {
-	template<class T> friend const CryInterfaceID& InterfaceCastSemantics::cryiidof();
+	template<class T> friend constexpr CryInterfaceID InterfaceCastSemantics::cryiidof();
 protected:
 	virtual ~IDontLikeMacros() {}
 
@@ -91,10 +79,9 @@ private:
 	// It's very important that this static function is implemented for each interface!
 	// Otherwise the consistency of cryinterface_cast<T>() is compromised because
 	// cryiidof<T>() = cryiidof<baseof<T>>() {baseof<T> = ICryUnknown in most cases}
-	static const CryInterfaceID& IID()
+	static constexpr CryInterfaceID IID()
 	{
-		static const CryInterfaceID iid = { 0x0f43b7e3f1364af0ull, 0xb4a16a975bea3ec4ull };
-		return iid;
+		return CryInterfaceID::Construct( 0x0f43b7e3f1364af0ull, 0xb4a16a975bea3ec4ull );
 	}
 
 public:
@@ -104,5 +91,3 @@ public:
 DECLARE_SHARED_POINTERS(IDontLikeMacros);
 
 #endif // #ifdef EXTENSION_SYSTEM_INCLUDE_TESTCASES
-
-#endif // #ifndef _TESTEXTENSIONS_H_

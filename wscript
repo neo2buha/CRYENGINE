@@ -118,6 +118,29 @@ def configure(conf):
 	# Load base configuration function		
 	conf.load('c_config')	
 	
+	sys_platform = Utils.unversioned_sys_platform()
+	if sys_platform == 'linux':
+		host = 'linux_x64'
+	elif sys_platform== 'win32':
+		host = 'win_x64'
+	elif sys_platform== 'darwin':
+		host = 'darwin_x64'		
+	
+	#Download SDKs for first time git users
+	if not conf.is_bootstrap_available():
+		if not os.path.isdir(os.path.join(conf.path.abspath(), 'Code/SDKs')):
+			download_sdk_exe = os.path.join(conf.path.abspath(), 'download_sdks.exe')
+			if  host == 'win_x64':
+				if os.path.isfile(download_sdk_exe):
+					subprocess.call(download_sdk_exe)				
+				else:
+					conf.fatal('[ERROR] Missing 3rd party SDK folder "<root>/Code/SDKs". \nAuto download failed: "<root>/download_sdks.exe" could not be located.\nPlease follow the ReadMe instructions on GitHub to download the SDKs manually.' )
+			else:
+				try:
+					subprocess.call(["python3","download_sdks.py"])
+				except:
+					conf.fatal('[ERROR] Missing 3rd party SDK folder "<root>/Code/SDKs". \nAuto download failed: "<root>/download_sdks.py" could not be located or Python3 is not available.\nPlease follow the ReadMe instructions on GitHub to download the SDKs manually.' )
+
 	###########################################
 	# Check for changes in user settings file
 	conf.check_user_settings_files()
@@ -153,7 +176,7 @@ def configure(conf):
 				conf.get_supported_platforms().remove(platform)
 			except:
 				pass
-			Logs.debug('[DEBUG] - Compiler settings not found. (%s) ' % file_name )
+			Logs.warn('[WARNING] - Compiler settings not found. (%s) ' % file_name )
 
 	# Load CppCheck since it is a 'global' platform
 	conf.load('cppcheck', tooldir=CRY_WAF_TOOL_DIR)
@@ -165,14 +188,7 @@ def configure(conf):
 	# Load support for c# and swig
 	conf.load('swig', tooldir=CRY_WAF_TOOL_DIR)
 	conf.load('cs', tooldir=CRY_WAF_TOOL_DIR)
-	
-	if Utils.unversioned_sys_platform() == 'linux':
-		host = 'linux_x64'
-	elif Utils.unversioned_sys_platform() == 'win32':
-		host = 'win_x64'
-	elif Utils.unversioned_sys_platform() == 'darwin':
-		host = 'darwin_x64'		
-	
+		
 	#Get user defined active specs
 	specs_platforms = set()	
 	if  conf.options.specs_to_include_in_project_generation: 
@@ -219,7 +235,7 @@ def configure(conf):
 					Logs.warn('[WARNING] - Unable to locate platform "%s" on system. Disabling platform support for: %s !!!' % (platform, platform))
 					continue
 			else:
-				Logs.debug('[DEBUG] - Unable to locate compiler rules  "%s". Disabling platform support for: %s !!!. ' % (file_name, platform))
+				Logs.warn('[WARNING] - Unable to locate compiler rules  "%s". Disabling platform support for: %s !!!. ' % (file_name, platform))
 				continue
 		
 		# platform installed
@@ -253,6 +269,8 @@ def configure(conf):
 	conf.load('c')
 	conf.load('cxx')
 		
+	conf.load('protoc',tooldir=CRY_WAF_TOOL_DIR)
+	
 	###########################################
 	# Load Platform specific helpers based on host
 	host = Utils.unversioned_sys_platform()	
@@ -593,7 +611,7 @@ def utilities(bld):
 		Options.commands.insert(0, 'configure')
 		
 	def bootstrap_update():
-		bld.ExecuteBootstrap('update')
+		bld.ExecuteBootstrap()
 		Options.commands.insert(0, 'utilities')
 	
 	def regenerate_vs_solution():
@@ -896,7 +914,7 @@ class copy_outputs(Task):
 @after_method('apply_map_file')
 @feature('c', 'cxx')
 def add_install_copy(self, output_folders = None):
-	if self.bld.cmd == "msvs":
+	if self.bld.cmd == "msvs" or 'android' in self.bld.env['PLATFORM']:
 		return
 
 	if not getattr(self, 'link_task', None):
@@ -983,7 +1001,7 @@ def check_for_bootstrap(bld):
 	except OSError:				
 		pass
 		
-	bld.ExecuteBootstrap('update')
+	bld.ExecuteBootstrap()
 	
 	# Create TimeStamp File
 	bootstrap_timestamp.write('')
@@ -1018,10 +1036,10 @@ def get_output_folders(self, platform, configuration, target_spec = None, game_p
 		path += self.options.out_folder_darwin32
 	elif platform == 'darwin_x64':
 		path += self.options.out_folder_darwin64
-	elif platform == 'android_arm_gcc':
-		path += self.options.out_folder_android		
-	elif platform == 'android_arm_clang':
-		path += self.options.out_folder_android		
+	elif platform == 'android_arm':
+		path += self.options.out_folder_android
+	elif platform == 'android_arm64':
+		path += self.options.out_folder_android64
 	else:
 		path += 'bin/platform_unknown'
 				
@@ -1075,12 +1093,12 @@ def get_output_folders(self, platform, configuration, target_spec = None, game_p
 ###############################################################################
 @conf
 def is_bootstrap_available(bld):
-	bootstrap_path = bld.path.abspath() + '/Tools/branch_bootstrap/dist/bootstrap.exe'
+	bootstrap_path = bld.path.abspath() + '/Tools/branch_bootstrap/bootstrap.exe'
 	return os.path.isfile(bootstrap_path)
 	
 ###############################################################################	
 @conf
-def ExecuteBootstrap(bld, command):
+def ExecuteBootstrap(bld):
 
 	if not is_bootstrap_available(bld):
 		return
@@ -1088,7 +1106,7 @@ def ExecuteBootstrap(bld, command):
 	host = Utils.unversioned_sys_platform()
 	executable = None
 	if host == 'win32':
-		executable = [bld.path.abspath() + '/Tools/branch_bootstrap/dist/bootstrap.exe']
+		executable = [bld.path.abspath() + '/Tools/branch_bootstrap/bootstrap.exe']
 	elif host == 'darwin':
 		executable = ['python3', bld.path.abspath() + '/Tools/branch_bootstrap/bootstrap.py']
 	elif host == 'linux':
@@ -1106,7 +1124,7 @@ def ExecuteBootstrap(bld, command):
 	ret = subprocess.call(
                 executable + [
                         '-d' + bootstrap_dat,
-                        '-m' + bootstrap_digest.abspath(), command])
+                        '-m' + bootstrap_digest.abspath()])
 	if ret == 0:
 		bld.msg('branch bootstrap', 'done')
 	else:

@@ -10,6 +10,7 @@
 #ifdef USING_BEHAVIOR_TREE_EDITOR
 	#define USING_BEHAVIOR_TREE_SERIALIZATION
 	#define USING_BEHAVIOR_TREE_XML_DESCRIPTION_CREATION
+	#define USING_BEHAVIOR_TREE_COMMENTS
 #endif
 
 #ifdef DEBUG_MODULAR_BEHAVIOR_TREE
@@ -33,7 +34,6 @@
 
 #ifdef USING_BEHAVIOR_TREE_SERIALIZATION
 
-	#include <CrySerialization/SharedPtr.h>
 	#include <CrySerialization/IClassFactory.h>
 	#include <CrySerialization/Forward.h>
 
@@ -752,9 +752,9 @@ typedef uint64 RuntimeDataID;
 
 inline RuntimeDataID MakeRuntimeDataID(const EntityId entityID, const NodeID nodeID)
 {
-	STATIC_ASSERT(sizeof(entityID) == 4, "Expected entity id to be 4 bytes");
-	STATIC_ASSERT(sizeof(nodeID) == 4, "Expected node id to be 4 bytes");
-	STATIC_ASSERT(sizeof(RuntimeDataID) == 8, "Expected runtime data id to be 8 bytes");
+	static_assert(sizeof(entityID) == 4, "Expected entity id to be 4 bytes");
+	static_assert(sizeof(nodeID) == 4, "Expected node id to be 4 bytes");
+	static_assert(sizeof(RuntimeDataID) == 8, "Expected runtime data id to be 8 bytes");
 
 	const RuntimeDataID runtimeDataID = (uint64)entityID | (((uint64)nodeID) << 32);
 	return runtimeDataID;
@@ -948,6 +948,12 @@ private:
     manager.GetNodeFactory().RegisterNodeCreator(&nodetype ## NodeCreator); \
   }
 
+#define REGISTER_BEHAVIOR_TREE_NODE_WITH_NAME(manager, nodetype, nodename) \
+  { \
+    static NodeCreator<nodetype> nodetype##NodeCreator(nodename); \
+    manager.GetNodeFactory().RegisterNodeCreator(&nodetype##NodeCreator); \
+  }
+
 #ifdef USING_BEHAVIOR_TREE_SERIALIZATION
 	#define REGISTER_BEHAVIOR_TREE_NODE_WITH_SERIALIZATION(manager, nodetype, label, color)                                 \
 	  {                                                                                                                     \
@@ -963,32 +969,3 @@ private:
 #endif
 
 }
-
-#ifdef USING_BEHAVIOR_TREE_SERIALIZATION
-
-namespace BehaviorTree
-{
-struct NodePointerSerializer : StdSharedPtrSerializer<INode>
-{
-	NodePointerSerializer(std::shared_ptr<INode>& ptr)
-		: StdSharedPtrSerializer(ptr)
-	{
-	}
-
-	Serialization::ClassFactory<INode>& factoryOverride() const override
-	{
-		return gEnv->pAISystem->GetIBehaviorTreeManager()->GetNodeSerializationFactory();
-	}
-};
-}
-
-namespace std
-{
-inline bool Serialize(Serialization::IArchive& ar, BehaviorTree::INodePtr& ptr, const char* name, const char* label)
-{
-	BehaviorTree::NodePointerSerializer serializer(ptr);
-	return ar(static_cast<Serialization::IPointer&>(serializer), name, label);
-}
-}
-
-#endif

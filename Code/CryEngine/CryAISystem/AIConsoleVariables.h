@@ -21,6 +21,7 @@ struct AIConsoleVars
 	DeclareConstIntCVar(DebugDrawNavigationWorldMonitor, 0);
 	DeclareConstIntCVar(NavigationSystemMT, 1);
 	DeclareConstIntCVar(NavGenThreadJobs, 1);
+	float NavmeshStabilizationTimeToUpdate;
 	DeclareConstIntCVar(DebugDrawCoverPlanes, 0);
 	DeclareConstIntCVar(DebugDrawCoverLocations, 0);
 	DeclareConstIntCVar(DebugDrawCoverSampler, 0);
@@ -105,7 +106,6 @@ struct AIConsoleVars
 	DeclareConstIntCVar(DrawPerceptionIndicators, 0);
 	DeclareConstIntCVar(DrawPerceptionDebugging, 0);
 	DeclareConstIntCVar(DrawPerceptionModifiers, 0);
-	DeclareConstIntCVar(DebugPerceptionManager, 0);
 	DeclareConstIntCVar(DebugGlobalPerceptionScale, 0);
 	DeclareConstIntCVar(TargetTracking, 1);
 	DeclareConstIntCVar(TargetTracks_GlobalTargetLimit, 0);
@@ -118,11 +118,6 @@ struct AIConsoleVars
 	DeclareConstIntCVar(DebugDrawAdaptiveUrgency, 0);
 	DeclareConstIntCVar(DebugDrawReinforcements, -1);
 	DeclareConstIntCVar(DebugDrawPlayerActions, 0);
-	DeclareConstIntCVar(DrawCollisionEvents, 0);
-	DeclareConstIntCVar(DrawBulletEvents, 0);
-	DeclareConstIntCVar(DrawSoundEvents, 0);
-	DeclareConstIntCVar(DrawGrenadeEvents, 0);
-	DeclareConstIntCVar(DrawExplosions, 0);
 
 	DeclareConstIntCVar(SimpleWayptPassability, 1);
 
@@ -151,7 +146,7 @@ struct AIConsoleVars
 
 	DeclareConstIntCVar(MNMPathfinderMT, 1);
 	DeclareConstIntCVar(MNMPathfinderConcurrentRequests, 4);
-	DeclareConstIntCVar(MNMRaycastImplementation, 1);
+	DeclareConstIntCVar(MNMRaycastImplementation, 2);
 
 	DeclareConstIntCVar(LogConsoleVerbosity, 0);
 	DeclareConstIntCVar(LogFileVerbosity, 0);
@@ -188,7 +183,7 @@ struct AIConsoleVars
 
 	DeclareConstIntCVar(BubblesSystemAlertnessFilter, 7);
 	DeclareConstIntCVar(BubblesSystemUseDepthTest, 0);
-	DeclareConstIntCVar(BubbleSystemAllowPrototypeDialogBubbles, 0);
+	DeclareConstIntCVar(BubblesSystemAllowPrototypeDialogBubbles, 0);
 
 	DeclareConstIntCVar(PathfinderDangerCostForAttentionTarget, 5);
 	DeclareConstIntCVar(PathfinderDangerCostForExplosives, 2);
@@ -228,12 +223,7 @@ struct AIConsoleVars
 	float       CoverSpacing;
 
 	const char* StatsTarget;
-	const char* DebugBehaviorSelection;
 	float       AIUpdateInterval;
-	float       DynamicWaypointUpdateTime;
-	float       DynamicVolumeUpdateTime;
-	float       LayerSwitchDynamicLinkBump;
-	int         LayerSwitchDynamicLinkBumpDuration;
 
 	float       CollisionAvoidanceAgentExtraFat;
 	float       CollisionAvoidanceRadiusIncrementIncreaseRate;
@@ -319,47 +309,48 @@ struct AIConsoleVars
 	float       DrawGetEnclosingFailures;
 
 	// Perception handler override
-	float CrouchVisibleRange;
-	float ProneVisibleRange;
+	float       CrouchVisibleRange;
+	float       ProneVisibleRange;
 
-	int   MNMDebugAccessibility; // TODO: remove
+	int         MNMDebugAccessibility; // TODO: remove
 
-	int   MNMEditorBackgroundUpdate;
+	int         MNMEditorBackgroundUpdate;
 
-	float MNMPathFinderQuota;
-	int   MNMPathFinderDebug;
+	float       MNMPathFinderQuota;
+	int         MNMPathFinderDebug;
 
-	int   MNMProfileMemory;
+	int         MNMProfileMemory;
 
-	int   MNMAllowDynamicRegenInEditor;
+	int         MNMAllowDynamicRegenInEditor;
 
-	int   EnableBubblesSystem;
-	float BubblesSystemFontSize;
-	float BubblesSystemDecayTime;
+	int         EnableBubblesSystem;
+	float       BubblesSystemFontSize;
+	float       BubblesSystemDecayTime;
+	const char* BubblesSystemNameFilter;
 
-	float OverlayMessageDuration;
-	float DrawFireEffectDecayRange;
-	float DrawFireEffectMinDistance;
-	float DrawFireEffectMinTargetFOV;
-	float DrawFireEffectMaxAngle;
-	float DrawFireEffectTimeScale;
+	float       OverlayMessageDuration;
+	float       DrawFireEffectDecayRange;
+	float       DrawFireEffectMinDistance;
+	float       DrawFireEffectMinTargetFOV;
+	float       DrawFireEffectMaxAngle;
+	float       DrawFireEffectTimeScale;
 
-	float CoolMissesBoxSize;
-	float CoolMissesBoxHeight;
-	float CoolMissesMinMissDistance;
-	float CoolMissesMaxLightweightEntityMass;
-	float CoolMissesProbability;
-	float CoolMissesCooldown;
+	float       CoolMissesBoxSize;
+	float       CoolMissesBoxHeight;
+	float       CoolMissesMinMissDistance;
+	float       CoolMissesMaxLightweightEntityMass;
+	float       CoolMissesProbability;
+	float       CoolMissesCooldown;
 
-	float SmartPathFollower_LookAheadDistance;
-	float SmartPathFollower_LookAheadPredictionTimeForMovingAlongPathWalk;
-	float SmartPathFollower_LookAheadPredictionTimeForMovingAlongPathRunAndSprint;
-	float SmartPathFollower_decelerationHuman;
-	float SmartPathFollower_decelerationVehicle;
+	float       SmartPathFollower_LookAheadDistance;
+	float       SmartPathFollower_LookAheadPredictionTimeForMovingAlongPathWalk;
+	float       SmartPathFollower_LookAheadPredictionTimeForMovingAlongPathRunAndSprint;
+	float       SmartPathFollower_decelerationHuman;
+	float       SmartPathFollower_decelerationVehicle;
 
-	float LobThrowMinAllowedDistanceFromFriends;
-	float LobThrowTimePredictionForFriendPositions;
-	float LobThrowPercentageOfDistanceToTargetUsedForInaccuracySimulation;
+	float       LobThrowMinAllowedDistanceFromFriends;
+	float       LobThrowTimePredictionForFriendPositions;
+	float       LobThrowPercentageOfDistanceToTargetUsedForInaccuracySimulation;
 	DeclareConstIntCVar(LobThrowSimulateRandomInaccuracy, 0);
 
 	int         LogSignals;
@@ -376,7 +367,9 @@ struct AIConsoleVars
 	static void DebugMNMAgentType(IConsoleCmdArgs* args);
 	static void MNMCalculateAccessibility(IConsoleCmdArgs* args); // TODO: Remove when the seeds work
 	static void MNMComputeConnectedIslands(IConsoleCmdArgs* args);
+	static void NavigationReloadConfig(IConsoleCmdArgs* args);
 	static void DebugAgent(IConsoleCmdArgs* args);
+	static void AIBubblesNameFilterCallback(ICVar* pCvar);
 };
 
 #endif

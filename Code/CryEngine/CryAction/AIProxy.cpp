@@ -294,11 +294,6 @@ const float CAIProxy::GetFmodCharacterTypeParam() const
 	return m_FmodCharacterTypeParam;
 }
 
-const char* CAIProxy::GetBehaviorSelectionTreeName() const
-{
-	return m_behaviorSelectionTreeName.c_str();
-}
-
 const char* CAIProxy::GetNavigationTypeName() const
 {
 	return m_agentTypeName.c_str();
@@ -1588,7 +1583,7 @@ void CAIProxy::UpdateMind(SOBJECTSTATE& state)
 void CAIProxy::OnReused(IEntity* pEntity, SEntitySpawnParams& params)
 {
 	m_pGameObject = CCryAction::GetCryAction()->GetGameObject(params.id);
-	m_pIActor = gEnv->pGame->GetIGameFramework()->GetIActorSystem()->GetActor(params.id);
+	m_pIActor = gEnv->pGameFramework->GetIActorSystem()->GetActor(params.id);
 
 	EnableUpdate(false);
 
@@ -1638,11 +1633,6 @@ void CAIProxy::ReloadScriptProperties()
 
 			props->GetValue("fFmodCharacterTypeParam", m_FmodCharacterTypeParam);
 
-			const char* behaviorSelectionTreeName;
-			if (props->GetValue("esBehaviorSelectionTree", behaviorSelectionTreeName)
-			    && stricmp(behaviorSelectionTreeName, "None"))
-				m_behaviorSelectionTreeName = behaviorSelectionTreeName;
-
 			const char* agentTypeName;
 			if (props->GetValue("esNavigationType", agentTypeName)
 			    && *agentTypeName)
@@ -1667,7 +1657,7 @@ void CAIProxy::ReloadScriptProperties()
 IActor* CAIProxy::GetActor() const
 {
 	if (!m_pIActor)
-		m_pIActor = gEnv->pGame->GetIGameFramework()->GetIActorSystem()->GetActor(m_pGameObject->GetEntityId());
+		m_pIActor = gEnv->pGameFramework->GetIActorSystem()->GetActor(m_pGameObject->GetEntityId());
 	return m_pIActor;
 }
 
@@ -1699,9 +1689,9 @@ void CAIProxy::GetWorldBoundingRect(Vec3& FL, Vec3& FR, Vec3& BL, Vec3& BR, floa
 
 	const Vec3 sideDir(dir.y, -dir.x, 0.0f);
 
-	IEntityRenderProxy* pRenderProxy = (IEntityRenderProxy*)m_pGameObject->GetEntity()->GetProxy(ENTITY_PROXY_RENDER);
+	IEntityRender* pIEntityRender = m_pGameObject->GetEntity()->GetRenderInterface();
 	AABB bounds;
-	pRenderProxy->GetLocalBounds(bounds);
+	pIEntityRender->GetLocalBounds(bounds);
 
 	bounds.max.x += extra;
 	bounds.max.y += extra;

@@ -7,7 +7,7 @@ $DateTime$
 
 -------------------------------------------------------------------------
 History:
-- 18:10:2005   18:00 : Created by Márcio Martins
+- 18:10:2005   18:00 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -128,9 +128,9 @@ template <typename TWeaponCompnentInterface, typename TWeaponComponentImplementa
 #define REGISTER_PROJECTILE(name, T)	\
 struct C##name##Creator : public IGameObjectExtensionCreatorBase	\
 { \
-	IGameObjectExtensionPtr Create() \
+	IGameObjectExtension* Create(IEntity *pEntity) \
 	{ \
-		return ComponentCreate_DeleteWithRelease<T>(); \
+		return pEntity->GetOrCreateComponentClass<T>();\
 	} \
 	void GetGameObjectExtensionRMIData( void ** ppRMI, size_t * nCount ) \
 	{ \
@@ -396,20 +396,12 @@ void CWeaponSystem::OnLoadingStart(ILevelInfo *pLevel)
 	{
 		if (pPatcher->NeedsWeaponSystemReload())
 		{
-			ScopedSwitchToGlobalHeap ghs;
 			Reload();			// allows patches to be applied (if any) takes about 1.2 sec on xbox release build
 			pPatcher->DoneWeaponSystemReload();
 		}
 	}
 
 	CRY_ASSERT(m_linkedProjectiles.size() == 0);
-
-#if SHARED_STRING_TRACK_LEVEL_HEAP_LEAKS
-	if (!gEnv->IsEditor())
-	{
-		ItemString::TrackLevelHeapAllocs(true);
-	}
-#endif
 }
 
 //------------------------------------------------------------------------
@@ -430,14 +422,6 @@ void CWeaponSystem::OnUnloadComplete(ILevelInfo* pLevel)
 	}
 
 	CRY_ASSERT(m_linkedProjectiles.size() == 0);
-
-#if SHARED_STRING_TRACK_LEVEL_HEAP_LEAKS
-	if (!gEnv->IsEditor())
-	{
-		ItemString::DumpLevelHeapLeakedStrings();
-		ItemString::TrackLevelHeapAllocs(false);
-	}
-#endif
 }
 
 //------------------------------------------------------------------------
@@ -888,7 +872,7 @@ bool CWeaponSystem::ScanXML(XmlNodeRef &root, const char *xmlFile)
 //------------------------------------------------------------------------
 void CWeaponSystem::DebugGun(IConsoleCmdArgs *args)
 {
-  IGameFramework* pGF = gEnv->pGame->GetIGameFramework();  
+  IGameFramework* pGF = gEnv->pGameFramework;  
   IItemSystem* pItemSystem = pGF->GetIItemSystem();
  
   IActor* pActor = pGF->GetClientActor();
@@ -921,7 +905,7 @@ void CWeaponSystem::DebugGun(IConsoleCmdArgs *args)
 //------------------------------------------------------------------------
 void CWeaponSystem::RefGun(IConsoleCmdArgs *args)
 {
-	IGameFramework* pGF = gEnv->pGame->GetIGameFramework();  
+	IGameFramework* pGF = gEnv->pGameFramework;  
 	IItemSystem* pItemSystem = pGF->GetIItemSystem();
 
 	IActor* pActor = pGF->GetClientActor();

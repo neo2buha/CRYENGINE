@@ -60,21 +60,27 @@ void RegisterCommandClasses()
 }
 
 //////////////////////////////////////////////////////////////////////////
-class CEngineModule_CryLiveCreate : public IEngineModule
+class CEngineModule_CryLiveCreate : public ILiveCreateEngineModule
 {
-	CRYINTERFACE_SIMPLE(IEngineModule)
+	CRYINTERFACE_BEGIN()
+		CRYINTERFACE_ADD(Cry::IDefaultModule)
+		CRYINTERFACE_ADD(ILiveCreateEngineModule)
+	CRYINTERFACE_END()
+
 	CRYGENERATE_SINGLETONCLASS(CEngineModule_CryLiveCreate, "EngineModule_CryLiveCreate", 0xdc126beebdc6411f, 0xa111b42839f2dd1b)
 
+	virtual ~CEngineModule_CryLiveCreate() {}
+
 	//////////////////////////////////////////////////////////////////////////
-	virtual const char* GetName() { return "CryLiveCreate"; };
-	virtual const char* GetCategory() { return "CryEngine"; };
+	virtual const char* GetName() const override { return "CryLiveCreate"; };
+	virtual const char* GetCategory() const override { return "CryEngine"; };
 
 	//////////////////////////////////////////////////////////////////////////
 	virtual bool Initialize(SSystemGlobalEnvironment& env, const SSystemInitParams& initParams)
 	{
 		ISystem* pSystem = env.pSystem;
 
-		pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_livecreate);
+		pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_livecreate, "CEngineModule_CryLiveCreate");
 
 		// new implementation
 	#if CRY_PLATFORM_WINDOWS
@@ -102,14 +108,6 @@ class CEngineModule_CryLiveCreate : public IEngineModule
 };
 
 CRYREGISTER_SINGLETON_CLASS(CEngineModule_CryLiveCreate)
-
-CEngineModule_CryLiveCreate::CEngineModule_CryLiveCreate()
-{
-}
-
-CEngineModule_CryLiveCreate::~CEngineModule_CryLiveCreate()
-{
-}
 
 LiveCreate::IManager* CreateLiveCreate(ISystem* pSystem)
 {

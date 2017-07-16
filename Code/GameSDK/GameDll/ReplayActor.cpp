@@ -70,8 +70,6 @@ void CReplayActor::Release()
 //------------------------------------------------------------------------
 void CReplayActor::PostInit(IGameObject *pGameObject)
 {
-	RegisterEvent( ENTITY_EVENT_PREPHYSICSUPDATE, IComponent::EComponentFlags_Enable );
-
 	GetGameObject()->EnableUpdateSlot(this, 0);
 }
 
@@ -135,7 +133,6 @@ void CReplayActor::ProcessEvent(SEntityEvent &event)
 		}
 		break;
 	case ENTITY_EVENT_DONE:
-	case ENTITY_EVENT_RETURNING_TO_POOL:
 		{
 			SAFE_RELEASE(m_pActionController);
 			SAFE_DELETE(m_pAnimContext);
@@ -143,6 +140,13 @@ void CReplayActor::ProcessEvent(SEntityEvent &event)
 		}
 		break;
 	}
+}
+
+uint64 CReplayActor::GetEventMask() const
+{
+	return 
+		BIT64(ENTITY_EVENT_PREPHYSICSUPDATE) |
+		BIT64(ENTITY_EVENT_DONE);
 }
 
 //------------------------------------------------------------------------
@@ -161,7 +165,7 @@ void CReplayActor::OnRemove()
 //------------------------------------------------------------------------
 void CReplayActor::SetupActionController(const char *controllerDef, const char *animDB1P, const char *animDB3P)
 {
-	IMannequin &mannequinSys = gEnv->pGame->GetIGameFramework()->GetMannequinInterface();
+	IMannequin &mannequinSys = gEnv->pGameFramework->GetMannequinInterface();
 	const SControllerDef *pContDef = NULL;
 	if (controllerDef)
 	{
@@ -214,7 +218,7 @@ void CReplayActor::UpdateScopeContexts()
 		//--- Update variable scope contexts
 		CItem *pItem = static_cast<CItem*>(g_pGame->GetIGameFramework()->GetIItemSystem()->GetItem(m_gunId));
 		ICharacterInstance *pICharInst = (m_flags & eRAF_FirstPerson) && pItem ? pItem->GetEntity()->GetCharacter(0) : NULL;
-		IMannequin &mannequinSys = gEnv->pGame->GetIGameFramework()->GetMannequinInterface();
+		IMannequin &mannequinSys = gEnv->pGameFramework->GetMannequinInterface();
 
 		const int contextID = PlayerMannequin.contextIDs.Weapon;
 		if (contextID >= 0)
@@ -745,9 +749,9 @@ void CReplayActor::Physicalize()
 	}
 
 	// Set ViewDistRatio.
-	if(IEntityRenderProxy* pRenderProxy = (IEntityRenderProxy*)entity.GetProxy(ENTITY_PROXY_RENDER))
+	if(IEntityRender* pIEntityRender = entity.GetRenderInterface())
 	{
-		if(IRenderNode* pRenderNode = pRenderProxy->GetRenderNode())
+		if(IRenderNode* pRenderNode = pIEntityRender->GetRenderNode())
 		{
 			pRenderNode->SetViewDistRatio(g_pGameCVars->g_actorViewDistRatio);
 		}

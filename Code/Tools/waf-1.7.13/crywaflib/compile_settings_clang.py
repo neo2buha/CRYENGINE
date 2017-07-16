@@ -13,7 +13,7 @@ def load_clang_common_settings(v):
 	v['AR_TGT_F'] = ''
 	
 	# CC/CXX Compiler
-	v['CC_NAME'] = v['CXX_NAME'] = 'gcc'
+	v['CC_NAME'] = 'clang'
 	v['CC_SRC_F'] = v['CXX_SRC_F'] = []
 	v['CC_TGT_F'] = v['CXX_TGT_F'] = ['-c', '-o']
 	
@@ -35,8 +35,8 @@ def load_clang_common_settings(v):
 	v['CFLAGS_cshlib'] = v['CFLAGS_cxxshlib'] = ['-fpic']
 	v['CXXFLAGS_cshlib'] = v['CXXFLAGS_cxxshlib'] = ['-fpic']
 		
-	v['LINKFLAGS_cshlib'] = ['-shared']
-	v['LINKFLAGS_cxxshlib'] = ['-shared']
+	v['LINKFLAGS_cshlib'] = ['-shared', '-Wl,--export-dynamic']
+	v['LINKFLAGS_cxxshlib'] = ['-shared', '-Wl,--export-dynamic']
 	
 	# static library settings
 	v['CFLAGS_cstlib'] = v['CFLAGS_cxxstlib'] = ['-fpic']	
@@ -48,7 +48,7 @@ def load_clang_common_settings(v):
 	# Set common compiler flags
 	COMMON_COMPILER_FLAGS = [
 		'-Wall', # Generate more warnings
-		'-Werror', # Tread Warnings as Errors
+		'-Werror', # Treat Warnings as Errors
 		'-ffast-math', # Enable fast math
 		
 		'-fvisibility=hidden',
@@ -73,6 +73,7 @@ def load_clang_common_settings(v):
 		'-Wno-parentheses',
 		'-Wno-switch',
 		'-Wno-unused-function',
+		'-Wno-unused-result',
 		'-Wno-multichar',
 		'-Wno-format-security',
 		'-Wno-empty-body',
@@ -86,6 +87,8 @@ def load_clang_common_settings(v):
 		'-Wno-reorder',
 		'-Wno-conversion-null',
 		'-Wno-overloaded-virtual',
+		'-Wno-shift-sign-overflow',
+		'-Wno-deprecated-register'
 		]
 		
 	# Copy common flags to prevent modifing references

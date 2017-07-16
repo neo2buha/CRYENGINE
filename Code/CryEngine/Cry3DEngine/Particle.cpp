@@ -1076,8 +1076,8 @@ void CParticle::Update(SParticleUpdateContext const& context, float fFrameTime, 
 					float fPosSpace = vPosSpaceLoop * context.SpaceLoop.vScaledAxes[a];
 					if (abs(fPosSpace) > 1.f)
 					{
-						float fCorrect = floor_tpl(fPosSpace);
-						fCorrect = if_neg_else(fCorrect, fCorrect, fCorrect + 1.f);
+						float fCorrect = float(int(fPosSpace));
+						fCorrect += crymath::signnz(fCorrect);
 						stateNew.m_Loc.t -= context.SpaceLoop.vScaledAxes[a] * (fCorrect * sqr(context.SpaceLoop.vSize[a]));
 					}
 				}
@@ -1419,7 +1419,7 @@ void CParticle::TargetMovement(ParticleTarget const& target, SParticleState& sta
 		fArrivalTime = fHUGE;
 
 	// Goal is to reach target radius in a quarter revolution over particle's life.
-	float fLife = state.m_fStopAge - state.m_fAge;
+	float fLife = max(state.m_fStopAge - state.m_fAge, 0.0f);
 	fArrivalTime = div_min(gf_PI * 0.5f * fDist * fLife, fOrbitalVel * state.m_fStopAge, fArrivalTime);
 
 	if (fArrivalTime > fLife)
@@ -1627,11 +1627,6 @@ void CParticle::Physicalize()
 		//symparams.softnessAngular = symparams.softnessAngularGroup = 0.01f;
 		symparams.maxLoggedCollisions = params.nMaxCollisionEvents;
 		m_pPhysEnt->SetParams(&symparams);
-
-		pe_action_set_velocity velparam;
-		velparam.v = m_Vel.vLin;
-		velparam.w = m_Vel.vRot;
-		m_pPhysEnt->Action(&velparam);
 	}
 	else if (params.ePhysicsType == params.ePhysicsType.SimplePhysics)
 	{
@@ -1658,12 +1653,6 @@ void CParticle::Physicalize()
 		}
 
 		part.thickness = params.fThickness * part.size;
-		part.velocity = m_Vel.vLin.GetLength();
-		if (part.velocity > 0.f)
-			part.heading = m_Vel.vLin / part.velocity;
-		part.q0 = m_Loc.q;
-		part.wspin = m_Vel.vRot;
-		part.q0 = m_Loc.q;
 
 		if (m_pMeshObj)
 		{
@@ -1687,6 +1676,12 @@ void CParticle::Physicalize()
 		pf.flagsOR = pef_never_affect_triggers;
 		pf.flagsOR |= pef_log_collisions;
 		m_pPhysEnt->SetParams(&pf);
+
+		pe_action_set_velocity vel;
+		vel.v = m_Vel.vLin;
+		vel.w = m_Vel.vRot;
+		m_pPhysEnt->Action(&vel);
+
 		m_pPhysEnt->AddRef();
 	}
 }

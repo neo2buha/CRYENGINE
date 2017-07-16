@@ -65,7 +65,7 @@ CStreamEngine::CStreamEngine()
 	StartThreads();
 
 	// register system listener
-	GetISystem()->GetISystemEventDispatcher()->RegisterListener(this);
+	GetISystem()->GetISystemEventDispatcher()->RegisterListener(this,"CStreamEngine");
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1067,6 +1067,9 @@ void CStreamEngine::TempFree(void* p, size_t nSize)
 	m_tempMem.TempFree(g_pPakHeap, p, nSize);
 }
 
+
+#include <CryRenderer/IRenderAuxGeom.h>
+
 namespace
 {
 #ifdef STREAMENGINE_ENABLE_STATS
@@ -1074,15 +1077,7 @@ void DrawText(const float x, const float y, ColorF c, const char* format, ...)
 {
 	va_list args;
 	va_start(args, format);
-
-	SDrawTextInfo ti;
-	ti.flags = eDrawText_FixedSize | eDrawText_2D | eDrawText_Monospace;
-	ti.xscale = ti.yscale = 1.2f;
-	ti.color[0] = c.r;
-	ti.color[1] = c.g;
-	ti.color[2] = c.b;
-	ti.color[3] = c.a;
-	gEnv->pRenderer->DrawTextQueued(Vec3(x, y, 1.0f), ti, format, args);
+	IRenderAuxText::DrawText(Vec3(x, y, 1.0f), 1.2f, c, eDrawText_FixedSize | eDrawText_2D | eDrawText_Monospace, format, args);
 	va_end(args);
 }
 #endif
@@ -1092,8 +1087,8 @@ void WriteToStreamingLog(const char* str)
 #ifdef STREAMENGINE_ENABLE_STATS
 	if (g_cvars.sys_streaming_debug == 4)
 	{
-		// ignore invalid file access when logging steaming data
-		CDebugAllowFileAccess ignoreInvalidFileAccess;
+		// ignore invalid file access when logging streaming data
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
 
 		static string sFileName;
 		static bool bFirstTime = true;

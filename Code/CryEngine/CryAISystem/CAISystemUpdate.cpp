@@ -29,18 +29,15 @@
 #include <CrySystem/File/CryFile.h>
 #include <CryMath/Cry_Math.h>
 #include <CrySystem/ISystem.h>
-#include <CryEntitySystem/IEntityRenderState.h>
 #include <CrySystem/ITimer.h>
 #include <CrySystem/IConsole.h>
 #include <CryNetwork/ISerialize.h>
 #include <CryAISystem/IAgent.h>
 #include <CryCore/Containers/VectorSet.h>
-#include <CryAISystem/AISystemListener.h>
 
 #include "CAISystem.h"
 #include "CryAISystem.h"
 #include "AILog.h"
-#include "CTriangulator.h"
 #include "Free2DNavRegion.h"
 #include "Graph.h"
 #include "AStarSolver.h"
@@ -61,14 +58,13 @@
 #include "StatsManager.h"
 #include "TacticalPointSystem/TacticalPointSystem.h"
 #include "Communication/CommunicationManager.h"
-#include "SelectionTree/SelectionTreeManager.h"
 #include "Walkability/WalkabilityCacheManager.h"
 #include "Navigation/NavigationSystem/NavigationSystem.h"
 
 #include "DebugDrawContext.h"
 
 #include "Navigation/MNM/TileGenerator.h"
-#include "Navigation/MNM/MeshGrid.h"
+#include "Navigation/MNM/NavMesh.h"
 
 //-----------------------------------------------------------------------------------------------------------
 static bool IsPuppetOnScreen(CPuppet* pPuppet)
@@ -76,10 +72,10 @@ static bool IsPuppetOnScreen(CPuppet* pPuppet)
 	IEntity* pEntity = pPuppet->GetEntity();
 	if (!pEntity)
 		return false;
-	IEntityRenderProxy* pRenderProxy = (IEntityRenderProxy*)pEntity->GetProxy(ENTITY_PROXY_RENDER);
-	if (!pRenderProxy || !pRenderProxy->GetRenderNode())
+	IEntityRender* pIEntityRender = pEntity->GetRenderInterface();
+	if (!pIEntityRender || !pIEntityRender->GetRenderNode())
 		return false;
-	int frameDiff = gEnv->nMainFrameID - pRenderProxy->GetRenderNode()->GetDrawFrame();
+	int frameDiff = gEnv->nMainFrameID - pIEntityRender->GetRenderNode()->GetDrawFrame();
 	if (frameDiff > 2)
 		return false;
 	return true;
@@ -721,9 +717,9 @@ void CAISystem::SingleDryUpdate(CAIActor* pAIActor)
 {
 	FUNCTION_PROFILER(gEnv->pSystem, PROFILE_AI);
 	if (pAIActor->IsEnabled())
-		pAIActor->Update(AIUPDATE_DRY);
+		pAIActor->Update(IAIObject::EUpdateType::Dry);
 	else
-		pAIActor->UpdateDisabled(AIUPDATE_DRY);
+		pAIActor->UpdateDisabled(IAIObject::EUpdateType::Dry);
 }
 
 //

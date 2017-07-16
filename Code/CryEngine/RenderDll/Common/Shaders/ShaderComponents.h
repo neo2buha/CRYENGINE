@@ -39,8 +39,8 @@
 #define PF_MERGE_SHIFT        12
 #define PF_INSTANCE           0x100000
 #define PF_MATERIAL           0x200000
-#define PF_LIGHT              0x400000
-#define PF_SHADOWGEN          0x800000
+// unused                     0x400000
+// unused                     0x800000
 #define PF_CUSTOM_BINDED      0x1000000
 #define PF_CANMERGED          0x2000000
 #define PF_AUTOMERGED         0x4000000
@@ -80,14 +80,11 @@ enum ECGParam
 	ECGP_PI_WrinklesMask0,
 	ECGP_PI_WrinklesMask1,
 	ECGP_PI_WrinklesMask2,
-	ECGP_Matr_PI_OceanMat,
 	ECGP_PB_AmbientOpacity,
 
 	ECGP_PB_Scalar,
 	ECGP_PM_Tweakable,
-	ECGP_Matr_PF_ViewProjMatrix,
-	ECGP_Matr_PF_ViewProjMatrixPrev,
-	ECGP_Matr_PF_ViewProjZeroMatrix,
+	ECGP_Matr_PB_ViewProjMatrixPrev,
 	ECGP_Matr_PB_ViewProjMatrix_IT,
 	ECGP_Matr_PB_ViewProjMatrix_I,
 	ECGP_Matr_PB_ProjMatrix,
@@ -167,36 +164,15 @@ enum ECGParam
 	ECGP_PB_HDRDynamicMultiplier,
 	ECGP_PB_CausticsParams,
 	ECGP_PB_CausticsSmoothSunDirection,
-	ECGP_PF_SunDirection,
-	ECGP_PF_FogColor,
-	ECGP_PF_SunColor,
-	ECGP_PF_SkyColor,
-	ECGP_PF_Time,
-	ECGP_PF_FrameTime,
-	ECGP_PF_CameraPos,
-	ECGP_PF_ScreenSize,
-	ECGP_PF_HPosScale,
-	ECGP_PF_NearFarDist,
-	ECGP_PF_ProjRatio,
-	ECGP_PF_NearestScaled,
-	ECGP_PF_DepthFactor,
-	ECGP_PF_FrustumPlaneEquation,
-	ECGP_PF_ShadowLightPos,
-	ECGP_PF_ShadowViewPos,
+	ECGP_PB_SunDirection,
+	ECGP_PB_SunColor,
+	ECGP_PB_Time,
+	ECGP_PB_FrameTime,
+	ECGP_PB_CameraPos,
+	ECGP_PB_ScreenSize,
+	ECGP_PB_HPosScale,
+	ECGP_PB_NearFarDist,
 	ECGP_PB_PullVerticesInfo,
-
-	ECGP_Matr_PB_SFCompMat,
-	ECGP_Matr_PB_SFTexGenMat0,
-	ECGP_Matr_PB_SFTexGenMat1,
-	ECGP_PB_SFBitmapColorTransform,
-	ECGP_PB_SFColorTransformMatrix,
-	ECGP_PB_SFStereoVideoFrameSelect,
-	ECGP_PB_SFPremultipliedAlpha,
-	ECGP_PB_SFBlurFilterSize,
-	ECGP_PB_SFBlurFilterScale,
-	ECGP_PB_SFBlurFilterOffset,
-	ECGP_PB_SFBlurFilterColor1,
-	ECGP_PB_SFBlurFilterColor2,
 
 	ECGP_PB_CloudShadingColorSun,
 	ECGP_PB_CloudShadingColorSky,
@@ -218,13 +194,6 @@ enum ECGParam
 	ECGP_PB_TexelDensityColor,
 	ECGP_PB_TexelsPerMeterInfo,
 
-	ECGP_Matr_PB_GIGridMatrix,
-	ECGP_Matr_PB_GIInvGridMatrix,
-	ECGP_PB_GIGridSize,
-	ECGP_PB_GIInvGridSize,
-	ECGP_PB_GIGridSpaceCamPos,
-	ECGP_PB_GIAttenuation,
-	ECGP_PB_GIGridCenter,
 	ECGP_PB_WaterRipplesLookupParams,
 	ECGP_PB_SkinningExtraWeights,
 
@@ -257,6 +226,8 @@ enum ECGParam
 	ECGP_PB_SvoParams5,
 	ECGP_PB_SvoParams6,
 	ECGP_PB_SvoParams7,
+	ECGP_PB_SvoParams8,
+	ECGP_PB_SvoParams9,
 #endif
 
 	ECGP_COUNT,
@@ -267,12 +238,6 @@ struct SCGParamsPF
 {
 public:
 	int      nFrameID;
-
-	Matrix44 pProjMatrix;      //ECGP_Matr_PB_ProjMatrix
-	Matrix44 pUnProjMatrix;    //ECGP_Matr_PB_UnProjMatrix
-	Matrix44 pMatrixComposite; //ECGP_Matr_PI_Composite
-
-	Matrix44 pViewProjZeroMatrix; //ECGP_Matr_PF_ViewProjZeroMatrix
 
 	Vec3     vWaterLevel;           // ECGP_PB_WaterLevel *
 	float    fHDRDynamicMultiplier; // ECGP_PB_HDRDynamicMultiplier *
@@ -286,21 +251,11 @@ public:
 	Vec4     pVolumetricFogRampParams; // ECGP_PB_VolumetricFogRampParams *
 	Vec4     pVolumetricFogSunDir;     // ECGP_PB_VolumetricFogSunDir *
 
-	Vec3     pCameraFront; // ECGP_PB_CameraFront
-	Vec3     pCameraRight; // ECGP_PB_CameraRight
-	Vec3     pCameraUp;    // ECGP_PB_CameraUp
 	Vec3     pCameraPos;   //ECGP_PF_CameraPos
-
-	Vec4     pScreenSize;  //ECGP_PF_ScreenSize
-	Vec4     pNearFarDist; //ECGP_PF_NearFarDist
-
-	Vec3     pDecalZFightingRemedy; //ECGP_PB_DecalZFightingRemedy
-
-	Vec4     pLightningColSize; // ECGP_PB_LightningColSize
-	Vec3     pLightningPos;     //ECGP_PB_LightningPos
 
 	Vec3     pCausticsParams; //ECGP_PB_CausticsParams *
 	Vec3     pSunColor;       //ECGP_PF_SunColor *
+	float    sunSpecularMultiplier;
 	Vec3     pSkyColor;       //ECGP_PF_SkyColor *
 	Vec3     pSunDirection;   //ECGP_PF_SunDirection *
 
@@ -315,10 +270,6 @@ public:
 	Vec3     vCausticsCurrSunDir;
 	int      nCausticsFrameID;
 
-	float    e_vegetation_alpha_blend_near;
-
-	bool     bPE_NVActive;
-
 	Vec3     pVolCloudTilingSize;
 	Vec3     pVolCloudTilingOffset;
 
@@ -331,6 +282,8 @@ public:
 	Vec4     pVolumetricFogHeightDensityParams;      // ECGP_PB_VolumetricFogHeightDensityParams
 	Vec4     pVolumetricFogHeightDensityRampParams;  // ECGP_PB_VolumetricFogHeightDensityRampParams
 	Vec4     pVolumetricFogDistanceParams;           // ECGP_PB_VolumetricFogDistanceParams
+
+	float    irregularFilterKernel[8][4];
 };
 
 enum EOperation
@@ -376,6 +329,22 @@ struct SCGBind
 		return sizeof(SCGBind);
 	}
 	void GetMemoryUsage(ICrySizer* pSizer) const {}
+};
+
+struct SVertexInputStream
+{
+	char  semanticName[14];
+	uint8 semanticIndex;
+	uint8 attributeLocation;
+
+	SVertexInputStream(const char* streamSemanticName, uint8 streamSemanticIndex, uint8 streamAttributeLocation)
+	{
+		CRY_ASSERT(strlen(streamSemanticName) < CRY_ARRAY_COUNT(semanticName));
+
+		strncpy(semanticName, streamSemanticName, CRY_ARRAY_COUNT(semanticName));
+		semanticIndex = streamSemanticIndex;
+		attributeLocation = streamAttributeLocation;
+	}
 };
 
 struct SParamData
@@ -516,11 +485,11 @@ enum ECGSampler
 
 struct SCGSampler : SCGBind
 {
-	int        m_nStateHandle;
+	SamplerStateHandle m_nStateHandle;
 	ECGSampler m_eCGSamplerType;
 	SCGSampler()
 	{
-		m_nStateHandle = -1;
+		m_nStateHandle = EDefaultSamplerStates::Unspecified;
 		m_eCGSamplerType = ECGS_Unknown;
 	}
 	~SCGSampler()
@@ -582,12 +551,13 @@ enum ECGTexture : uint8
 	ECGT_MatSlot_Translucency,
 	ECGT_MatSlot_Emittance,
 
-	ECGT_SF_Slot0,
-	ECGT_SF_Slot1,
-	ECGT_SF_SlotY,
-	ECGT_SF_SlotU,
-	ECGT_SF_SlotV,
-	ECGT_SF_SlotA,
+	ECGT_ScaleformInput0,
+	ECGT_ScaleformInput1,
+	ECGT_ScaleformInput2,
+	ECGT_ScaleformInputY,
+	ECGT_ScaleformInputU,
+	ECGT_ScaleformInputV,
+	ECGT_ScaleformInputA,
 
 	ECGT_Shadow0,
 	ECGT_Shadow1,
@@ -633,7 +603,6 @@ enum ECGTexture : uint8
 	ECGT_VolumetricFogShadow1,
 
 	ECGT_WaterOceanMap,
-	ECGT_WaterRipplesDDN,
 	ECGT_WaterVolumeDDN,
 	ECGT_WaterVolumeCaustics,
 	ECGT_WaterVolumeRefl,
@@ -642,8 +611,12 @@ enum ECGTexture : uint8
 
 	ECGT_TerrainNormMap,
 	ECGT_TerrainBaseMap,
+	ECGT_TerrainElevMap,
 
 	ECGT_WindGrid,
+
+	ECGT_CloudShadow,
+	ECGT_VolCloudShadow,
 
 	ECGT_COUNT
 };

@@ -96,7 +96,7 @@ class CRopeEntity : public CPhysicalEntity {
 	virtual float GetMass(int ipart) { return m_mass/m_nSegs; }
 	virtual float GetMassInv() { return 1E26f; }
 	virtual RigidBody *GetRigidBodyData(RigidBody *pbody, int ipart=-1);
-	virtual void GetLocTransform(int ipart, Vec3 &offs, quaternionf &q, float &scale);
+	virtual void GetLocTransform(int ipart, Vec3 &offs, quaternionf &q, float &scale, const CPhysicalPlaceholder *trg) const;
 	void EnforceConstraints(float seglen, const quaternionf& qtv,const Vec3& offstv,float scaletv, int bTargetPoseActive, float dt=0);
 	virtual void OnNeighbourSplit(CPhysicalEntity *pentOrig, CPhysicalEntity *pentNew);
 	virtual int RegisterContacts(float time_interval,int nMaxPlaneContacts);
@@ -181,7 +181,6 @@ class CRopeEntity : public CPhysicalEntity {
 	quaternionf m_qBody[2][2];
 	Vec3 m_dir0dst;
 	Vec3 m_collBBox[2];
-	float m_jobE;
 
 	ROPE_SAFE_ARRAY(rope_vtx) m_vtx;
 	ROPE_SAFE_ARRAY(rope_vtx) m_vtx1;

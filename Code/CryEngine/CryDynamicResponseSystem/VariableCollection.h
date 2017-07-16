@@ -22,7 +22,7 @@ class CVariableCollection;
 class CVariableCollectionManager
 {
 public:
-	CVariableCollectionManager() {}
+	CVariableCollectionManager() = default;
 	~CVariableCollectionManager();
 
 	CVariableCollection* CreateVariableCollection(const CHashedString& collectionName);
@@ -31,6 +31,9 @@ public:
 
 	void                 Update();
 	void                 Reset();
+
+	void GetAllVariableCollections(DRS::ValuesList* pOutCollectionsList, bool bSkipDefaultValues);
+	void SetAllVariableCollections(DRS::ValuesListIterator start, DRS::ValuesListIterator end);
 
 	void                 Serialize(Serialization::IArchive& ar);
 
@@ -49,8 +52,20 @@ public:
 	static const CHashedString  s_contextCollectionName;
 	static const CVariableValue s_newVariableValue;
 
-	CVariableCollection(const CHashedString& name);    //preallocate hint?
-	virtual ~CVariableCollection();
+	struct VariableCooldownInfo   //used for the SetVariableValueForSomeTime functionality
+	{
+		CHashedString     variableName;
+		float             timeOfReset;
+		VariableValueData oldValue;
+
+		void                 Serialize(Serialization::IArchive& ar);
+	};
+
+	typedef std::vector<CVariable*> VariableList;
+	typedef std::vector<VariableCooldownInfo> CoolingDownVariableList;
+
+	CVariableCollection(const CHashedString& name);
+	virtual ~CVariableCollection() override;
 
 	//////////////////////////////////////////////////////////
 	// IVariableCollection implementation
@@ -69,10 +84,13 @@ public:
 	virtual void                 Serialize(Serialization::IArchive& ar) override;
 
 	virtual void                 SetUserString(const char* szUserString) override { m_userString = szUserString; }
-	virtual const string&        GetUserString() override                         { return m_userString; }
+	virtual const char*          GetUserString() const override { return m_userString.c_str(); }
 	//////////////////////////////////////////////////////////
 
-	bool       SetVariableValue(CVariable* pVariable, const CVariableValue& newValue, float resetTime /*= -1.0f*/);
+	VariableList& GetAllVariables() { return m_allResponseVariables; }
+	const CoolingDownVariableList& GetAllCooldownVariables() const { return m_coolingDownVariables; }
+
+	bool       SetVariableValue(CVariable* pVariable, const CVariableValue& newValue, float resetTime = -1.0f);
 	bool       SetVariableValue(const CHashedString& name, const CVariableValue& newValue, bool createIfNotExisting = true, float resetTime = -1.0f);
 	CVariable* CreateVariable(const CHashedString& name, const CVariableValue& initialValue);
 
@@ -81,32 +99,17 @@ public:
 
 	//will create the variable if not yet existing
 	CVariable*            CreateOrGetVariable(const CHashedString& variableName);
-	//REMARK: If the variable is not existing, Will return NewVariableValue
+	//REMARK: If the variable is not existing, Will return s_newVariableValue
 	const CVariableValue& GetVariableValue(const CHashedString& name) const;
 
-	string                GetNameAsString() const { return m_name.GetText(); }
 	string                GetVariablesAsString() const;
 
 private:
-	//will assert if the variable is already existing
-
-	struct VariableCooldownInfo   //used for the SetVariableValueForSomeTime functionality
-	{
-		CVariable*        variable;
-		float             timeOfReset;
-		VariableValueData oldValue;
-	};
-
 	bool SetVariableValueForSomeTime(CVariable* pVariable, const CVariableValue& value, float timeBeforeReset);
 
-	const CHashedString m_name;
-
-	typedef std::vector<CVariable*> VariableList;
-	VariableList m_allResponseVariables;
-
-	typedef std::vector<VariableCooldownInfo> CoolingDownVariableList;
+	const CHashedString     m_name;
+	VariableList            m_allResponseVariables;
 	CoolingDownVariableList m_coolingDownVariables;
-
 	string                  m_userString;
 };
 

@@ -9,6 +9,7 @@ typedef std::shared_ptr<CGraphicsPipelineStateLocalCache> CGraphicsPipelineState
 class CGraphicsPipelineStage;
 class CSceneRenderPass;
 class CRenderView;
+class CCVarUpdateRecorder;
 
 struct SGraphicsPipelinePassContext
 {
@@ -16,17 +17,19 @@ struct SGraphicsPipelinePassContext
 	{
 	}
 
-	SGraphicsPipelinePassContext(CRenderView* renderView, CSceneRenderPass* pSceneRenderPass, EShaderTechniqueID technique, uint32 filter)
+	SGraphicsPipelinePassContext(CRenderView* renderView, CSceneRenderPass* pSceneRenderPass, EShaderTechniqueID technique, uint32 filter, uint32 excludeFilter)
 		: pSceneRenderPass(pSceneRenderPass)
 		, techniqueID(technique)
 		, batchFilter(filter)
-		, nFrameID(0)
+		, batchExcludeFilter(excludeFilter)
 		, renderListId(EFSLIST_INVALID)
 		, stageID(0)
 		, passID(0)
-		, pPipelineStats(0)
 		, pRenderView(renderView)
 		, renderNearest(false)
+		, pCommandList(nullptr)
+		, pDrawCallInfoPerMesh(nullptr)
+		, pDrawCallInfoPerNode(nullptr)
 	{
 	}
 
@@ -39,25 +42,29 @@ struct SGraphicsPipelinePassContext
 	CSceneRenderPass*  pSceneRenderPass;
 	EShaderTechniqueID techniqueID;
 	uint32             batchFilter;
+	uint32             batchExcludeFilter;
 
 	ERenderListID      renderListId;
-	threadID           nProcessThreadID;
-
-	uint64             nFrameID;
 
 	// Stage ID of a scene stage (EStandardGraphicsPipelineStage)
-	uint32 stageID;
+	uint32             stageID;
 	// Pass ID, in case a stage has several different scene passes
-	uint32 passID;
+	uint32             passID;
 
-	// Current pipeline stats.
-	SPipeStat* pPipelineStats;
+	uint32             renderItemGroup;
+	uint32             profilerSectionIndex;
 
 	// rend items
-	CRenderView* pRenderView;
-	TRange<int>  rendItems;
+	CRenderView*       pRenderView;
+	TRange<int>        rendItems;
 
-	bool         renderNearest;
+	bool               renderNearest;
+
+	// Output command list.
+	CDeviceCommandList* pCommandList;
+
+	std::map<struct IRenderNode*, IRenderer::SDrawCallCountInfo> *pDrawCallInfoPerNode;
+	std::map<struct IRenderMesh*, IRenderer::SDrawCallCountInfo> *pDrawCallInfoPerMesh;
 };
 
 class CGraphicsPipelineStage
@@ -67,9 +74,11 @@ public:
 
 	// Allocate resources needed by the graphics pipeline stage
 	virtual void Init()                            {}
-	virtual void ReleaseBuffers()                  {}
 	// Prepare stage before actual rendering starts (called every frame)
 	virtual void Prepare(CRenderView* pRenderView) {}
+
+	// Reset any cvar dependent states.
+	virtual void OnCVarsChanged(const CCVarUpdateRecorder& cvarUpdater) {}
 
 protected:
 	// Helpers.

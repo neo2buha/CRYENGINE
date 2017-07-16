@@ -9,11 +9,10 @@
 //  History:
 //
 ////////////////////////////////////////////////////////////////////////////
-#ifndef __FlashUINodeBase_H__
-#define __FlashUINodeBase_H__
+#pragma once
 
 #include "FlashUI.h"
-#include "FlowSystem/Nodes/FlowBaseNode.h"
+#include <CryFlowGraph/IFlowBaseNode.h>
 
 #ifndef RELEASE
 	#define ENABLE_UISTACK_DEBUGGING
@@ -188,38 +187,24 @@ protected:
 	IUIElement* m_pElement;
 };
 
-// ---------------------------------------------------------------
-// -------------- auto register ui flow node ---------------------
-// ---------------------------------------------------------------
-class CAutoRegUIFlowNode : public CAutoRegFlowNodeBase
+// FlowNode factory class for Flash UI nodes
+class CFlashUiFlowNodeFactory : public IFlowNodeFactory
 {
 public:
-	CAutoRegUIFlowNode(const char* sClassName, IFlowNodePtr pFlowNode) : CAutoRegFlowNodeBase(sClassName), m_iRefs(1) { m_pFlowNode = pFlowNode; }
+	CFlashUiFlowNodeFactory(const char* sClassName, IFlowNodePtr pFlowNode) : m_sClassName(sClassName), m_pFlowNode(pFlowNode) {}
 	IFlowNodePtr Create(IFlowNode::SActivationInfo* pActInfo) { return m_pFlowNode->Clone(pActInfo); }
-	void         GetMemoryUsage(ICrySizer* s) const           { SIZER_SUBCOMPONENT_NAME(s, "CAutoRegUIFlowNode"); }
+	void         GetMemoryUsage(ICrySizer* s) const           { SIZER_SUBCOMPONENT_NAME(s, "CFlashUiFlowNodeFactory"); }
 	void         Reset()                                      {}
-	virtual void AddRef()                                     { m_iRefs++; }
-	virtual void Release()                                    { if (--m_iRefs == 0) delete this; }
+
+	const char*  GetNodeTypeName() const { return m_sClassName; }
 
 private:
+	const char*  m_sClassName;
 	IFlowNodePtr m_pFlowNode;
-	int          m_iRefs;
 };
 
-// ---------------------------------------------------------------
-class CAutoRegUIFlowNodeSingleton : public CAutoRegFlowNodeBase
-{
-public:
-	CAutoRegUIFlowNodeSingleton(const char* sClassName, IFlowNodePtr pFlowNode) : CAutoRegFlowNodeBase(sClassName), m_refs(1) { m_pFlowNode = pFlowNode; }
-	IFlowNodePtr Create(IFlowNode::SActivationInfo* pActInfo) { return m_pFlowNode; }
-	void         GetMemoryUsage(ICrySizer* s) const           { SIZER_SUBCOMPONENT_NAME(s, "CAutoRegUIFlowNodeSingleton"); }
-	virtual void AddRef()                                     { m_refs++; }
-	virtual void Release()                                    { if (--m_refs == 0) delete this; }
-
-private:
-	IFlowNodePtr m_pFlowNode;
-	int          m_refs;
-};
+TYPEDEF_AUTOPTR(CFlashUiFlowNodeFactory);
+typedef CFlashUiFlowNodeFactory_AutoPtr CFlashUiFlowNodeFactoryPtr;
 
 // ---------------------------------------------------------------
 // ------------ UI Stack for UI Action nodes ---------------------
@@ -372,7 +357,3 @@ private:
 	IFlowGraph*                       m_pGraph;
 	const IUIAction*                  m_pAction;
 };
-
-// ---------------------------------------------------------------
-
-#endif // #ifndef __FlashUINodeBase_H__

@@ -33,8 +33,6 @@ using namespace TurretHelpers;
 #include "BodyDamage.h"
 #include "BodyDestruction.h"
 
-#include <CryCore/Assert/CompileTimeUtils.h>
-
 #include "Laser.h"
 #include "ItemSharedParams.h"
 
@@ -125,11 +123,11 @@ namespace TurretBehaviorStateNames
 
 	ETurretBehaviorState FindId( const char* const name )
 	{
-		STATIC_ASSERT( eTurretBehaviorState_Count == 4, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
-		STATIC_ASSERT( eTurretBehaviorState_Undeployed == 0, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
-		STATIC_ASSERT( eTurretBehaviorState_PartiallyDeployed == 1, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
-		STATIC_ASSERT( eTurretBehaviorState_Deployed == 2, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
-		STATIC_ASSERT( eTurretBehaviorState_Dead == 3, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
+		static_assert( eTurretBehaviorState_Count == 4, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
+		static_assert( eTurretBehaviorState_Undeployed == 0, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
+		static_assert( eTurretBehaviorState_PartiallyDeployed == 1, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
+		static_assert( eTurretBehaviorState_Deployed == 2, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
+		static_assert( eTurretBehaviorState_Dead == 3, "Mismatch between g_turretStateNames and ETurretBehaviorState" );
 
 		for ( size_t i = 0; i < eTurretBehaviorState_Count; ++i )
 		{
@@ -274,7 +272,6 @@ void CTurret::PostInit( IGameObject* pGameObject )
 {
 	const bool runningUnderEditor = gEnv->IsEditor();
 	const bool enteringGameMode = ( ! runningUnderEditor );
-	RegisterEvent( ENTITY_EVENT_PREPHYSICSUPDATE,  IComponent::EComponentFlags_Enable );
 	Reset( enteringGameMode );
 }
 
@@ -480,12 +477,6 @@ void CTurret::SetChannelId( uint16 id )
 }
 
 
-void CTurret::SetAuthority( bool authority )
-{
-
-}
-
-
 void CTurret::GetMemoryUsage( ICrySizer* pSizer ) const
 {
 	pSizer->Add( *this );
@@ -516,13 +507,17 @@ void CTurret::Reset( const bool enteringGameMode )
 
 	InitActionController();
 
+	InitAiRepresentation(eIARM_RebuildFromScratch);
+
 	if ( enteringGameMode )
 	{
 		InitWeapons();
+		ResetVision();
 	}
 	else
 	{
 		RemoveWeapons();
+		RemoveVision();
 	}
 
 	ResetTarget();
@@ -530,9 +525,6 @@ void CTurret::Reset( const bool enteringGameMode )
 
 	InitAutoAimParams();
 	RegisterInAutoAimSystem();
-
-	InitAiRepresentation( eIARM_RebuildFromScratch );
-	ResetVision();
 
 	AddToTacticalManager();
 
@@ -681,9 +673,8 @@ void CTurret::OnDestroyed()
 void CTurret::OnPrePhysicsUpdate()
 {
 	IEntity* const pEntity = GetEntity();
-
-	const bool isActive = pEntity->IsActive();
-	if ( ! isActive )
+	
+	if (GetGameObject()->GetUpdateSlotEnables(this, 0) == 0)
 	{
 		const EntityId localPlayerEntityId = g_pGame->GetIGameFramework()->GetClientActorId();
 		const IEntity* const pLocalPlayerEntity = gEnv->pEntitySystem->GetEntity( localPlayerEntityId );
@@ -698,7 +689,7 @@ void CTurret::OnPrePhysicsUpdate()
 				return;
 			}
 
-			pEntity->Activate( true );
+			GetGameObject()->EnableUpdateSlot(this, 0);
 		}
 	}
 
@@ -974,7 +965,7 @@ void CTurret::InitActionController()
 
 	InitMannequinUserParams();
 
-	const ActionScopes scopeTurret = m_pAnimationContext->controllerDef.m_scopeContexts.Find( "TurretCharacter" );
+	const TagID scopeTurret = m_pAnimationContext->controllerDef.m_scopeContexts.Find( "TurretCharacter" );
 	ICharacterInstance* const pCharacterInstance = pEntity->GetCharacter( DEFAULT_TURRET_MODEL_SLOT );
 	if ( pCharacterInstance == NULL )
 	{
@@ -1082,7 +1073,7 @@ void CTurret::InitMannequinUserParams()
 void CTurret::InitAimProceduralContext()
 {
 	assert( m_pActionController != NULL );
-	m_pAimProceduralContext = static_cast< const CProceduralContextTurretAimPose* >( m_pActionController->FindOrCreateProceduralContext( "ProceduralContextTurretAimPose" ) );
+	m_pAimProceduralContext = static_cast< const CProceduralContextTurretAimPose* >( m_pActionController->FindOrCreateProceduralContext(CProceduralContextTurretAimPose::GetCID()) );
 }
 
 
@@ -2608,12 +2599,12 @@ void CTurret::InitTurretSoundManager()
 	m_pSoundManager.reset();
 
 	IEntity* const pEntity = GetEntity();
-	IEntityAudioProxyPtr pIEntityAudioProxy = crycomponent_cast<IEntityAudioProxyPtr>(pEntity->CreateProxy(ENTITY_PROXY_AUDIO));
+	IEntityAudioComponent* pIEntityAudioComponent = pEntity->GetOrCreateComponent<IEntityAudioComponent>();
 
 	ICharacterInstance* const pCharacterInstance = pEntity->GetCharacter( DEFAULT_TURRET_MODEL_SLOT );
 
 	SmartScriptTable pSoundTable = GetSubPropertiesTable( pEntity, "Sound" );
-	m_pSoundManager.reset( new CTurretSoundManager( pSoundTable, pCharacterInstance, pIEntityAudioProxy ) );
+	m_pSoundManager.reset( new CTurretSoundManager( pSoundTable, pCharacterInstance, pIEntityAudioComponent ) );
 }
 
 
@@ -2652,11 +2643,6 @@ void CTurret::NotifyCancelPreparingToFire()
 	}
 
 	m_pSoundManager->NotifyCancelPreparingToFire();
-}
-
-IComponent::ComponentEventPriority CTurret::GetEventPriority(const int eventID) const
-{
-	return ENTITY_PROXY_USER;
 }
 
 void CTurret::OnEntityKilledEarly(const HitInfo &hitInfo) 

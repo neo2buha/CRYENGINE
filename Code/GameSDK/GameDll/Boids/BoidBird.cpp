@@ -43,6 +43,8 @@ CBoidBird::CBoidBird(SBoidContext &bc)
 	, m_playingTakeOffAnim(0)
 	, m_attractedToPt(false)
 	, m_spawnFromPt(false)
+	, m_loadedParticleEffects(false)
+	, m_pDestroyParticleEffect(nullptr)
 {
 	m_floorCollisionInfo.Reset();
 	SetStatus(Bird::FLYING);
@@ -54,10 +56,14 @@ CBoidBird::CBoidBird(SBoidContext &bc)
 	m_takeOffStartTime = gEnv->pTimer->GetFrameStartTime();
 	m_orientation.zero();
 	m_walkSpeed = bc.walkSpeed > 0 ? bc.walkSpeed * (1 + Boid::Frand()*0.2f) :0;
+
+	LoadParticleEffects();
 }
 
 CBoidBird::~CBoidBird()
 {
+	ReleaseParticleEffects();
+
 	m_floorCollisionInfo.Reset();
 }
 
@@ -226,14 +232,6 @@ void CBoidBird::Update( float dt,SBoidContext &bc )
 				Land();
 		}
 	}
-
-#if 0
-	SDrawTextInfo ti;
-	ti.flags = eDrawText_FixedSize | eDrawText_800x600;
-	char text[100];
-	cry_sprintf(text, "%f - %i", m_speed, m_onGroundStatus);
-	gEnv->pRenderer->DrawTextQueued(m_pos, ti, text);
-#endif
 }
 
 
@@ -912,6 +910,33 @@ bool CBoidBird::ShouldUpdateCollisionInfo(const CTimeValue& t)
 	if(m_status == Bird::LANDING && m_landDecelerating  )
 		return false;
 	return CBoidObject::ShouldUpdateCollisionInfo(t);
+}
+
+/////////////////////////////////////////////////////////////
+
+void CBoidBird::LoadParticleEffects()
+{
+	if (!m_loadedParticleEffects)
+	{
+		m_pDestroyParticleEffect = gEnv->pParticleManager->FindEffect("breakable_objects.Shatter.destroy", string("Surface Effect ") + "mat_flesh");
+		if (m_pDestroyParticleEffect)
+		{
+			m_pDestroyParticleEffect->AddRef();
+		}
+		else
+		{
+			CryLog("###### CBoidBird DestroyParticleEffect not found");
+		}
+
+		m_loadedParticleEffects = true;
+	}
+}
+
+/////////////////////////////////////////////////////////////
+
+void CBoidBird::ReleaseParticleEffects()
+{
+	SAFE_RELEASE(m_pDestroyParticleEffect);
 }
 
 /////////////////////////////////////////////////////////////

@@ -1,7 +1,7 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
 #pragma once
-
+#ifndef RESOURCE_COMPILER
 #include "GlobalAnimationHeader.h"
 #include <CryString/NameCRCHelper.h>
 #include <CryMemory/PoolAllocator.h>
@@ -77,19 +77,12 @@ struct BSParameter
 struct BSBlendable
 {
 	uint32 num;
-	uint8  idx0, idx1, idx2, idx3, idx4, idx5, idx6, idx7;
+	uint8  idx[8];
 
 	BSBlendable()
+		: num{ 0 }
+		, idx{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }
 	{
-		num = 0;
-		idx0 = -1;
-		idx1 = -1;
-		idx2 = -1;
-		idx3 = -1;
-		idx4 = -1;
-		idx5 = -1;
-		idx6 = -1;
-		idx7 = -1;
 	}
 
 	void GetMemoryUsage(ICrySizer* pSizer) const
@@ -276,3 +269,4 @@ public:
 	string m_Status;  //if this Para-Group is ok, then this string is empty
 
 };
+#endif

@@ -44,7 +44,7 @@ string CreateDisplayName(const char* format, ...)
 	return result;
 }
 
-#if !defined (_RELEASE)
+#if !defined (_RELEASE) || defined(ENABLE_UISTACK_DEBUGGING)
 void RenderDebugInfo();
 #endif
 #ifdef ENABLE_UISTACK_DEBUGGING
@@ -95,11 +95,6 @@ CFlashUI::CFlashUI()
 	CV_gfx_uiaction_folder = REGISTER_STRING("gfx_uiaction_folder", "Libs/UI/", VF_NULL, "Default folder for UIActions");
 
 	REGISTER_COMMAND("gfx_reload_all", CFlashUI::ReloadAllElements, VF_NULL, "Reloads all UI Elements");
-}
-
-//-------------------------------------------------------------------
-CFlashUI::~CFlashUI()
-{
 }
 
 //-------------------------------------------------------------------
@@ -183,32 +178,32 @@ void CFlashUI::RegisterListeners()
 		gEnv->pInput->AddEventListener(this);
 	}
 
-	CRY_ASSERT_MESSAGE(gEnv->pGame && gEnv->pGame->GetIGameFramework(), "Unable to register as Framework listener!");
-	if (gEnv->pGame && gEnv->pGame->GetIGameFramework())
+	CRY_ASSERT_MESSAGE(gEnv->pGameFramework, "Unable to register as Framework listener!");
+	if (gEnv->pGameFramework)
 	{
-		gEnv->pGame->GetIGameFramework()->RegisterListener(this, "FlashUI", FRAMEWORKLISTENERPRIORITY_HUD);
-		CRY_ASSERT_MESSAGE(gEnv->pGame->GetIGameFramework()->GetILevelSystem(), "Unable to register as levelsystem listener!");
-		if (gEnv->pGame->GetIGameFramework()->GetILevelSystem())
+		gEnv->pGameFramework->RegisterListener(this, "FlashUI", FRAMEWORKLISTENERPRIORITY_HUD);
+		CRY_ASSERT_MESSAGE(gEnv->pGameFramework->GetILevelSystem(), "Unable to register as levelsystem listener!");
+		if (gEnv->pGameFramework->GetILevelSystem())
 		{
-			gEnv->pGame->GetIGameFramework()->GetILevelSystem()->AddListener(this);
+			gEnv->pGameFramework->GetILevelSystem()->AddListener(this);
 		}
 	}
 
 	CRY_ASSERT_MESSAGE(gEnv->pSystem, "Unable to register as system listener!");
 	if (gEnv->pSystem)
 	{
-		gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this);
+		gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this, "CFlashUI");
 	}
 }
 
 //------------------------------------------------------------------------------------
 void CFlashUI::UnregisterListeners()
 {
-	if (gEnv->pGame && gEnv->pGame->GetIGameFramework())
+	if (gEnv->pGameFramework)
 	{
-		gEnv->pGame->GetIGameFramework()->UnregisterListener(this);
-		if (gEnv->pGame->GetIGameFramework()->GetILevelSystem())
-			gEnv->pGame->GetIGameFramework()->GetILevelSystem()->RemoveListener(this);
+		gEnv->pGameFramework->UnregisterListener(this);
+		if (gEnv->pGameFramework->GetILevelSystem())
+			gEnv->pGameFramework->GetILevelSystem()->RemoveListener(this);
 	}
 
 	if (gEnv->pSystem)
@@ -226,6 +221,7 @@ void CFlashUI::UnregisterListeners()
 //------------------------------------------------------------------------------------
 void CFlashUI::Reload()
 {
+	LOADING_TIME_PROFILE_SECTION;
 	UIACTION_LOG("FlashUI reload start");
 
 	ReloadAllBootStrapper();
@@ -274,7 +270,7 @@ void CFlashUI::Update(float fDeltaTime)
 
 	const bool isEditor = gEnv->IsEditor();
 
-	if (!isEditor || gEnv->pGame->GetIGameFramework()->IsGameStarted())
+	if (!isEditor || gEnv->pGameFramework->IsGameStarted())
 	{
 
 		if (CV_gfx_reloadonlanguagechange == 1)
@@ -329,6 +325,9 @@ void CFlashUI::Update(float fDeltaTime)
 		gEnv->pScaleformHelper->AmpAdvanceFrame();
 	}
 
+#endif
+
+#if !defined (_RELEASE) || defined(ENABLE_UISTACK_DEBUGGING)
 	// debug info
 	if (CV_gfx_debugdraw > 0)
 	{
@@ -419,7 +418,6 @@ void CFlashUI::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lpara
 				m_pFlashUIActionEvents->OnLoadingStart((ILevelInfo*)wparam);
 				UpdateFG();
 				StartRenderThread();
-				gEnv->pGame->GetIGameFramework()->SetLevelPrecachingDone(false);
 			}
 
 			m_systemState = eSS_Loading;
@@ -483,7 +481,6 @@ void CFlashUI::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lpara
 
 	case ESYSTEM_EVENT_LEVEL_LOAD_END:
 		{
-			gEnv->pGame->GetIGameFramework()->SetLevelPrecachingDone(true);
 			StopRenderThread();
 
 			if (m_systemState == eSS_Loading)
@@ -492,7 +489,7 @@ void CFlashUI::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lpara
 				UpdateFG();
 			}
 
-			ILevelInfo* pLevel = gEnv->pGame->GetIGameFramework()->GetILevelSystem()->GetCurrentLevel();
+			ILevelInfo* pLevel = gEnv->pGameFramework->GetILevelSystem()->GetCurrentLevel();
 			PreloadTextures(pLevel ? pLevel->GetName() : "");
 
 			m_systemState = eSS_LoadingDone;
@@ -940,9 +937,9 @@ void CFlashUI::SendFlashMouseEvent(SFlashCursorEvent::ECursorState evt, int iX, 
 bool CFlashUI::DisplayVirtualKeyboard(unsigned int flags, const char* title, const char* initialInput, int maxInputLength, IVirtualKeyboardEvents* pInCallback)
 {
 	IPlatformOS* pPlatformOS = gEnv->pSystem->GetPlatformOS();
-	if (pPlatformOS && gEnv->pGame && gEnv->pGame->GetIGameFramework())
+	if (pPlatformOS && gEnv->pGameFramework)
 	{
-		unsigned int controllerIdx = gEnv->pGame->GetIGameFramework()->GetIPlayerProfileManager()->GetExclusiveControllerDeviceIndex();
+		unsigned int controllerIdx = gEnv->pGameFramework->GetIPlayerProfileManager()->GetExclusiveControllerDeviceIndex();
 		if (controllerIdx != INVALID_CONTROLLER_INDEX)
 			return pPlatformOS->KeyboardStart(controllerIdx, flags, title, initialInput, maxInputLength, pInCallback);
 	}
@@ -1010,7 +1007,7 @@ template<EUIObjectType T> bool IsTemplate()                     { return false; 
 template<> bool                IsTemplate<eUOT_MovieClipTmpl>() { return true; }
 
 template<EUIObjectType Type, class Item>
-void CreateMCFunctionNodes(CFlashUI::TUIFlowNodes& nodelist, IUIElement* pElement, Item* pItem, const string& path, bool fill = false)
+static void CreateMCFunctionNodes(std::vector<CFlashUiFlowNodeFactory*>& nodelist, IUIElement* pElement, Item* pItem, const string& path, bool fill = false)
 {
 	// prevent to fill "first row"
 	if (fill)
@@ -1025,7 +1022,7 @@ void CreateMCFunctionNodes(CFlashUI::TUIFlowNodes& nodelist, IUIElement* pElemen
 			category += pDesc->sDisplayName;
 
 			CFlashUIFunctionNode* pNode = new CFlashUIFunctionNode(pElement, category, pDesc, IsTemplate<Type>());
-			CAutoRegUIFlowNode* pFlowNode = new CAutoRegUIFlowNode(pNode->GetCategory(), pNode);
+			CFlashUiFlowNodeFactory* pFlowNode = new CFlashUiFlowNodeFactory(pNode->GetCategory(), pNode);
 			nodelist.push_back(pFlowNode);
 		}
 	}
@@ -1055,14 +1052,14 @@ void CFlashUI::CreateNodes()
 		while (const SUIEventDesc* pDesc = (*iter)->GetEventDesc(i++))
 		{
 			CFlashUIEventNode* pNode = new CFlashUIEventNode(*iter, CreateDisplayName("UI:Events:%s:%s", (*iter)->GetName(), pDesc->sDisplayName), pDesc);
-			CAutoRegUIFlowNode* pFlowNode = new CAutoRegUIFlowNode(pNode->GetCategory(), pNode);
+			CFlashUiFlowNodeFactory* pFlowNode = new CFlashUiFlowNodeFactory(pNode->GetCategory(), pNode);
 			m_UINodes.push_back(pFlowNode);
 		}
 		i = 0;
 		while (const SUIEventDesc* pDesc = (*iter)->GetFunctionDesc(i++))
 		{
 			CFlashUIFunctionNode* pNode = new CFlashUIFunctionNode(*iter, CreateDisplayName("UI:Functions:%s:%s", (*iter)->GetName(), pDesc->sDisplayName), pDesc, false);
-			CAutoRegUIFlowNode* pFlowNode = new CAutoRegUIFlowNode(pNode->GetCategory(), pNode);
+			CFlashUiFlowNodeFactory* pFlowNode = new CFlashUiFlowNodeFactory(pNode->GetCategory(), pNode);
 			m_UINodes.push_back(pFlowNode);
 		}
 
@@ -1079,7 +1076,7 @@ void CFlashUI::CreateNodes()
 		while (const SUIEventDesc* pDesc = pEventSystem->GetEventDesc(i++))
 		{
 			CFlashUIBaseNodeCategory* pNode = new CFlashUIEventSystemEventNode(pEventSystem, CreateDisplayName("UI:Events:%s:%s", name.c_str(), pDesc->sDisplayName), pDesc);
-			CAutoRegUIFlowNode* pFlowNode = new CAutoRegUIFlowNode(pNode->GetCategory(), pNode);
+			CFlashUiFlowNodeFactory* pFlowNode = new CFlashUiFlowNodeFactory(pNode->GetCategory(), pNode);
 			m_UINodes.push_back(pFlowNode);
 		}
 	}
@@ -1092,9 +1089,15 @@ void CFlashUI::CreateNodes()
 		while (const SUIEventDesc* pDesc = pEventSystem->GetEventDesc(i++))
 		{
 			CFlashUIBaseNodeCategory* pNode = new CFlashUIEventSystemFunctionNode(pEventSystem, CreateDisplayName("UI:Functions:%s:%s", name.c_str(), pDesc->sDisplayName), pDesc);
-			CAutoRegUIFlowNode* pFlowNode = new CAutoRegUIFlowNode(pNode->GetCategory(), pNode);
+			CFlashUiFlowNodeFactory* pFlowNode = new CFlashUiFlowNodeFactory(pNode->GetCategory(), pNode);
 			m_UINodes.push_back(pFlowNode);
 		}
+	}
+
+	// Do nodes registration with flow graph system
+	for (auto pNodeFactory : m_UINodes)
+	{
+		gEnv->pFlowSystem->RegisterType(pNodeFactory->GetNodeTypeName(),pNodeFactory);
 	}
 }
 
@@ -1224,6 +1227,8 @@ void CFlashUI::ClearElements()
 //-------------------------------------------------------------------
 void CFlashUI::ClearActions()
 {
+	m_pUIActionManager->Init();
+
 	for (TUIActionsLookup::iterator iter = m_actions.begin(); iter != m_actions.end(); ++iter)
 		delete *iter;
 
@@ -1253,8 +1258,10 @@ void CFlashUI::ReloadScripts()
 //-------------------------------------------------------------------
 void CFlashUI::ClearNodes()
 {
-	for (TUIFlowNodes::iterator iter = m_UINodes.begin(); iter != m_UINodes.end(); ++iter)
-		SAFE_RELEASE(*iter);
+	for (auto pNodeFactory : m_UINodes)
+	{
+		gEnv->pFlowSystem->UnregisterType(pNodeFactory->GetNodeTypeName());
+	}
 
 	m_UINodes.clear();
 }
@@ -1291,9 +1298,14 @@ void CFlashUI::LoadFromFile(const char* pFolderName, const char* pSearch, bool (
 void CFlashUI::PreloadTextures(const char* pLevelName)
 {
 	LOADING_TIME_PROFILE_SECTION;
+
 	ReleasePreloadedTextures(false);
+
 	string file;
 	file.Format("%s/%s", CV_gfx_uiaction_folder->GetString(), FLASH_PRELOAD_XML);
+	if (!gEnv->pCryPak->IsFileExist(file))
+		return;
+
 	XmlNodeRef xmlNode = GetISystem()->LoadXmlFromFile(file.c_str());
 
 	string XMLLevelName(pLevelName);
@@ -1331,7 +1343,7 @@ void CFlashUI::PreloadTexturesFromNode(const XmlNodeRef& node)
 			const char* pFile = node->getChild(i)->getAttr("file");
 			if (pFile)
 			{
-				string path = PathUtil::GetPath(pFile);
+				string path = PathUtil::GetPathWithoutFilename(pFile);
 				string file = PathUtil::GetFile(pFile);
 				LoadFromFile(path, file, &CFlashUI::PreloadTexture);
 			}
@@ -1502,7 +1514,9 @@ void CFlashUI::StartRenderThread()
 	static ICVar* pMT = gEnv->pConsole->GetCVar("r_MultiThreaded");
 	const bool bMultiThreaded = pMT && pMT->GetIVal() > 0;
 #endif
-	if (CV_gfx_loadtimethread == 1 && !gEnv->IsEditor() && m_bLoadtimeThread == false && bMultiThreaded)
+	static ICVar* pAsyncLoad = gEnv->pConsole->GetCVar("g_asynclevelload");
+	const bool bAsyncLoad = pAsyncLoad && pAsyncLoad->GetIVal() > 0;
+	if (CV_gfx_loadtimethread == 1 && !gEnv->IsEditor() && m_bLoadtimeThread == false && bMultiThreaded && !bAsyncLoad)
 	{
 		const TSortedElementList& activeElements = GetSortedElements();
 		for (TSortedElementList::const_iterator it = activeElements.begin(); it != activeElements.end(); ++it)
@@ -1553,10 +1567,13 @@ IUIElement* CFlashUI::GetUIElementByInstanceStr(const char* sUIInstanceStr) cons
 	if (sUIInstanceStr == NULL)
 		return NULL;
 
+	string tmpName(sUIInstanceStr);
+	PathUtil::RemoveExtension(tmpName);
+
 	char name[_MAX_PATH];
-	cry_strcpy(name, sUIInstanceStr);
-	CryStringUtils::StripFileExtension(name);
-	const char* pExt = CryStringUtils::FindExtension(sUIInstanceStr);
+	cry_strcpy(name, tmpName.c_str());
+
+	const char* pExt = PathUtil::GetExt(sUIInstanceStr);
 	if (*pExt != '\0' && strcmpi(pExt, "ui"))
 		return NULL;
 
@@ -1918,17 +1935,7 @@ void CFlashUI::ResetDirtyFlags()
 #if !defined (_RELEASE) || defined(ENABLE_UISTACK_DEBUGGING)
 void Draw2dLabel(float x, float y, float fontSize, const float* pColor, const char* pText)
 {
-	SDrawTextInfo ti;
-	ti.xscale = ti.yscale = fontSize;
-	ti.flags = eDrawText_2D | eDrawText_800x600 | eDrawText_FixedSize | eDrawText_Monospace;
-	if (pColor)
-	{
-		ti.color[0] = pColor[0];
-		ti.color[1] = pColor[1];
-		ti.color[2] = pColor[2];
-		ti.color[3] = pColor[3];
-	}
-	gEnv->pRenderer->DrawTextQueued(Vec3(x, y, 0.5f), ti, pText);
+	IRenderAuxText::DrawText(Vec3(x, y, 0.5f), fontSize, pColor, eDrawText_2D | eDrawText_800x600 | eDrawText_FixedSize | eDrawText_Monospace, pText);
 }
 
 void DrawTextLabelEx(float x, float y, float size, const float* pColor, const char* pFormat, ...) PRINTF_PARAMS(5, 6);

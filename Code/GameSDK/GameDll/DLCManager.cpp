@@ -51,7 +51,7 @@ const int k_demo_ent_index = 6;
 const int k_alpha_ent_index = 7;
 
 int nInitedPresales = 8;
-const char* k_entitlementTags[] =
+static const char* k_entitlementTags[] =
 {
 	"C3:Preorder_Stalker",
 	"C3:Preorder_Overkill",
@@ -62,7 +62,7 @@ const char* k_entitlementTags[] =
 };
 
 //not sure whether our actual dlc will end up being id 0 or 1 yet
-const char* k_dlcEntitlementTags[] =
+static const char* k_dlcEntitlementTags[] =
 {
 	"C3:DLC1",
 	"C3:DLC1"
@@ -124,7 +124,7 @@ void CDLCManager::LoadDownloadableContent( uint32 userIdOveride /*= INVALID_CONT
 	}
 	else
 	{
-		IPlayerProfileManager *pPlayerProfileManager = gEnv->pGame->GetIGameFramework()->GetIPlayerProfileManager();
+		IPlayerProfileManager *pPlayerProfileManager = gEnv->pGameFramework->GetIPlayerProfileManager();
 		userIndex = pPlayerProfileManager ? pPlayerProfileManager->GetExclusiveControllerDeviceIndex() : INVALID_CONTROLLER_INDEX;
 	}
 
@@ -598,10 +598,6 @@ bool CDLCManager::LevelExists(const char* pLevelName)
 
 bool CDLCManager::IsLevelStandard(const char * levelname)
 {
-#if defined(IS_EAAS)
-	// You can test the level name here, and return false if the map should not be available
-	return true;
-#else
 	// This function is currently only used for achievements and shouldn't be used as a robust way
 	// to check if a level is DLC or not
 	for ( int level = 0; level < eNOTDLC_NUM_LEVELS; level++ )
@@ -612,15 +608,10 @@ bool CDLCManager::IsLevelStandard(const char * levelname)
 		}
 	}
 	return false;
-#endif
 }
 
 bool CDLCManager::IsGameModeStandard(const char * gamemode)
 {
-#if defined(IS_EAAS)
-	// You can test the game mode here, and return false if the game mode should not be available
-	return true;
-#else
 	// This function is currently only used for achievements and shouldn't be used as a robust way
 	// to check if a game mode is DLC or not
 	for ( int gmidx = 0; gmidx < eNOTDLC_NUM_GAMEMODES; gmidx++ )
@@ -631,7 +622,6 @@ bool CDLCManager::IsGameModeStandard(const char * gamemode)
 		}
 	}
 	return false;
-#endif
 }
 
 uint32 CDLCManager::GetSquadCommonDLCs()
@@ -901,18 +891,21 @@ void CDLCManager::AddPlaylists()
 	}
 }
 
-bool CDLCManager::IsEntitlementSet( int entitlementIndex, bool presale ) const
+bool CDLCManager::IsPresaleEntitlementSet(int entitlementIndex) const
 {
-	const char* pTag = NULL;
-	
-	if( presale )
-	{
-		pTag = k_entitlementTags[ entitlementIndex ];
-	}
-	else
-	{
-		pTag = k_dlcEntitlementTags[ entitlementIndex ];
-	}
+	CRY_ASSERT(0 <= entitlementIndex && entitlementIndex < CRY_ARRAY_COUNT(k_entitlementTags));
+	return IsEntitlementSet(k_entitlementTags[entitlementIndex]);
+}
+
+bool CDLCManager::IsDLCEntitlementSet(int entitlementIndex) const
+{
+	CRY_ASSERT(0 <= entitlementIndex && entitlementIndex < CRY_ARRAY_COUNT(k_dlcEntitlementTags));
+	return IsEntitlementSet(k_dlcEntitlementTags[entitlementIndex]);
+}
+
+bool CDLCManager::IsEntitlementSet (const char* pTag) const
+{
+	CRY_ASSERT(pTag != nullptr);
 
 	for( int dlcId = 0; dlcId < MAX_DLC_COUNT; dlcId++ )
 	{
@@ -930,7 +923,7 @@ bool CDLCManager::IsEntitlementSet( int entitlementIndex, bool presale ) const
 		}
 	}
 
-	CryLog( "CDLCManager: No record of entitlement %d %s", entitlementIndex, pTag );
+	CryLog( "CDLCManager: No record of entitlement %s", pTag );
 	return false;
 }
 
@@ -950,5 +943,5 @@ void CDLCManager::Update()
 
 bool CDLCManager::IsPIIEntitlementSet() const
 {
-	return IsEntitlementSet(k_optin_ent_index, true);
+	return IsPresaleEntitlementSet(k_optin_ent_index);
 }

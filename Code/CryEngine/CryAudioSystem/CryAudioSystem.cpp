@@ -1,7 +1,7 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
 #include "stdafx.h"
-#include "SoundCVars.h"
+#include "AudioCVars.h"
 #include "AudioSystem.h"
 #include <CryAudio/IAudioSystem.h>
 #include <CryCore/Platform/platform_impl.inl>
@@ -11,92 +11,90 @@
 #include <CryExtension/ClassWeaver.h>
 
 #if defined(INCLUDE_AUDIO_PRODUCTION_CODE)
+<<<<<<< HEAD
 	#include <IViewSystem.h>
+=======
+>>>>>>> upstream/stabilisation
 	#include <CryGame/IGameFramework.h>
-	#include <CryEntitySystem/IEntitySystem.h>
 #endif // INCLUDE_AUDIO_PRODUCTION_CODE
 
 #if CRY_PLATFORM_DURANGO
 	#include <apu.h>
 #endif // CRY_PLATFORM_DURANGO
 
+<<<<<<< HEAD
 // Define global objects.
 CAudioCVars g_audioCVars;
 CAudioLogger g_audioLogger;
 CSoundAllocator g_audioMemoryPoolPrimary;
-CTimeValue g_lastMainThreadFrameStartTime;
-
+=======
 #define MAX_MODULE_NAME_LENGTH 256
+
+namespace CryAudio
+{
+// Define global objects.
+CCVars g_cvars;
+CLogger g_logger;
+>>>>>>> upstream/stabilisation
+CTimeValue g_lastMainThreadFrameStartTime;
 
 //////////////////////////////////////////////////////////////////////////
 class CSystemEventListner_Sound : public ISystemEventListener
 {
 public:
 
-	virtual void OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lparam)
+	CSystemEventListner_Sound() = default;
+
+	virtual void OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lparam) override
 	{
-		switch (event)
+		if (gEnv->pAudioSystem != nullptr)
 		{
+<<<<<<< HEAD
 		case ESYSTEM_EVENT_LEVEL_LOAD_START:
 			{
 				g_audioMemoryPoolPrimary.Cleanup();
 				break;
 			}
 		case ESYSTEM_EVENT_LEVEL_POST_UNLOAD:
+=======
+			switch (event)
+>>>>>>> upstream/stabilisation
 			{
-				g_audioMemoryPoolPrimary.Cleanup();
-				break;
-			}
-		case ESYSTEM_EVENT_RANDOM_SEED:
-			{
-				cry_random_seed(gEnv->bNoRandomSeed ? 0 : (uint32)wparam);
-				break;
-			}
-		case ESYSTEM_EVENT_ACTIVATE:
-			{
-				// When Alt+Tabbing out of the application while it's in fullscreen mode
-				// ESYSTEM_EVENT_ACTIVATE is sent instead of ESYSTEM_EVENT_CHANGE_FOCUS.
+			case ESYSTEM_EVENT_ACTIVATE:
+				{
+					// When Alt+Tabbing out of the application while it's in full-screen mode
+					// ESYSTEM_EVENT_ACTIVATE is sent instead of ESYSTEM_EVENT_CHANGE_FOCUS.
 
-				// wparam != 0 is active, wparam == 0 is inactive
-				// lparam != 0 is minimized, lparam == 0 is not minimized
+					// wparam != 0 is active, wparam == 0 is inactive
+					// lparam != 0 is minimized, lparam == 0 is not minimized
 
-				if (wparam == 0 || lparam != 0)
-				{
-					//lost focus
-					if (gEnv->pAudioSystem != nullptr)
+					if (wparam == 0 || lparam != 0)
 					{
-						gEnv->pAudioSystem->PushRequest(m_loseFocusRequest);
+						// lost focus
+						gEnv->pAudioSystem->LostFocus(m_requestUserData);
 					}
-				}
-				else
-				{
-					// got focus
-					if (gEnv->pAudioSystem != nullptr)
+					else
 					{
-						gEnv->pAudioSystem->PushRequest(m_getFocusRequest);
+						// got focus
+						gEnv->pAudioSystem->GotFocus(m_requestUserData);
 					}
-				}
 
-				break;
-			}
-		case ESYSTEM_EVENT_CHANGE_FOCUS:
-			{
-				// wparam != 0 is focused, wparam == 0 is not focused
-				if (wparam == 0)
-				{
-					// lost focus
-					if (gEnv->pAudioSystem != nullptr)
-					{
-						gEnv->pAudioSystem->PushRequest(m_loseFocusRequest);
-					}
+					break;
 				}
-				else
+			case ESYSTEM_EVENT_CHANGE_FOCUS:
 				{
-					// got focus
-					if (gEnv->pAudioSystem != nullptr)
+					// wparam != 0 is focused, wparam == 0 is not focused
+					if (wparam == 0)
 					{
-						gEnv->pAudioSystem->PushRequest(m_getFocusRequest);
+						// lost focus
+						gEnv->pAudioSystem->LostFocus(m_requestUserData);
 					}
+					else
+					{
+						// got focus
+						gEnv->pAudioSystem->GotFocus(m_requestUserData);
+					}
+<<<<<<< HEAD
 				}
 				break;
 			}
@@ -112,15 +110,18 @@ public:
 			m_loseFocusRequest.pData = &m_loseFocusRequestData;
 			m_getFocusRequest.flags = eAudioRequestFlags_PriorityHigh;
 			m_getFocusRequest.pData = &m_getFocusRequestData;
+=======
+
+					break;
+				}
+			}
+>>>>>>> upstream/stabilisation
 		}
 	}
 
 private:
 
-	SAudioRequest m_loseFocusRequest;
-	SAudioRequest m_getFocusRequest;
-	SAudioManagerRequestData<eAudioManagerRequestType_LoseFocus> m_loseFocusRequestData;
-	SAudioManagerRequestData<eAudioManagerRequestType_GetFocus>  m_getFocusRequestData;
+	SRequestUserData const m_requestUserData;
 };
 
 static CSystemEventListner_Sound g_system_event_listener_sound;
@@ -129,50 +130,42 @@ static CSystemEventListner_Sound g_system_event_listener_sound;
 bool CreateAudioSystem(SSystemGlobalEnvironment& env)
 {
 	bool bSuccess = false;
+	CSystem* const pSystem = new CSystem;
 
-	// The AudioSystem must be the first object that is allocated from the audio memory pool after it has been created and the last that is freed from it!
-	POOL_NEW_CREATE(CAudioSystem, pAudioSystem);
-
-	if (pAudioSystem != nullptr)
+	if (pSystem != nullptr)
 	{
-		//release the old AudioSystem
 		if (env.pAudioSystem != nullptr)
 		{
 			env.pAudioSystem->Release();
 			env.pAudioSystem = nullptr;
 		}
 
+<<<<<<< HEAD
 		env.pAudioSystem = static_cast<IAudioSystem*>(pAudioSystem);
 		bSuccess = env.pAudioSystem->Initialize();
+=======
+		env.pAudioSystem = static_cast<IAudioSystem*>(pSystem);
+		bSuccess = pSystem->Initialize();
+>>>>>>> upstream/stabilisation
 	}
 	else
 	{
-		g_audioLogger.Log(eAudioLogType_Error, "Could not create an instance of CAudioSystem! Keeping the default AudioSystem!\n");
+		g_logger.Log(ELogType::Error, "Could not create an instance of CAudioSystem! Keeping the default AudioSystem!\n");
 	}
 
 	return bSuccess;
 }
 
 ///////////////////////////////////////////////////////////////////////////
-void PrepareAudioSystem(IAudioSystem* const pAudioSystem)
+void PrepareAudioSystem(CSystem* const pAudioSystem)
 {
-	CryFixedStringT<MAX_AUDIO_FILE_PATH_LENGTH> const temp(pAudioSystem->GetConfigPath());
+	CryFixedStringT<MaxFilePathLength> const temp(pAudioSystem->GetConfigPath());
 
 	// Must be blocking requests.
-	SAudioRequest request;
-	request.flags = eAudioRequestFlags_PriorityHigh | eAudioRequestFlags_ExecuteBlocking;
-
-	SAudioManagerRequestData<eAudioManagerRequestType_ParseControlsData> requestData1(temp.c_str(), eAudioDataScope_Global);
-	request.pData = &requestData1;
-	pAudioSystem->PushRequest(request);
-
-	SAudioManagerRequestData<eAudioManagerRequestType_ParsePreloadsData> requestData2(temp.c_str(), eAudioDataScope_Global);
-	request.pData = &requestData2;
-	pAudioSystem->PushRequest(request);
-
-	SAudioManagerRequestData<eAudioManagerRequestType_PreloadSingleRequest> requestData3(SATLInternalControlIDs::globalPreloadRequestId, false);
-	request.pData = &requestData3;
-	gEnv->pAudioSystem->PushRequest(request);
+	SRequestUserData const data(ERequestFlags::ExecuteBlocking);
+	pAudioSystem->ParseControlsData(temp.c_str(), EDataScope::Global, data);
+	pAudioSystem->ParsePreloadsData(temp.c_str(), EDataScope::Global, data);
+	pAudioSystem->PreloadSingleRequest(GlobalPreloadRequestId, false, data);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////
@@ -188,63 +181,92 @@ void AddPhysicalBlock(long size)
 }
 
 //////////////////////////////////////////////////////////////////////////
+<<<<<<< HEAD
 class CEngineModule_CryAudioSystem : public IEngineModule
+=======
+class CEngineModule_CryAudioSystem : public ISystemModule
+>>>>>>> upstream/stabilisation
 {
-	CRYINTERFACE_SIMPLE(IEngineModule)
+	CRYINTERFACE_BEGIN()
+	CRYINTERFACE_ADD(Cry::IDefaultModule)
+	CRYINTERFACE_ADD(ISystemModule)
+	CRYINTERFACE_END()
+
 	CRYGENERATE_SINGLETONCLASS(CEngineModule_CryAudioSystem, "EngineModule_CryAudioSystem", 0xec73cf4362ca4a7f, 0x8b451076dc6fdb8b)
 
+<<<<<<< HEAD
 	virtual const char* GetName() override { return "CryAudioSystem"; }
 	virtual const char* GetCategory() override { return "CryEngine"; }
+=======
+	CEngineModule_CryAudioSystem();
+
+	virtual ~CEngineModule_CryAudioSystem() override
+	{
+		SAFE_RELEASE(gEnv->pAudioSystem);
+		gEnv->pSystem->UnloadEngineModule(s_currentModuleName.c_str());
+	}
+
+	virtual const char* GetName() const override     { return "CryAudioSystem"; }
+	virtual const char* GetCategory() const override { return "CryEngine"; }
+>>>>>>> upstream/stabilisation
 
 	//////////////////////////////////////////////////////////////////////////
 	virtual bool Initialize(SSystemGlobalEnvironment& env, const SSystemInitParams& initParams) override
 	{
+		s_pInitParameters = &initParams;
+
 		bool bSuccess = false;
 
+<<<<<<< HEAD
 		// initialize memory pools
 		MEMSTAT_CONTEXT(EMemStatContextTypes::MSC_Other, 0, "ATL Memory Pool");
 		size_t const primaryPoolSize = g_audioCVars.m_audioPrimaryPoolSize << 10;
 		uint8* const pPrimaryPoolMemory = new uint8[primaryPoolSize];
 		g_audioMemoryPoolPrimary.InitMem(primaryPoolSize, pPrimaryPoolMemory, "Audio Primary Memory Pool");
+=======
+		MEMSTAT_CONTEXT(EMemStatContextTypes::MSC_Other, 0, "AudioSystem Memory Pool");
+>>>>>>> upstream/stabilisation
 
 		if (CreateAudioSystem(env))
 		{
 #if CRY_PLATFORM_DURANGO
 			// Do this before initializing the audio middleware!
-			HRESULT const result = ApuCreateHeap(static_cast<UINT32>(g_audioCVars.m_fileCacheManagerSize << 10));
+			HRESULT const result = ApuCreateHeap(static_cast<UINT32>(g_cvars.m_fileCacheManagerSize << 10));
 
 			if (result != S_OK)
 			{
-				CryFatalError("<Audio>: AudioSystem failed to allocate APU heap! (%d byte)", g_audioCVars.m_fileCacheManagerSize << 10);
+				CryFatalError("<Audio>: AudioSystem failed to allocate APU heap! (%d byte)", g_cvars.m_fileCacheManagerSize << 10);
 			}
+<<<<<<< HEAD
 #endif // CRY_PLATFORM_DURANGO
+=======
+#endif  // CRY_PLATFORM_DURANGO
+>>>>>>> upstream/stabilisation
 
 			s_currentModuleName = m_pAudioImplNameCVar->GetString();
 
-			if (env.pSystem->InitializeEngineModule(s_currentModuleName.c_str(), s_currentModuleName.c_str(), initParams, false))
+			// Get the first CryAudio::IImplModule factory available in the module and create an instance of it
+			auto pModule = env.pSystem->LoadModuleAndCreateFactoryInstance<IImplModule>(s_currentModuleName.c_str(), initParams);
+
+			if (pModule != nullptr)
 			{
-				PrepareAudioSystem(env.pAudioSystem);
+				PrepareAudioSystem(static_cast<CSystem*>(env.pAudioSystem));
 			}
 			else
 			{
-				// In case of a failure always set NULL implementation
-				SAudioRequest request;
-				request.flags = eAudioRequestFlags_PriorityHigh | eAudioRequestFlags_ExecuteBlocking;
-
-				SAudioManagerRequestData<eAudioManagerRequestType_SetAudioImpl> requestData(nullptr);
-				request.pData = &requestData;
-				env.pAudioSystem->PushRequest(request);
+				// In case of a failure set the null-implementation.
+				SRequestUserData const data(ERequestFlags::ExecuteBlocking);
+				static_cast<CSystem*>(env.pAudioSystem)->SetImpl(nullptr, data);
 			}
 
-			g_system_event_listener_sound.InitRequestData();
-			env.pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_sound);
+			env.pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_sound, "CSystemEventListner_Sound");
 
 			// As soon as the audio system was created we consider this a success (even if the NULL implementation was used)
 			bSuccess = true;
 		}
 		else
 		{
-			g_audioLogger.Log(eAudioLogType_Error, "Could not create AudioSystem!");
+			g_logger.Log(ELogType::Error, "Could not create AudioSystem!");
 		}
 
 		return bSuccess;
@@ -255,28 +277,34 @@ class CEngineModule_CryAudioSystem : public IEngineModule
 	{
 #if defined(INCLUDE_AUDIO_PRODUCTION_CODE)
 		CryFixedStringT<MAX_MODULE_NAME_LENGTH> const previousModuleName(s_currentModuleName);
-
+		CSystem* const pAudioSystem = static_cast<CSystem*>(gEnv->pAudioSystem);
 		SSystemInitParams systemInitParams;
 		s_currentModuleName = pAudioImplNameCvar->GetString();
 
+		if (!previousModuleName.empty())
+		{
+			// Set the null impl
+			SRequestUserData const data(ERequestFlags::ExecuteBlocking);
+			pAudioSystem->SetImpl(nullptr, data);
+
+			// Unload the previous module
+			gEnv->pSystem->UnloadEngineModule(previousModuleName.c_str());
+		}
+
+		// Get the first CryAudio::ISystemImplementationModule factory available in the module and create an instance of it
+		auto pModule = gEnv->pSystem->LoadModuleAndCreateFactoryInstance<IImplModule>(s_currentModuleName.c_str(), *s_pInitParameters);
+
 		// First try to load and initialize the new engine module.
 		// This will release the currently running implementation but only if the library loaded successfully.
-		if (gEnv->pSystem->InitializeEngineModule(s_currentModuleName.c_str(), s_currentModuleName.c_str(), systemInitParams, false))
+		if (pModule != nullptr)
 		{
-			SAudioRequest request;
-			request.flags = eAudioRequestFlags_PriorityHigh | eAudioRequestFlags_ExecuteBlocking;
-
-			// Unload the previous module if the new one initialized successfully..
-			if (!previousModuleName.empty())
-			{
-				gEnv->pSystem->UnloadEngineModule(previousModuleName.c_str(), previousModuleName.c_str());
-			}
+			SRequestUserData const data(ERequestFlags::ExecuteBlocking);
 
 			// Then load global controls data and preloads.
-			PrepareAudioSystem(gEnv->pAudioSystem);
+			PrepareAudioSystem(pAudioSystem);
 
 			// Then load level specific controls data and preloads.
-			string const levelName = PathUtil::GetFileName(gEnv->pGame->GetIGameFramework()->GetLevelName());
+			string const levelName = PathUtil::GetFileName(gEnv->pGameFramework->GetLevelName());
 
 			if (!levelName.empty() && levelName.compareNoCase("Untitled") != 0)
 			{
@@ -285,18 +313,14 @@ class CEngineModule_CryAudioSystem : public IEngineModule
 				levelPath += levelName;
 
 				// Needs to be blocking so data is available for next preloading request!
-				SAudioManagerRequestData<eAudioManagerRequestType_ParseControlsData> requestData1(levelPath, eAudioDataScope_LevelSpecific);
-				request.pData = &requestData1;
-				gEnv->pAudioSystem->PushRequest(request);
+				pAudioSystem->ParseControlsData(levelPath.c_str(), EDataScope::LevelSpecific, data);
+				pAudioSystem->ParsePreloadsData(levelPath.c_str(), EDataScope::LevelSpecific, data);
 
-				SAudioManagerRequestData<eAudioManagerRequestType_ParsePreloadsData> requestData2(levelPath, eAudioDataScope_LevelSpecific);
-				request.pData = &requestData2;
-				gEnv->pAudioSystem->PushRequest(request);
+				PreloadRequestId preloadRequestId = InvalidPreloadRequestId;
 
-				AudioPreloadRequestId audioPreloadRequestId = INVALID_AUDIO_PRELOAD_REQUEST_ID;
-
-				if (gEnv->pAudioSystem->GetAudioPreloadRequestId(levelName.c_str(), audioPreloadRequestId))
+				if (pAudioSystem->GetPreloadRequestId(levelName.c_str(), preloadRequestId))
 				{
+<<<<<<< HEAD
 					SAudioManagerRequestData<eAudioManagerRequestType_PreloadSingleRequest> requestData3(audioPreloadRequestId, true);
 					request.pData = &requestData3;
 					gEnv->pAudioSystem->PushRequest(request);
@@ -332,13 +356,14 @@ class CEngineModule_CryAudioSystem : public IEngineModule
 							}
 						}
 					}
+=======
+					pAudioSystem->PreloadSingleRequest(preloadRequestId, true, data);
+>>>>>>> upstream/stabilisation
 				}
 			}
 
 			// And finally re-trigger all active audio controls to restart previously playing sounds.
-			SAudioManagerRequestData<eAudioManagerRequestType_RetriggerAudioControls> requestData5;
-			request.pData = &requestData5;
-			gEnv->pAudioSystem->PushRequest(request);
+			pAudioSystem->RetriggerAudioControls(data);
 		}
 		else
 		{
@@ -346,29 +371,31 @@ class CEngineModule_CryAudioSystem : public IEngineModule
 			// Either the module did not load in which case unloading of s_currentModuleName is redundant
 			// or the module did not initialize in which case setting the null implementation is redundant.
 			// As we currently do not know here how exactly the module failed we play safe and always set the null implementation and unload the modules.
-			SAudioRequest request;
-			SAudioManagerRequestData<eAudioManagerRequestType_SetAudioImpl> requestData(nullptr);
-			request.flags = eAudioRequestFlags_PriorityHigh | eAudioRequestFlags_ExecuteBlocking;
-			request.pData = &requestData;
-			gEnv->pAudioSystem->PushRequest(request);
+			SRequestUserData const data(ERequestFlags::ExecuteBlocking);
+			pAudioSystem->SetImpl(nullptr, data);
 
 			// The module failed to initialize, unload both as we are running the null implementation now.
-			gEnv->pSystem->UnloadEngineModule(previousModuleName.c_str(), previousModuleName.c_str());
-			gEnv->pSystem->UnloadEngineModule(s_currentModuleName.c_str(), s_currentModuleName.c_str());
+			gEnv->pSystem->UnloadEngineModule(s_currentModuleName.c_str());
 			s_currentModuleName.clear();
 		}
 
 		// In any case send the event as we always loaded some implementation (either the proper or the NULL one).
 		GetISystem()->GetISystemEventDispatcher()->OnSystemEvent(ESYSTEM_EVENT_AUDIO_IMPLEMENTATION_LOADED, 0, 0);
+<<<<<<< HEAD
 #endif // INCLUDE_AUDIO_PRODUCTION_CODE
+=======
+#endif  // INCLUDE_AUDIO_PRODUCTION_CODE
+>>>>>>> upstream/stabilisation
 	}
 
 private:
 
-	ICVar* m_pAudioImplNameCVar;
+	ICVar*                                         m_pAudioImplNameCVar;
+	static const SSystemInitParams*                s_pInitParameters;
 	static CryFixedStringT<MAX_MODULE_NAME_LENGTH> s_currentModuleName;
 };
 
+const SSystemInitParams* CEngineModule_CryAudioSystem::s_pInitParameters = nullptr;
 CryFixedStringT<MAX_MODULE_NAME_LENGTH> CEngineModule_CryAudioSystem::s_currentModuleName;
 CRYREGISTER_SINGLETON_CLASS(CEngineModule_CryAudioSystem)
 
@@ -381,13 +408,14 @@ CEngineModule_CryAudioSystem::CEngineModule_CryAudioSystem()
 	                                          "Usage: s_AudioImplName <name of the library without extension>\n"
 	                                          "Default: CryAudioImplSDLMixer\n",
 	                                          CEngineModule_CryAudioSystem::OnAudioImplChanged);
+<<<<<<< HEAD
 
 	g_audioCVars.RegisterVariables();
 }
+=======
+>>>>>>> upstream/stabilisation
 
-//////////////////////////////////////////////////////////////////////////
-CEngineModule_CryAudioSystem::~CEngineModule_CryAudioSystem()
-{
+	g_cvars.RegisterVariables();
 }
-
+} // namespace CryAudio
 #include <CryCore/CrtDebugStats.h>

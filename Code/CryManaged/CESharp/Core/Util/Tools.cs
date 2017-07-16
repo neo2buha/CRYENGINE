@@ -1,17 +1,20 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
 using System;
-using System.Runtime.Serialization.Json;
 using System.IO;
+using System.Runtime.Serialization.Json;
 using System.Text;
+<<<<<<< HEAD
 using CryEngine.Common;
+=======
+>>>>>>> upstream/stabilisation
 
 namespace CryEngine
 {
 	/// <summary>
 	/// Supportive functions for Serialization.
 	/// </summary>
-	public class Tools
+	public static class Tools
 	{
 		/// <summary>
 		/// Converts an object to JSON.
@@ -20,7 +23,7 @@ namespace CryEngine
 		/// <param name="o">Target Object</param>
 		public static string ToJSON(object o)
 		{
-			using (var ms = new MemoryStream())
+			using(var ms = new MemoryStream())
 			{
 				new DataContractJsonSerializer(o.GetType()).WriteObject(ms, o);
 				return Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Position);
@@ -46,10 +49,11 @@ namespace CryEngine
 		/// <param name="t">The target type.</param>
 		public static object FromJSON(string content, Type t)
 		{
-			using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(content)))
+			using(var ms = new MemoryStream(Encoding.UTF8.GetBytes(content)))
 				return new DataContractJsonSerializer(t).ReadObject(ms);
 		}
 	}
+<<<<<<< HEAD
 
 	/// <summary>
 	/// Provides some math for convenience.
@@ -78,46 +82,18 @@ namespace CryEngine
 			return rad / Deg2RadMul;
 		}
 	}
+=======
+>>>>>>> upstream/stabilisation
 
 	/// <summary>
-	/// Automatically updated frametime. Can be used to normalize variable changes by current FPS.
+	/// Automatically updates delta time between frames. Can be used to normalize variable changes by current FPS.
 	/// </summary>
 	public static class FrameTime
 	{
-		private static float _frameTime;
-
 		/// <summary>
 		/// Gets the last calculated frametime in seconds.
 		/// </summary>
 		/// <returns>The last.</returns>
-		public static float Current { get { return _frameTime; } }
-
-		/// <summary>
-		/// Retrieves the last frametime from engine. Called internally.
-		/// </summary>
-		public static void Update()
-		{			
-			_frameTime = Env.Timer.GetFrameTime();
-		}
-
-		/// <summary>
-		/// Normalizes a value.
-		/// </summary>
-		/// <returns>Returning argument multiplied with frametime.</returns>
-		/// <param name="value">Absolute value.</param>
-		public static float Normalize(float value)
-		{
-			return value * _frameTime;
-		}
-
-		/// <summary>
-		/// Normalizes a Vector.
-		/// </summary>
-		/// <returns>Returning argument multiplied with frametime.</returns>
-		/// <param name="value">Absolute value.</param>
-		public static Vec3 Normalize(Vec3 value)
-		{
-			return value * _frameTime;
-		}
+		public static float Delta { get; internal set; }
 	}
 }

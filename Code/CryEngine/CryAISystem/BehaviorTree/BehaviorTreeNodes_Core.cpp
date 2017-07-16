@@ -13,6 +13,7 @@
 
 #ifdef USING_BEHAVIOR_TREE_SERIALIZATION
 	#include <CrySerialization/Enum.h>
+	#include <CrySerialization/ClassFactory.h>
 #endif
 
 namespace BehaviorTree
@@ -238,7 +239,7 @@ public:
 
 	struct RuntimeData
 	{
-		uint32 runningChildren;   // Each bit is a child
+		uint32 runningChildren;     // Each bit is a child
 		uint32 successCount;
 		uint32 failureCount;
 
@@ -515,7 +516,7 @@ public:
 		IF_UNLIKELY (BaseClass::LoadFromXml(xml, context) == LoadFailure)
 			return LoadFailure;
 
-		m_desiredRepeatCount = 0;   // 0 means infinite
+		m_desiredRepeatCount = 0;     // 0 means infinite
 		xml->getAttr("count", m_desiredRepeatCount);
 
 		return LoadSuccess;
@@ -577,7 +578,7 @@ protected:
 	}
 
 private:
-	uint8 m_desiredRepeatCount;   // 0 means infinite
+	uint8 m_desiredRepeatCount;     // 0 means infinite
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -614,7 +615,7 @@ public:
 		IF_UNLIKELY (BaseClass::LoadFromXml(xml, context) == LoadFailure)
 			return LoadFailure;
 
-		m_maxAttemptCount = 0;   // 0 means infinite
+		m_maxAttemptCount = 0;     // 0 means infinite
 		xml->getAttr("attemptCount", m_maxAttemptCount);
 
 		return LoadSuccess;
@@ -678,7 +679,7 @@ protected:
 	}
 
 private:
-	uint8 m_maxAttemptCount;   // 0 means infinite
+	uint8 m_maxAttemptCount;     // 0 means infinite
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -747,7 +748,7 @@ struct Case
 		if (m_conditionString.empty())
 			archive.error(m_conditionString, "Condition must be specified");
 
-		archive(node, "node", "+<>");
+		archive(node, "node", "+<>" NODE_COMBOBOX_FIXED_WIDTH ">");
 		if (!node)
 			archive.error(node, "Node must be specified");
 	}
@@ -977,7 +978,7 @@ struct Transition
 #ifdef USING_BEHAVIOR_TREE_SERIALIZATION
 	void Serialize(Serialization::IArchive& archive)
 	{
-		archive(triggerEventName, "triggerEventName", "^Trigger event");
+		archive(triggerEventName, "triggerEventName", "^>" STATE_TRANSITION_EVENT_FIXED_WIDTH ">Trigger event");
 		if (triggerEventName.empty())
 			archive.error(triggerEventName, "Must specify a trigger event");
 
@@ -1126,7 +1127,7 @@ struct State
 
 		archive(transitions, "transitions", "+[<>]Transitions");
 
-		archive(node, "node", "+<>");
+		archive(node, "node", "+<>" NODE_COMBOBOX_FIXED_WIDTH ">");
 		if (!node)
 			archive.error(node, "Node must be specified");
 	}
@@ -1351,7 +1352,7 @@ private:
 	StateIndex GetIndexOfState(uint32 stateNameLowerCaseCRC32)
 	{
 		size_t index, size = m_states.size();
-		assert(size < ((1 << (sizeof(StateIndex) * 8)) - 1));             // -1 because StateIndexInvalid is reserved.
+		assert(size < ((1 << (sizeof(StateIndex) * 8)) - 1));               // -1 because StateIndexInvalid is reserved.
 		for (index = 0; index < size; index++)
 		{
 			if (m_states[index].nameCRC32 == stateNameLowerCaseCRC32)
@@ -2332,7 +2333,7 @@ public:
 			xml->setAttr("isLessThan", m_timeThreshold);
 
 		if (m_succeedIfTimestampWasNeverSet)
-			xml->setAttr("orNeverBeenSet", 1);
+			xml->setAttr("succeedIfNeverBeenSet", 1);
 
 		return xml;
 	}
@@ -2711,7 +2712,7 @@ class Graft : public Action
 public:
 	typedef Action BaseClass;
 
-	struct RuntimeData : public IGraftNode
+	struct RuntimeData final : public IGraftNode
 	{
 		virtual bool RunBehavior(EntityId entityId, const char* behaviorName, XmlNodeRef behaviorXmlNode) override
 		{

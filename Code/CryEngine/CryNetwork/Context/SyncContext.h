@@ -127,12 +127,6 @@ struct SContextViewObject
 #endif
 	}
 
-	enum eConstants
-	{
-		eC_HOSTMIGRATION_ID   = 0xffff,
-		eC_HOSTMIGRATION_SALT = 0xffff
-	};
-
 #ifdef _DEBUG
 	std::map<string, int> lockers;
 #endif
@@ -150,13 +144,6 @@ struct SContextViewObjectEx
 	// handles to our hash messages
 	SSendableHandle notifyPartialUpdateHandle[NumAspects];
 
-#if ENABLE_ASPECT_HASHING
-	NetworkAspectType hashedAspects;              //xtra
-	SSendableHandle   hashMsgHandles[NumAspects]; //xtra
-	uint32            hashReceived[NumAspects];   //xtra
-	uint32            hashSent[NumAspects];       //xtra
-#endif
-
 #ifndef OLD_VOICE_SYSTEM_DEPRECATED
 	CTimeValue          voiceTransmitTime; //xtra
 	CTimeValue          voiceReceiptTime;  //xtra
@@ -171,9 +158,6 @@ struct SContextViewObjectEx
 
 	void                Reset()
 	{
-#if ENABLE_ASPECT_HASHING
-		hashedAspects = 0;
-#endif
 #ifndef OLD_VOICE_SYSTEM_DEPRECATED
 		voiceReceiptTime = 0.0f;
 		voiceTransmitTime = 0.0f;
@@ -186,10 +170,6 @@ struct SContextViewObjectEx
 			partialUpdatesRemaining[i] = 0;
 			notifyPartialUpdateHandle[i] = SSendableHandle();
 			ackedAspectVersions[i] = ~uint32(0);
-#if ENABLE_ASPECT_HASHING
-			hashMsgHandles[i] = SSendableHandle();
-			hashReceived[i] = hashSent[i] = 0;
-#endif
 		}
 		for (int i = 0; i < eHSS_NUM_SLOTS; i++)
 		{
@@ -205,6 +185,7 @@ struct SSyncContext
 	{
 		basisSeq = 0xbadf00d;
 		currentSeq = 0xdeadbeef;
+		timeValue = 0xdeadbeef;
 		index = 0xde;
 		flags = 0;
 		pView = 0;
@@ -214,6 +195,7 @@ struct SSyncContext
 	}
 	uint32                basisSeq;
 	uint32                currentSeq;
+	uint32                timeValue;
 	NetworkAspectID       index;
 	SNetObjectID          objId;
 	uint32                flags;

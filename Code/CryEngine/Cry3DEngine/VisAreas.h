@@ -275,6 +275,7 @@ struct CVisAreaManager : public IVisAreaManager, Cry3DEngineBase
 	void                 CheckVis(const SRenderingPassInfo& passInfo);
 	void                 DrawVisibleSectors(const SRenderingPassInfo& passInfo);
 	void                 ActivatePortal(const Vec3& vPos, bool bActivate, const char* szEntityName);
+	void                 ActivateOcclusionAreas(IVisAreaTestCallback* pTest, bool bActivate);
 	void                 UpdateVisArea(CVisArea* pArea, const Vec3* pPoints, int nCount, const char* szName, const SVisAreaInfo& info);
 	virtual void         UpdateConnections();
 	void                 MoveObjectsIntoList(PodArray<SRNInfo>* plstVisAreasEntities, const AABB& boxArea, bool bRemoveObjects = false);
@@ -319,7 +320,7 @@ struct CVisAreaManager : public IVisAreaManager, Cry3DEngineBase
 
 	// -------------------------------------
 
-	void         GetObjectsByType(PodArray<IRenderNode*>& lstObjects, EERType objType, const AABB* pBBox, bool* pInstStreamReady = NULL);
+	void         GetObjectsByType(PodArray<IRenderNode*>& lstObjects, EERType objType, const AABB* pBBox, bool* pInstStreamReady = NULL, uint64 dwFlags = ~0);
 	void         GetObjectsByFlags(uint dwFlags, PodArray<IRenderNode*>& lstObjects);
 	int          GetObjectsCount(EOcTeeNodeListType eListType);
 	void         GetStreamedInNodesNum(int& nAllStreamable, int& nReady);

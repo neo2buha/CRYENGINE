@@ -2,7 +2,7 @@
 
 #pragma once
 #if defined(USE_CRY_ASSERT) && CRY_PLATFORM_WINDOWS
-	#include <CryString/StringUtils.h>
+	#include <CryString/CryPath.h>
 	#include <CryInput/IInput.h>
 
 	#define XTOKENIZE_(x, y) x ## y
@@ -162,7 +162,7 @@ static INT_PTR CALLBACK DlgProc(HWND _hDlg, UINT _uiMsg, WPARAM _wParam, LPARAM 
 			pAssertInfo = (SCryAssertInfo*)_lParam;
 
 			char buf[MAX_PATH];
-			const bool bFolded = CryStringUtils::SimplifyFilePath(pAssertInfo->pszFile, buf, MAX_PATH, CryStringUtils::ePathStyle_Windows);
+			const bool bFolded = PathUtil::SimplifyFilePath(pAssertInfo->pszFile, buf, MAX_PATH, PathUtil::ePathStyle_Windows);
 
 			SetWindowTextA(GetDlgItem(_hDlg, IDC_CRYASSERT_EDIT_CONDITION), pAssertInfo->pszCondition);
 			SetWindowTextA(GetDlgItem(_hDlg, IDC_CRYASSERT_EDIT_FILE), bFolded ? buf : pAssertInfo->pszFile);
@@ -225,9 +225,9 @@ static INT_PTR CALLBACK DlgProc(HWND _hDlg, UINT _uiMsg, WPARAM _wParam, LPARAM 
 				EndDialog(_hDlg, 0);
 				break;
 			}
-			if (gEnv && gEnv->pSystem && gEnv->pSystem->GetISystemEventDispatcher())
+			if (gEnv && gEnv->pInput)
 			{
-				gEnv->pSystem->GetISystemEventDispatcher()->OnSystemEvent(ESYSTEM_EVENT_CHANGE_FOCUS, 0, 0, true);
+				gEnv->pInput->ClearKeyState();
 			}
 		}
 		break;
@@ -259,23 +259,21 @@ static THREADLOCAL char gs_szMessage[MAX_PATH];
 
 void CryAssertTrace(const char* _pszFormat, ...)
 {
-	if (gEnv == 0)
+	if (!gEnv)
 	{
 		return;
 	}
-	if (!gEnv->bIgnoreAllAsserts || gEnv->bTesting)
+
+	if (_pszFormat == nullptr || _pszFormat[0] == '\0')
 	{
-		if (NULL == _pszFormat)
-		{
-			gs_szMessage[0] = '\0';
-		}
-		else
-		{
-			va_list args;
-			va_start(args, _pszFormat);
-			cry_vsprintf(gs_szMessage, _pszFormat, args);
-			va_end(args);
-		}
+		gs_szMessage[0] = '\0';
+	}
+	else
+	{
+		va_list args;
+		va_start(args, _pszFormat);
+		cry_vsprintf(gs_szMessage, _pszFormat, args);
+		va_end(args);
 	}
 }
 
@@ -347,15 +345,42 @@ private:
 	int m_numberOfShows;
 };
 
+void CryLogAssert(const char* _pszCondition, const char* _pszFile, unsigned int _uiLine, bool* _pbIgnore)
+{
+	if (!gEnv || !gEnv->pSystem)
+		return;
+
+	if (gEnv->pConsole)
+	{
+		static ICVar* pLogAsserts = gEnv->pConsole->GetCVar("sys_log_asserts");
+		if (pLogAsserts && !pLogAsserts->GetIVal())
+			return;
+	}
+
+#ifdef _RELEASE
+	GetISystem()->WarningV(VALIDATOR_MODULE_UNKNOWN, VALIDATOR_ASSERT, 0, _pszFile, gs_szMessage, va_list());
+#else
+	if (gs_szMessage == nullptr || gs_szMessage[0] == '\0')
+	{
+		GetISystem()->Warning(VALIDATOR_MODULE_UNKNOWN, VALIDATOR_ASSERT, 0, _pszFile, "Condition: %s [line %u]", _pszCondition, _uiLine);
+	}
+	else
+	{
+		GetISystem()->Warning(VALIDATOR_MODULE_UNKNOWN, VALIDATOR_ASSERT, 0, _pszFile, "%s (Condition: %s)[line %u]", gs_szMessage, _pszCondition, _uiLine);
+	}
+#endif
+}
+
 bool CryAssert(const char* _pszCondition, const char* _pszFile, unsigned int _uiLine, bool* _pbIgnore)
 {
 	if (!gEnv)
 	{
 		return false;
 	}
-
-	if (!gEnv->bNoAssertDialog && !gEnv->bIgnoreAllAsserts)
+	if (!gEnv->bNoAssertDialog && !gEnv->bIgnoreAllAsserts && !gEnv->bStoppedOnAssert)
 	{
+		gEnv->bStoppedOnAssert = true;
+
 		SCryAssertInfo assertInfo;
 
 		assertInfo.pszCondition = _pszCondition;
@@ -371,7 +396,7 @@ bool CryAssert(const char* _pszCondition, const char* _pszFile, unsigned int _ui
 		CCursorShowerWithStack cursorShowerWithStack;
 		cursorShowerWithStack.StoreCurrentAndShow();
 
-		DialogBoxIndirectParam(GetModuleHandle(NULL), (DLGTEMPLATE*)&g_dialogRC, GetDesktopWindow(), DlgProc, (LPARAM)&assertInfo);
+		DialogBoxIndirectParam(CryGetCurrentModule(), (DLGTEMPLATE*)&g_dialogRC, GetDesktopWindow(), DlgProc, (LPARAM)&assertInfo);
 
 		cursorShowerWithStack.RevertToPrevious();
 
@@ -388,8 +413,10 @@ bool CryAssert(const char* _pszCondition, const char* _pszFile, unsigned int _ui
 			gEnv->bIgnoreAllAsserts = true;
 			break;
 		case SCryAssertInfo::BUTTON_BREAK:
+			gEnv->bStoppedOnAssert = false;
 			return true;
 		case SCryAssertInfo::BUTTON_STOP:
+			gEnv->bStoppedOnAssert = false;
 			abort();
 			return true;
 		case SCryAssertInfo::BUTTON_REPORT_AS_BUG:
@@ -400,10 +427,13 @@ bool CryAssert(const char* _pszCondition, const char* _pszFile, unsigned int _ui
 			}
 			break;
 		}
+		gEnv->bStoppedOnAssert = false;
 	}
-	if (gEnv)
+	if (gEnv && !gEnv->bStoppedOnAssert)
 	{
+		gEnv->bStoppedOnAssert = true;
 		gEnv->pSystem->OnAssert(_pszCondition, gs_szMessage, _pszFile, _uiLine);
+		gEnv->bStoppedOnAssert = false;
 	}
 	return false;
 }

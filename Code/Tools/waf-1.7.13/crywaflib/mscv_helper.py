@@ -294,7 +294,7 @@ def wrap_class_orbis(class_name):
 	derived_class = type(class_name, (cls,), {})
 
 	def exec_command(self, *k, **kw):
-		if self.env['CC_NAME'] == 'orbis-clang' or self.env['CC_NAME'] == 'gcc':
+		if self.env['CC_NAME'] == 'orbis-clang' or self.env['CC_NAME'] == 'gcc'  or self.env['CC_NAME'] == 'clang':
 			return self.exec_command_orbis_clang(*k, **kw)
 		else:
 			return super(derived_class, self).exec_command(*k, **kw)
@@ -482,7 +482,7 @@ def verify_options_common(env):
 		frozenset(['/Z7', '/Zi', '/ZI']),
 		frozenset(['/Za', '/Ze']),
 		frozenset(['/MD', '/MT', '/LD', '/MDd', '/MTd', '/LDd']),
-		frozenset(['/W0', '/W1', '/W2', '/W3', '/W4']),
+		frozenset(['/W0', '/W1', '/W2', '/W3', '/W4', '/w']),
 		frozenset(['/Zp1', '/Zp2', '/Zp4', '/Zp8', '/Zp16'])]	
 		
 	# Mutatable options 
@@ -558,7 +558,7 @@ all_msvc_platforms = [ ('x64', 'amd64', 'amd64', ''), ('x64', 'x86', 'x86_amd64'
 
 # List of known versions (compiler version, expected Windows SDK), ordered from most preferred to least preferred (order used by auto-detect)
 # Note: The expected Windows SDK is the one that's installed with that version by default, and the one we prefer to use for that compiler if we can
-all_versions = [('14.0', '10.0.10586.0'), ('14.0', '10.0.10240.0'), ('12.0', '8.1'), ('11.0', '8.0')]
+all_versions = [('14.0', '10.0.14393.0'), ('14.0', '10.0.10586.0'), ('14.0', '10.0.10240.0'), ('12.0', '8.1'), ('11.0', '8.0')]
 
 # Look up the default Windows SDK version to use for the given MSVC version
 def get_winsdk_for_msvc_version(version):
@@ -1312,7 +1312,7 @@ def copy_msvc_mfc_binaries(self):
 		return
 
 	# Note: We want to skip the 1X0u.dll here, because they are Unicode variants, and we want the MBCS ones
-	# Known issue: There doesn't seem to be any redist for VS2015's non-Unicode MFC available
+	# Per https://msdn.microsoft.com/en-us/library/ms235264.aspx it is acceptable to redistribute the mfc140.dll from Windows/system32.
 	# From the localized MFC, just grab only English-US, the other languages are not supported (and it would lead to half-localized sandbox)
 	any_core_copied = copy_redist_files(self, 'mfc', [ '0.dll' ])
 	any_loc_copied = copy_redist_files(self, 'mfcloc', [ 'enu' ])

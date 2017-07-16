@@ -7,7 +7,7 @@ $DateTime$
 
 -------------------------------------------------------------------------
 History:
-- 11:9:2005   15:00 : Created by Márcio Martins
+- 11:9:2005   15:00 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -23,6 +23,8 @@ History:
 #include "Battlechatter.h"
 #include "GameRules.h"
 #include "Utility/CryWatch.h"
+#include "VehicleSystem/Vehicle.h"
+#include "VehicleWeapon.h"
 
 CRY_IMPLEMENT_GTI(CRapid, CSingle);
 

@@ -14,20 +14,46 @@
 class CSceneRenderPass;
 class CPermanentRenderObject;
 struct SGraphicsPipelinePassContext;
+class CRenderPolygonDataPool;
+class CREClientPoly;
 
-// This class encapsulate all renderbale information to render a camera view.
+class CRenderOutput
+{
+public:
+	CRenderOutput() = default;
+	~CRenderOutput();
+
+	CRenderOutput(const SEnvTexture& envTex, const SHRenderTarget& renderTarget);
+	CRenderOutput(CTexture* pHDRTargetTex, int32 width, int32 height, bool bClear, ColorF clearColor);
+
+	CRenderOutput(const CRenderOutput&) = default;
+	CRenderOutput& operator=(const CRenderOutput&) = default;
+
+	void           BeginRendering();
+	void           EndRendering();
+
+	CTexture*      GetHDRTargetTexture() const;
+
+	CTexture*      GetDepthTexture() const;
+
+private:
+	SDynTexture*   m_pOutputDynTexture = nullptr;
+	CTexture*      m_pHDRTargetTexture = nullptr;
+	CTexture*      m_pDepthTexture = nullptr;
+	int32          m_width = -1;
+	int32          m_height = -1;
+	uint32         m_clearTargetFlag = 0;
+	ColorF         m_clearColor = {};
+	float          m_clearDepth = 0.0f;
+	bool           m_bUseTempDepthBuffer = false;
+};
+
+// This class encapsulate all information required to render a camera view.
 // It stores list of render items added by 3D engine
 class CRenderView : public IRenderView
 {
 public:
 	typedef TRange<int> ItemsRange;
-
-	enum EViewType
-	{
-		eViewType_Default,
-		eViewType_Recursive,
-		eViewType_Shadow,
-	};
 
 	enum eShadowFrustumRenderType
 	{
@@ -48,6 +74,12 @@ public:
 	typedef std::vector<SShadowFrustumToRender*> ShadowFrustumsPtr;
 	typedef lockfree_add_vector<CRenderObject*>  ModifiedObjects;
 
+	static const int32 MaxFogVolumeNum = 64;
+
+	static const int32 CloudBlockerTypeNum = 2;
+	static const int32 MaxCloudBlockerWorldSpaceNum = 4;
+	static const int32 MaxCloudBlockerScreenSpaceNum = 1;
+
 public:
 	//////////////////////////////////////////////////////////////////////////
 	// IRenderView
@@ -61,6 +93,9 @@ public:
 	virtual void   SetShaderRenderingFlags(uint32 nFlags) override { m_nShaderRenderingFlags = nFlags; }
 	virtual uint32 GetShaderRenderingFlags() const final           { return m_nShaderRenderingFlags; };
 
+	virtual void   SetCameras(const CCamera* pCameras, int cameraCount) final;
+	virtual void   SetPreviousFrameCameras(const CCamera* pCameras, int cameraCount) final;
+
 	// Begin/End writing items to the view from 3d engine traversal.
 	virtual void         SwitchUsageMode(EUsageMode mode) override;
 
@@ -72,35 +107,68 @@ public:
 	CRenderView(const char* name, EViewType type, CRenderView* pParentView = nullptr, ShadowMapFrustum* pShadowFrustumOwner = nullptr);
 	~CRenderView();
 
-	EViewType    GetType() const                         { return m_viewType;  }
+	EViewType            GetType() const                            { return m_viewType;  }
 
-	void         SetParentView(CRenderView* pParentView) { m_pParentView = pParentView; };
-	CRenderView* GetParentView() const                   { return m_pParentView;  };
+	void                 SetParentView(CRenderView* pParentView)    { m_pParentView = pParentView; };
+	CRenderView*         GetParentView() const                      { return m_pParentView;  };
 
-	RenderItems& GetRenderItems(int nRenderList);
-	uint32       GetBatchFlags(int nRenderList) const;
+	const CCamera&       GetCamera(CCamera::EEye eye)         const { CRY_ASSERT(eye == CCamera::eEye_Left || eye == CCamera::eEye_Right); return m_camera[eye]; }
+	const CCamera&       GetPreviousCamera(CCamera::EEye eye) const { CRY_ASSERT(eye == CCamera::eEye_Left || eye == CCamera::eEye_Right); return m_previousCamera[eye]; }
+	const CRenderCamera& GetRenderCamera(CCamera::EEye eye)   const { CRY_ASSERT(eye == CCamera::eEye_Left || eye == CCamera::eEye_Right); return m_renderCamera[eye]; }
 
-	void         AddRenderItem(CRendElementBase* pElem, CRenderObject* RESTRICT_POINTER pObj, const SShaderItem& shaderItem, uint32 nList, uint32 nBatchFlags,
-	                           SRendItemSorter sorter, bool bShadowPass, bool bForceOpaqueForward);
+	void                 SetRenderOutput(const CRenderOutput* pRenderOutput);
+	const CRenderOutput* GetRenderOutput() const { return m_bRenderOutput ? &m_renderOutput : nullptr; }
+
+	RenderItems&         GetRenderItems(int nRenderList);
+	uint32               GetBatchFlags(int nRenderList) const;
+
+	void                 AddRenderItem(CRenderElement* pElem, CRenderObject* RESTRICT_POINTER pObj, const SShaderItem& shaderItem, uint32 nList, uint32 nBatchFlags,
+	                                   SRendItemSorter sorter, bool bShadowPass, bool bForceOpaqueForward);
 
 	void       AddPermanentObjectInline(CPermanentRenderObject* pObject, SRendItemSorter sorter, int shadowFrustumSide);
 
 	ItemsRange GetItemsRange(ERenderListID renderList);
 
 	// Find render item index in the sorted list, after when object flag changes.
-	int        FindRenderListSplit(ERenderListID list, uint32 objFlag);
+	int FindRenderListSplit(ERenderListID list, uint32 objFlag);
+
+	// Find render item index in the sorted list according to arbitrary criteria.
+	template<typename T>
+	int FindRenderListSplit(T predicate, ERenderListID list, int first, int last)
+	{
+		FUNCTION_PROFILER_RENDERER
+
+		// Binary search, assumes that the sub-region of the list is sorted by the predicate already
+		RenderItems& renderItems = GetRenderItems(list);
+
+		assert(first >= 0 && (first < renderItems.size()));
+		assert(last >= 0 && (last <= renderItems.size()));
+
+		--last;
+		while (first <= last)
+		{
+			int middle = (first + last) / 2;
+
+			if (predicate(renderItems[middle]))
+				first = middle + 1;
+			else
+				last = middle - 1;
+		}
+
+		return last + 1;
+	}
 
 	void       PrepareForRendering();
 
 	void       PrepareForWriting();
 
-	bool       IsRecursive() const     { return m_viewType == eViewType_Recursive; }
-	bool       IsShadowGenView() const { return m_viewType == eViewType_Shadow; }
-	EUsageMode GetUsageMode() const    { return m_usageMode; }
+	bool       IsRecursive() const        { return m_viewType == eViewType_Recursive; }
+	bool       IsShadowGenView() const    { return m_viewType == eViewType_Shadow; }
+	bool       IsBillboardGenView() const { return m_viewType == eViewType_BillboardGen; }
+	EUsageMode GetUsageMode() const       { return m_usageMode; }
 	//////////////////////////////////////////////////////////////////////////
 	// Shadows related
 	void AddShadowFrustumToRender(const SShadowFrustumToRender& frustum);
-	void AddCustomShadowFrustum(const ShadowMapFrustumPtr& pFrustum, const ShadowMapFrustumPtr& pOriginalFrustum);
 
 	// Get render view used for given frustum.
 	CRenderView*                         GetShadowsView(ShadowMapFrustum* pFrustum);
@@ -142,10 +210,30 @@ public:
 	//////////////////////////////////////////////////////////////////////////
 
 	//////////////////////////////////////////////////////////////////////////
+	// Fog Volumes
+	//////////////////////////////////////////////////////////////////////////
+	void                               AddFogVolume(const CREFogVolume* pFogVolume) final;
+	const std::vector<SFogVolumeInfo>& GetFogVolumes(IFogVolumeRenderNode::eFogVolumeType volumeType) const;
+	//////////////////////////////////////////////////////////////////////////
+
+	//////////////////////////////////////////////////////////////////////////
+	// Cloud Blockers
+	//////////////////////////////////////////////////////////////////////////
+	void                              AddCloudBlocker(const Vec3& pos, const Vec3& param, int32 flags) final;
+	const std::vector<SCloudBlocker>& GetCloudBlockers(uint32 blockerType) const;
+	//////////////////////////////////////////////////////////////////////////
+
+	//////////////////////////////////////////////////////////////////////////
+	// Water Ripples
+	//////////////////////////////////////////////////////////////////////////
+	void                                 AddWaterRipple(const SWaterRippleInfo& waterRippleInfo) final;
+	const std::vector<SWaterRippleInfo>& GetWaterRipples() const;
+	//////////////////////////////////////////////////////////////////////////
+
+	//////////////////////////////////////////////////////////////////////////
 	// Polygons.
-	CREClientPoly* AddClientPoly();
-	int            GetClientPolyCount() const     { return m_numUsedClientPolygons; }
-	CREClientPoly* GetClientPoly(int index) const { assert(index < m_numUsedClientPolygons); return m_polygonsPool[index]; }
+	virtual void            AddPolygon(const SRenderPolygonDescription& poly, const SRenderingPassInfo& passInfo) final;
+	CRenderPolygonDataPool* GetPolygonDataPool() { return m_polygonDataPool.get(); };
 	//////////////////////////////////////////////////////////////////////////
 
 	//////////////////////////////////////////////////////////////////////////
@@ -164,16 +252,18 @@ public:
 private:
 	void                   Job_PostWrite();
 	void                   Job_SortRenderItemsInList(ERenderListID list);
+	void                   SortLights();
 	void                   ExpandPermanentRenderObjects();
 	void                   CompileModifiedRenderObjects();
 	void                   UpdateModifiedShaderItems();
 	void                   ClearTemporaryCompiledObjects();
 	void                   PrepareNearestShadows();
-	void                   AddRenderItemsFromClientPolys();
 	void                   CheckAndScheduleForUpdate(const SShaderItem& shaderItem);
+	template<bool bConcurrent>
+	void                   AddRenderItemToRenderLists(const SRendItem& ri, int nRenderList, int nBatchFlags, const SShaderItem& shaderItem);
 
-	CCompiledRenderObject* AllocCompiledObject(CRenderObject* pObj, CRendElementBase* pElem, const SShaderItem& shaderItem);
-	CCompiledRenderObject* AllocCompiledObjectTemporary(CRenderObject* pObj, CRendElementBase* pElem, const SShaderItem& shaderItem);
+	CCompiledRenderObject* AllocCompiledObject(CRenderObject* pObj, CRenderElement* pElem, const SShaderItem& shaderItem);
+	CCompiledRenderObject* AllocCompiledObjectTemporary(CRenderObject* pObj, CRenderElement* pElem, const SShaderItem& shaderItem);
 private:
 	EUsageMode m_usageMode;
 	EViewType  m_viewType;
@@ -204,9 +294,25 @@ private:
 	//////////////////////////////////////////////////////////////////////////
 
 	//////////////////////////////////////////////////////////////////////////
+	// Fog Volumes
+	std::vector<SFogVolumeInfo> m_fogVolumes[IFogVolumeRenderNode::eFogVolumeType_Count];
+	//////////////////////////////////////////////////////////////////////////
+
+	//////////////////////////////////////////////////////////////////////////
+	// Cloud Blockers
+	std::vector<SCloudBlocker> m_cloudBlockers[CloudBlockerTypeNum];
+	//////////////////////////////////////////////////////////////////////////
+
+	//////////////////////////////////////////////////////////////////////////
+	// Water Ripples
+	std::vector<SWaterRippleInfo> m_waterRipples;
+	//////////////////////////////////////////////////////////////////////////
+
+	//////////////////////////////////////////////////////////////////////////
 	// Simple polygons storage
-	std::vector<CREClientPoly*> m_polygonsPool;
-	int                         m_numUsedClientPolygons;
+	std::vector<CREClientPoly*>             m_polygonsPool;
+	int                                     m_numUsedClientPolygons;
+	std::shared_ptr<CRenderPolygonDataPool> m_polygonDataPool;
 	//////////////////////////////////////////////////////////////////////////
 
 	//////////////////////////////////////////////////////////////////////////
@@ -238,8 +344,9 @@ private:
 	};
 	lockfree_add_vector<SPermanentObjectRecord> m_permanentObjects;
 
-	CCamera       m_camera;       // Current camera
-	CRenderCamera m_renderCamera; // Current render camera
+	CCamera       m_camera[CCamera::eEye_eCount];          // Current camera
+	CCamera       m_previousCamera[CCamera::eEye_eCount];  // Previous frame render camera
+	CRenderCamera m_renderCamera[CCamera::eEye_eCount];    // Current render camera
 
 	// Internal job states to control when view job processing is done.
 	CryJobState                    m_jobstate_Sort;
@@ -252,6 +359,9 @@ private:
 
 	volatile int                   m_bPostWriteExecuted;
 
+	CRenderOutput                  m_renderOutput; // Output render target (currently used for recursive pass and secondary viewport)
+	bool                           m_bRenderOutput;
+
 	struct SShadows
 	{
 		// Shadow frustums needed for a view.
@@ -261,7 +371,10 @@ private:
 		std::map<int, ShadowFrustumsPtr>                              m_frustumsByLight;
 		std::array<ShadowFrustumsPtr, eShadowFrustumRenderType_Count> m_frustumsByType;
 
+		CThreadSafeRendererContainer<AABB>                            m_nearestCasterBoxes;
+
 		void Clear();
+		void AddNearestCaster(CRenderObject* pObj);
 		void CreateFrustumGroups();
 		void PrepareNearestShadows();
 	};

@@ -3,359 +3,241 @@
 #pragma once
 
 #include "ATLEntities.h"
-#include <CryPhysics/IPhysics.h>
+#include "PropagationProcessor.h"
+#include <PoolObject.h>
+#include <CryAudio/IObject.h>
 #include <CrySystem/TimeValue.h>
 
+#if defined(INCLUDE_AUDIO_PRODUCTION_CODE)
 struct IRenderAuxGeom;
+#endif // INCLUDE_AUDIO_PRODUCTION_CODE
 
-enum EAudioTriggerStatus : AudioEnumFlagsType
+namespace CryAudio
 {
-	eAudioTriggerStatus_None                  = 0,
-	eAudioTriggerStatus_Playing               = BIT(0),
-	eAudioTriggerStatus_Prepared              = BIT(1),
-	eAudioTriggerStatus_Loading               = BIT(2),
-	eAudioTriggerStatus_Unloading             = BIT(3),
-	eAudioTriggerStatus_Starting              = BIT(4),
-	eAudioTriggerStatus_WaitingForRemoval     = BIT(5),
-	eAudioTriggerStatus_CallbackOnAudioThread = BIT(6),
+static constexpr ControlId OcclusionTypeSwitchId = CCrc32::ComputeLowercase_CompileTime("ObstrOcclCalcType");
+static constexpr SwitchStateId OcclusionTypeStateIds[IntegralValue(EOcclusionType::Count)] = {
+	InvalidSwitchStateId,
+	IgnoreStateId,
+	AdaptiveStateId,
+	LowStateId,
+	MediumStateId,
+	HighStateId
 };
+
+class CSystem;
+class CAudioEventManager;
+class CAudioListenerManager;
+class CAudioStandaloneFileManager;
+
+enum class ETriggerStatus : EnumFlagsType
+{
+	None                     = 0,
+	Playing                  = BIT(0),
+	Loaded                   = BIT(1),
+	Loading                  = BIT(2),
+	Unloading                = BIT(3),
+	Starting                 = BIT(4),
+	CallbackOnExternalThread = BIT(5),
+	CallbackOnAudioThread    = BIT(6),
+};
+CRY_CREATE_ENUM_FLAG_OPERATORS(ETriggerStatus);
 
 struct SAudioTriggerImplState
 {
-	SAudioTriggerImplState()
-		: flags(eAudioTriggerStatus_None)
-	{}
-
-	AudioEnumFlagsType flags;
+	ETriggerStatus flags = ETriggerStatus::None;
 };
 
 struct SUserDataBase
 {
-	SUserDataBase()
-		: pOwnerOverride(nullptr)
-		, pUserData(nullptr)
-		, pUserDataOwner(nullptr)
-	{}
+	SUserDataBase() = default;
 
 	explicit SUserDataBase(
-	  void* const _pOwnerOverride,
-	  void* const _pUserData,
-	  void* const _pUserDataOwner)
-		: pOwnerOverride(_pOwnerOverride)
-		, pUserData(_pUserData)
-		, pUserDataOwner(_pUserDataOwner)
+	  void* const pOwnerOverride_,
+	  void* const pUserData_,
+	  void* const pUserDataOwner_)
+		: pOwnerOverride(pOwnerOverride_)
+		, pUserData(pUserData_)
+		, pUserDataOwner(pUserDataOwner_)
 	{}
 
-	void* pOwnerOverride;
-	void* pUserData;
-	void* pUserDataOwner;
+	void* pOwnerOverride = nullptr;
+	void* pUserData = nullptr;
+	void* pUserDataOwner = nullptr;
 };
 
-struct SAudioTriggerInstanceState : public SUserDataBase
+struct SAudioTriggerInstanceState final : public SUserDataBase
 {
-	SAudioTriggerInstanceState()
-		: flags(eAudioTriggerStatus_None)
-		, audioTriggerId(INVALID_AUDIO_CONTROL_ID)
-		, numPlayingEvents(0)
-		, numLoadingEvents(0)
-		, expirationTimeMS(0.0f)
-		, remainingTimeMS(0.0f)
-	{}
-
-	AudioEnumFlagsType flags;
-	AudioControlId     audioTriggerId;
-	size_t             numPlayingEvents;
-	size_t             numLoadingEvents;
-	float              expirationTimeMS;
-	float              remainingTimeMS;
-};
-
-struct SAudioStandaloneFileData : public SUserDataBase
-{
-	SAudioStandaloneFileData()
-		: SUserDataBase(nullptr, nullptr, nullptr)
-		, fileId(INVALID_AUDIO_STANDALONE_FILE_ID)
-	{}
-
-	explicit SAudioStandaloneFileData(
-	  void* const _pOwner,
-	  void* const _pUserData,
-	  void* const _pUserDataOwner,
-	  AudioStandaloneFileId const _fileId)
-		: SUserDataBase(_pOwner, _pUserData, _pUserDataOwner)
-		, fileId(_fileId)
-	{}
-
-	AudioStandaloneFileId const fileId;
+	ETriggerStatus flags = ETriggerStatus::None;
+	ControlId      audioTriggerId = InvalidControlId;
+	size_t         numPlayingEvents = 0;
+	size_t         numLoadingEvents = 0;
+	float          expirationTimeMS = 0.0f;
+	float          remainingTimeMS = 0.0f;
 };
 
 // CATLAudioObject-related typedefs
-typedef std::map<AudioStandaloneFileId, SAudioStandaloneFileData, std::less<AudioStandaloneFileId>,
-                 STLSoundAllocator<std::pair<AudioStandaloneFileId, SAudioStandaloneFileData>>> ObjectStandaloneFileMap;
+typedef std::map<CATLStandaloneFile*, SUserDataBase>            ObjectStandaloneFileMap;
+typedef std::set<CATLEvent*>                                    ObjectEventSet;
+typedef std::map<TriggerImplId, SAudioTriggerImplState>         ObjectTriggerImplStates;
+typedef std::map<TriggerInstanceId, SAudioTriggerInstanceState> ObjectTriggerStates;
+typedef std::map<ControlId, SwitchStateId>                      ObjectStateMap;
+typedef std::map<ControlId, float>                              ObjectParameterMap;
+typedef std::map<EnvironmentId, float>                          ObjectEnvironmentMap;
 
-typedef std::set<CATLEvent*, std::less<CATLEvent*>, STLSoundAllocator<CATLEvent*>> ObjectEventSet;
-
-typedef std::map<AudioTriggerImplId, SAudioTriggerImplState, std::less<AudioTriggerImplId>,
-                 STLSoundAllocator<std::pair<AudioTriggerImplId, SAudioTriggerImplState>>> ObjectTriggerImplStates;
-
-typedef std::map<AudioTriggerInstanceId, SAudioTriggerInstanceState, std::less<AudioTriggerInstanceId>,
-                 STLSoundAllocator<std::pair<AudioTriggerInstanceId, SAudioTriggerInstanceState>>> ObjectTriggerStates;
-
-typedef std::map<AudioControlId, AudioSwitchStateId, std::less<AudioControlId>,
-                 STLSoundAllocator<std::pair<AudioControlId, AudioSwitchStateId>>> ObjectStateMap;
-
-typedef std::map<AudioControlId, float, std::less<AudioControlId>,
-                 STLSoundAllocator<std::pair<AudioControlId, float>>> ObjectRtpcMap;
-
-typedef std::map<AudioEnvironmentId, float, std::less<AudioEnvironmentId>,
-                 STLSoundAllocator<std::pair<AudioEnvironmentId, float>>> ObjectEnvironmentMap;
-
-#define AUDIO_MAX_RAY_HITS static_cast<size_t>(5)
-
-class CATLAudioObject final : public TATLObject
+class CATLAudioObject final : public IObject, public CPoolObject<CATLAudioObject, stl::PSyncMultiThread>
 {
 public:
 
-	class CPropagationProcessor
-	{
-	public:
+	CATLAudioObject();
 
-		static bool s_bCanIssueRWIs;
+	CATLAudioObject(CATLAudioObject const&) = delete;
+	CATLAudioObject(CATLAudioObject&&) = delete;
+	CATLAudioObject& operator=(CATLAudioObject const&) = delete;
+	CATLAudioObject& operator=(CATLAudioObject&&) = delete;
 
-		struct SRayInfo
-		{
-			static float const s_fSmoothingAlpha;
+	ERequestStatus   HandleExecuteTrigger(CATLTrigger const* const pTrigger, void* const pOwner = nullptr, void* const pUserData = nullptr, void* const pUserDataOwner = nullptr, ERequestFlags const flags = ERequestFlags::None);
+	ERequestStatus   HandleStopTrigger(CATLTrigger const* const pTrigger);
+	ERequestStatus   HandleSetTransformation(CObjectTransformation const& transformation, float const distanceToListener);
+	ERequestStatus   HandleSetParameter(CParameter const* const pParameter, float const value);
+	ERequestStatus   HandleSetSwitchState(CATLSwitch const* const pSwitch, CATLSwitchState const* const pState);
+	ERequestStatus   HandleSetEnvironment(CATLAudioEnvironment const* const pEnvironment, float const amount);
+	ERequestStatus   HandleResetEnvironments(AudioEnvironmentLookup const& environmentsLookup);
+	void             HandleSetOcclusionType(EOcclusionType const calcType, Vec3 const& audioListenerPosition);
+	ERequestStatus   HandlePlayFile(CATLStandaloneFile* const pFile, void* const pOwner = nullptr, void* const pUserData = nullptr, void* const pUserDataOwner = nullptr);
+	ERequestStatus   HandleStopFile(char const* const szFile);
 
-			SRayInfo(size_t const _rayId, AudioObjectId const _audioObjectId)
-				: rayId(_rayId)
-				, audioObjectId(_audioObjectId)
-				, totalSoundOcclusion(0.0f)
-				, numHits(0)
-#if defined(INCLUDE_AUDIO_PRODUCTION_CODE)
-				, startPosition(ZERO)
-				, direction(ZERO)
-				, randomOffset(ZERO)
-				, averageHits(0.0f)
-				, distanceToFirstObstacle(FLT_MAX)
-#endif // INCLUDE_AUDIO_PRODUCTION_CODE
-			{}
+	void             Init(char const* const szName, Impl::IObject* const pImplData, Vec3 const& audioListenerPosition, EntityId entityId);
+	void             Release();
 
-			~SRayInfo() {}
+	// Callbacks
+	void                           ReportStartingTriggerInstance(TriggerInstanceId const audioTriggerInstanceId, ControlId const audioTriggerId);
+	void                           ReportStartedTriggerInstance(TriggerInstanceId const audioTriggerInstanceId, void* const pOwnerOverride, void* const pUserData, void* const pUserDataOwner, ERequestFlags const flags);
+	void                           ReportStartedEvent(CATLEvent* const pEvent);
+	void                           ReportFinishedEvent(CATLEvent* const pEvent, bool const bSuccess);
+	void                           ReportStartedStandaloneFile(CATLStandaloneFile* const pStandaloneFile, void* const pOwner, void* const pUserData, void* const pUserDataOwner);
+	void                           ReportFinishedStandaloneFile(CATLStandaloneFile* const pStandaloneFile);
+	void                           ReportFinishedLoadingTriggerImpl(TriggerImplId const audioTriggerImplId, bool const bLoad);
+	void                           GetStartedStandaloneFileRequestData(CATLStandaloneFile* const pStandaloneFile, CAudioRequest& request);
 
-			void Reset();
+	ERequestStatus                 StopAllTriggers();
+	ObjectEventSet const&          GetActiveEvents() const { return m_activeEvents; }
+	ERequestStatus                 LoadTriggerAsync(CATLTrigger const* const pTrigger, bool const bLoad);
 
-			size_t const        rayId;
-			AudioObjectId const audioObjectId;
-			float               totalSoundOcclusion;
-			int                 numHits;
-			ray_hit             hits[AUDIO_MAX_RAY_HITS];
+	float                          GetOcclusionFadeOutDistance() const { return m_occlusionFadeOutDistance; }
+	void                           SetObstructionOcclusion(float const obstruction, float const occlusion);
+	void                           ProcessPhysicsRay(CAudioRayInfo* const pAudioRayInfo);
+	void                           ReleasePendingRays();
 
-#if defined(INCLUDE_AUDIO_PRODUCTION_CODE)
-			Vec3  startPosition;
-			Vec3  direction;
-			Vec3  randomOffset;
-			float averageHits;
-			float distanceToFirstObstacle;
-#endif // INCLUDE_AUDIO_PRODUCTION_CODE
-		};
+	ObjectStandaloneFileMap const& GetActiveStandaloneFiles() const               { return m_activeStandaloneFiles; }
 
-		typedef std::vector<SRayInfo, STLSoundAllocator<SRayInfo>> RayInfoVec;
+	void                           SetImplDataPtr(Impl::IObject* const pImplData) { m_pImplData = pImplData; }
+	Impl::IObject*                 GetImplDataPtr() const                         { return m_pImplData; }
 
-	public:
+	CObjectTransformation const&   GetTransformation()                            { return m_attributes.transformation; }
 
-		CPropagationProcessor(
-		  AudioObjectId const _audioObjectId,
-		  CAudioObjectTransformation const& _position);
+	// Flags / Properties
+	EObjectFlags GetFlags() const { return m_flags; }
+	void         SetFlag(EObjectFlags const flag);
+	void         RemoveFlag(EObjectFlags const flag);
+	void         SetDopplerTracking(bool const bEnable);
+	void         SetVelocityTracking(bool const bEnable);
+	float        GetMaxRadius() const { return m_maxRadius; }
 
-		~CPropagationProcessor();
+	void         Update(float const deltaTime, float const distance, Vec3 const& audioListenerPosition);
+	void         UpdateControls(float const deltaTime, Impl::SObject3DAttributes const& listenerAttributes);
+	bool         CanBeReleased() const;
 
-		// PhysicsSystem callback
-		static int    OnObstructionTest(EventPhys const* pEvent);
-		static void   ProcessObstructionRay(int const numHits, SRayInfo* const pRayInfo, bool const bReset = false);
-		static size_t NumRaysFromCalcType(EAudioOcclusionType const occlusionType);
+	void         IncrementSyncCallbackCounter() { CryInterlockedIncrement(&m_numPendingSyncCallbacks); }
+	void         DecrementSyncCallbackCounter() { CRY_ASSERT(m_numPendingSyncCallbacks >= 1); CryInterlockedDecrement(&m_numPendingSyncCallbacks); }
 
-		void          Update(float const deltaTime);
-		void          SetObstructionOcclusionCalcType(EAudioOcclusionType const occlusionType);
-		bool          CanRunObstructionOcclusion() const { return s_bCanIssueRWIs && m_occlusionType != eAudioOcclusionType_Ignore; }
-		void          GetPropagationData(SATLSoundPropagationData& propagationData) const;
-		void          RunObstructionQuery(CAudioObjectTransformation const& listenerPosition, bool const bSyncCall, bool const bReset = false);
-		void          ReportRayProcessed(size_t const rayId);
-		void          ReleasePendingRays();
-		bool          HasPendingRays() const { return m_remainingRays > 0; }
-
-	private:
-
-		void ProcessObstructionOcclusion(bool const bReset = false);
-		void CastObstructionRay(
-		  Vec3 const& origin,
-		  Vec3 const& randomOffset,
-		  Vec3 const& direction,
-		  size_t const rayIndex,
-		  bool const bSyncCall,
-		  bool const bReset = false);
-
-		size_t                            m_remainingRays;
-		size_t                            m_totalRays;
-
-		CSmoothFloat                      m_obstructionValue;
-		CSmoothFloat                      m_occlusionValue;
-		CAudioObjectTransformation const& m_position;
-
-		float                             m_currentListenerDistance;
-		RayInfoVec                        m_rayInfos;
-		EAudioOcclusionType               m_occlusionType;
-
-#if defined(INCLUDE_AUDIO_PRODUCTION_CODE)
-	public:
-
-		static size_t s_totalSyncPhysRays;
-		static size_t s_totalAsyncPhysRays;
-
-		void   DrawObstructionRays(IRenderAuxGeom& auxGeom) const;
-		size_t GetNumRays() const { return NumRaysFromCalcType(m_occlusionType); }
-		void   ResetRayData();
-
-	private:
-
-		struct SRayDebugInfo
-		{
-			SRayDebugInfo()
-				: begin(ZERO)
-				, end(ZERO)
-				, stableEnd(ZERO)
-				, occlusionValue(0.0f)
-				, distanceToNearestObstacle(FLT_MAX)
-				, numHits(0)
-				, averageHits(0.0f)
-			{}
-
-			~SRayDebugInfo() {}
-
-			Vec3  begin;
-			Vec3  end;
-			Vec3  stableEnd;
-			float occlusionValue;
-			float distanceToNearestObstacle;
-			int   numHits;
-			float averageHits;
-		};
-
-		typedef std::vector<SRayDebugInfo, STLSoundAllocator<SRayDebugInfo>> RayDebugInfoVec;
-
-	private:
-
-		RayDebugInfoVec m_rayDebugInfos;
-		mutable float   m_timeSinceLastUpdateMS;
-#endif // INCLUDE_AUDIO_PRODUCTION_CODE
-	};
-
-	explicit CATLAudioObject(AudioObjectId const audioObjectId, CryAudio::Impl::IAudioObject* const pImplData = nullptr, EAudioDataScope const dataScope = eAudioDataScope_None)
-		: TATLObject(audioObjectId, dataScope)
-		, m_pImplData(pImplData)
-		, m_flags(eAudioObjectFlags_None)
-		, m_maxRadius(0.0f)
-		, m_previousVelocity(0.0f)
-		, m_propagationProcessor(audioObjectId, m_attributes.transformation) {}
-
-	~CATLAudioObject() {}
-
-	void Release();
-
-	void ReportStartingTriggerInstance(AudioTriggerInstanceId const audioTriggerInstanceId, AudioControlId const audioTriggerId);
-	void ReportStartedTriggerInstance(AudioTriggerInstanceId const audioTriggerInstanceId, void* const pOwnerOverride, void* const pUserData, void* const pUserDataOwner, AudioEnumFlagsType const flags);
-
-	void ReportStartedEvent(CATLEvent* const _pEvent);
-	void ReportFinishedEvent(CATLEvent* const _pEvent, bool const _bSuccess);
-
-	void GetStartedStandaloneFileRequestData(CATLStandaloneFile const* const _pStandaloneFile, CAudioRequestInternal& _request);
-	void ReportStartedStandaloneFile(
-	  CATLStandaloneFile const* const _pStandaloneFile,
-	  void* const _pOwner,
-	  void* const _pUserData,
-	  void* const _pUserDataOwner);
-
-	void                                            ReportFinishedStandaloneFile(CATLStandaloneFile const* const _pStandaloneFile);
-
-	void                                            ReportPrepUnprepTriggerImpl(AudioTriggerImplId const audioTriggerImplId, bool const bPrepared);
-
-	void                                            SetSwitchState(AudioControlId const audioSwitchId, AudioSwitchStateId const audioSwitchStateId);
-	void                                            SetRtpc(AudioControlId const audioRtpcId, float const value);
-	void                                            SetEnvironmentAmount(AudioEnvironmentId const audioEnvironmentId, float const amount);
-
-	ObjectTriggerImplStates const&                  GetTriggerImpls() const;
-	ObjectRtpcMap const&                            GetRtpcs() const        { return m_rtpcs; }
-	ObjectEnvironmentMap const&                     GetEnvironments() const;
-	ObjectStateMap const&                           GetSwitchStates() const { return m_switchStates; }
-	void                                            ClearEnvironments();
-
-	ObjectEventSet const&                           GetActiveEvents() const                                       { return m_activeEvents; }
-	ObjectStandaloneFileMap const&                  GetActiveStandaloneFiles() const                              { return m_activeStandaloneFiles; }
-	ObjectTriggerStates&                            GetTriggerStates()                                            { return m_triggerStates; }
-
-	void                                            SetImplDataPtr(CryAudio::Impl::IAudioObject* const pImplData) { m_pImplData = pImplData; }
-	CryAudio::Impl::IAudioObject*                   GetImplDataPtr() const                                        { return m_pImplData; }
-
-	float                                           GetMaxRadius() const                                          { return m_maxRadius; }
-
-	void                                            Update(float const deltaTime, CryAudio::Impl::SAudioObject3DAttributes const& listenerAttributes);
-	void                                            Clear();
-	void                                            ReportPhysicsRayProcessed(size_t const rayId);
-	CryAudio::Impl::SAudioObject3DAttributes const& Get3DAttributes() const { return m_attributes; }
-	void                                            SetTransformation(CAudioObjectTransformation const& transformation);
-	void                                            SetObstructionOcclusionCalc(EAudioOcclusionType const calcType);
-	void                                            ResetObstructionOcclusion(CAudioObjectTransformation const& listenerTransformation);
-	bool                                            CanRunObstructionOcclusion() const { return m_propagationProcessor.CanRunObstructionOcclusion(); }
-	void                                            GetPropagationData(SATLSoundPropagationData& propagationData);
-	void                                            ReleasePendingRays();
-	void                                            SetDopplerTracking(bool const bEnable);
-	void                                            SetVelocityTracking(bool const bEnable);
-	void                                            UpdateControls(float const deltaTime, CryAudio::Impl::SAudioObject3DAttributes const& listenerAttributes);
-	bool                                            CanRelease() const;
-	AudioEnumFlagsType                              GetFlags() const { return m_flags; }
-	void                                            SetFlag(EAudioObjectFlags const flag);
-	void                                            RemoveFlag(EAudioObjectFlags const flag);
+	static CSystem*                     s_pAudioSystem;
+	static CAudioEventManager*          s_pEventManager;
+	static CAudioStandaloneFileManager* s_pStandaloneFileManager;
 
 private:
 
-	void ReportFinishedTriggerInstance(ObjectTriggerStates::iterator& iter);
+	// CryAudio::IObject
+	virtual void ExecuteTrigger(ControlId const triggerId, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void StopTrigger(ControlId const triggerId = InvalidControlId, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void SetTransformation(CObjectTransformation const& transformation, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void SetParameter(ControlId const parameterId, float const value, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void SetSwitchState(ControlId const audioSwitchId, SwitchStateId const audioSwitchStateId, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void SetEnvironment(EnvironmentId const audioEnvironmentId, float const amount, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void SetCurrentEnvironments(EntityId const entityToIgnore = 0, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void ResetEnvironments(SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void SetOcclusionType(EOcclusionType const occlusionType, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void PlayFile(SPlayFileInfo const& playFileInfo, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void StopFile(char const* const szFile, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual void SetName(char const* const szName, SRequestUserData const& userData = SRequestUserData::GetEmptyObject()) override;
+	virtual EntityId GetEntityId() const override { return m_entityId; }
+	// ~CryAudio::IObject
 
-	ObjectStandaloneFileMap                  m_activeStandaloneFiles;
-	ObjectEventSet                           m_activeEvents;
-	ObjectTriggerStates                      m_triggerStates;
-	ObjectTriggerImplStates                  m_triggerImplStates;
-	ObjectRtpcMap                            m_rtpcs;
-	ObjectEnvironmentMap                     m_environments;
-	ObjectStateMap                           m_switchStates;
-	CryAudio::Impl::IAudioObject*            m_pImplData;
-	float                                    m_maxRadius;
-	AudioEnumFlagsType                       m_flags;
-	float                                    m_previousVelocity;
-	Vec3                                     m_velocity;
-	CryAudio::Impl::SAudioObject3DAttributes m_attributes;
-	CryAudio::Impl::SAudioObject3DAttributes m_previousAttributes;
-	CTimeValue                               m_previousTime;
-	CPropagationProcessor                    m_propagationProcessor;
+	void ReportFinishedTriggerInstance(ObjectTriggerStates::iterator& iter);
+	void PushRequest(SAudioRequestData const& requestData, SRequestUserData const& userData);
+
+	ObjectStandaloneFileMap   m_activeStandaloneFiles;
+	ObjectEventSet            m_activeEvents;
+	ObjectTriggerStates       m_triggerStates;
+	ObjectTriggerImplStates   m_triggerImplStates;
+	ObjectParameterMap        m_parameters;
+	ObjectEnvironmentMap      m_environments;
+	ObjectStateMap            m_switchStates;
+	Impl::IObject*            m_pImplData;
+	float                     m_maxRadius;
+	EObjectFlags              m_flags;
+	float                     m_previousVelocity;
+	Vec3                      m_velocity;
+	Impl::SObject3DAttributes m_attributes;
+	Impl::SObject3DAttributes m_previousAttributes;
+	CTimeValue                m_previousTime;
+	CPropagationProcessor     m_propagationProcessor;
+	float                     m_occlusionFadeOutDistance;
+	EntityId                  m_entityId;
+	volatile int              m_numPendingSyncCallbacks;
+
+	static TriggerInstanceId  s_triggerInstanceIdCounter;
 
 #if defined(INCLUDE_AUDIO_PRODUCTION_CODE)
 public:
 
-	void CheckBeforeRemoval(CATLDebugNameStore const* const pDebugNameStore) const;
-	void DrawDebugInfo(IRenderAuxGeom& auxGeom, Vec3 const& listenerPosition, CATLDebugNameStore const* const pDebugNameStore) const;
+	void DrawDebugInfo(
+	  IRenderAuxGeom& auxGeom,
+	  Vec3 const& listenerPosition,
+	  AudioTriggerLookup const& triggers,
+	  AudioParameterLookup const& parameters,
+	  AudioSwitchLookup const& switches,
+	  AudioPreloadRequestLookup const& preloadRequests,
+	  AudioEnvironmentLookup const& environments) const;
 	void ResetObstructionRays() { m_propagationProcessor.ResetRayData(); }
+
+	void ForceImplementationRefresh(
+	  AudioTriggerLookup const& triggers,
+	  AudioParameterLookup const& parameters,
+	  AudioSwitchLookup const& switches,
+	  AudioEnvironmentLookup const& environments,
+	  bool const bSet3DAttributes);
+
+	ERequestStatus HandleSetName(char const* const szName);
+
+	CryFixedStringT<MaxObjectNameLength> m_name;
 
 private:
 
-	class CStateDebugDrawData
+	class CStateDebugDrawData final
 	{
 	public:
 
-		explicit CStateDebugDrawData(AudioSwitchStateId const audioSwitchState = INVALID_AUDIO_SWITCH_STATE_ID);
-		~CStateDebugDrawData();
+		CStateDebugDrawData(SwitchStateId const audioSwitchState);
 
-		void Update(AudioSwitchStateId const newState);
+		CStateDebugDrawData(CStateDebugDrawData const&) = delete;
+		CStateDebugDrawData(CStateDebugDrawData&&) = delete;
+		CStateDebugDrawData& operator=(CStateDebugDrawData const&) = delete;
+		CStateDebugDrawData& operator=(CStateDebugDrawData&&) = delete;
 
-		AudioSwitchStateId m_currentState;
-		float              m_currentAlpha;
+		void                 Update(SwitchStateId const audioSwitchState);
+
+		SwitchStateId m_currentState;
+		float         m_currentAlpha;
 
 	private:
 
@@ -364,16 +246,9 @@ private:
 		static int const   s_maxToMinUpdates;
 	};
 
-	typedef std::map<AudioControlId, CStateDebugDrawData, std::less<AudioControlId>,
-	                 STLSoundAllocator<std::pair<AudioControlId, CStateDebugDrawData>>> StateDrawInfoMap;
-
-	CryFixedStringT<MAX_AUDIO_CONTROL_NAME_LENGTH> GetTriggerNames(char const* const _szSeparator, CATLDebugNameStore const* const _pDebugNameStore) const;
-	CryFixedStringT<MAX_AUDIO_MISC_STRING_LENGTH>  GetEventIDs(char const* const _szSeparator) const;
-	CryFixedStringT<MAX_AUDIO_MISC_STRING_LENGTH>  GetStandaloneFileIDs(char const* const _szSeparator, CATLDebugNameStore const* const _pDebugNameStore) const;
+	typedef std::map<ControlId, CStateDebugDrawData> StateDrawInfoMap;
 
 	mutable StateDrawInfoMap m_stateDrawInfoMap;
 #endif // INCLUDE_AUDIO_PRODUCTION_CODE
-
-	DELETE_DEFAULT_CONSTRUCTOR(CATLAudioObject);
-	PREVENT_OBJECT_COPY(CATLAudioObject);
 };
+} // namespace CryAudio

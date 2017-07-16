@@ -34,9 +34,6 @@
 #include <CrySystem/IBudgetingSystem.h>
 #include <CrySystem/VR/IHMDManager.h>
 #include <CrySystem/VR/IHMDDevice.h>
-#include <CrySystem/VR/IHmdOculusRiftDevice.h>
-#include <CrySystem/VR/IHmdOpenVRDevice.h>
-#include <CrySystem/VR/IHmdOSVRDevice.h>
 #include <CryCore/Platform/IPlatformOS.h>
 #include <CrySystem/Profilers/IDiskProfiler.h>
 #include <CrySystem/File/IResourceManager.h>
@@ -52,17 +49,10 @@
 #include <CrySystem/ICryMiniGUI.h>
 #include <CryThreading/IThreadManager.h>
 #include <CryThreading/IJobManager.h>
-// CryOnlineDummy
-struct IOnline
-{
-public:
-	IOnline() {}
-	~IOnline() {}
-};
 
 namespace minigui { class CDrawContext{ public: virtual ~CDrawContext() {} }; }
 
-using namespace JobManager;
+using JobManager::SJobStateBase;
 %}
 %feature("director") ILogCallback;
 %include "../../../../CryEngine/CryCommon/CrySystem/ILog.h"
@@ -75,7 +65,22 @@ using namespace JobManager;
 %include "../../../../CryEngine/CryCommon/CrySystem/ICmdLine.h"
 %typemap(csbase) EVarFlags "uint"
 %feature("director") IRemoteConsoleListener;
+%include "../../../../CryEngine/CryCommon/CryCore/SFunctor.h"
+%typemap(cscode) ICVar %{
+	public static System.IntPtr GetIntPtr(ICVar icvar)
+	{
+		return getCPtr(icvar).Handle;
+	}
+%}
+// ensures ICVar can only be unregistered through CryEngine.ConsoleVariable.UnRegister in C#
+%ignore ICVar::Release();
+
+// hides methods that cannot be accessed in C#
+%ignore ICVar::AddOnChange(const CallbackFunction &);
+%ignore ICVar::SetOnChangeCallback(ConsoleVarFunc);
+%ignore ICVar::GetOnChangeCallback() const;
 %include "../../../../CryEngine/CryCommon/CrySystem/IConsole.h"
+
 %include "../../../../CryEngine/CryCommon/CrySystem/ITimer.h"
 %include "../../../../CryEngine/CryCommon/CrySystem/File/IFileChangeMonitor.h"
 %include "../../../../CryEngine/CryCommon/CrySystem/Profilers/IStatoscope.h"
@@ -96,9 +101,6 @@ using namespace JobManager;
 %include "../../../../CryEngine/CryCommon/CrySystem/IBudgetingSystem.h"
 %include "../../../../CryEngine/CryCommon/CrySystem/VR/IHMDManager.h"
 %include "../../../../CryEngine/CryCommon/CrySystem/VR/IHMDDevice.h"
-%include "../../../../CryEngine/CryCommon/CrySystem/VR/IHmdOculusRiftDevice.h"
-%include "../../../../CryEngine/CryCommon/CrySystem/VR/IHmdOpenVRDevice.h"
-%include "../../../../CryEngine/CryCommon/CrySystem/VR/IHmdOSVRDevice.h"
 %ignore IPlatformOS::Create;
 %include "../../../../CryEngine/CryCommon/CryCore/Platform/IPlatformOS.h"
 %include "../../../../CryEngine/CryCommon/CrySystem/Profilers/IDiskProfiler.h"
@@ -117,12 +119,32 @@ using namespace JobManager;
 %include "../../../../CryEngine/CryCommon/CrySystem/ZLib/IZlibDecompressor.h"
 %include "../../../../CryEngine/CryCommon/CrySystem/ICryMiniGUI.h"
 
-// CryOnlineDummy
-struct IOnline
+%extend ICryPak
 {
-public:
-	IOnline() {}
-	~IOnline() {}
-};
+	_finddata_t* FindAllocateData()
+	{
+		return new _finddata_t();
+	}
+
+	void FindFreeData(_finddata_t* fd)
+	{
+		delete fd;
+	}
+
+	bool FindIsResultValid(intptr_t result)
+	{
+		return result != -1;
+	}
+
+	char* FindDataGetPath(_finddata_t* fd)
+	{
+		if (fd == nullptr)
+		{
+			return nullptr;
+		}
+
+		return fd->name;
+	}
+}
 
 namespace minigui { class CDrawContext{}; }

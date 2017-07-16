@@ -3,13 +3,18 @@
 #pragma once
 
 #include <QAbstractItemModel>
-#include "ProxyModels/DeepFilterProxyModel.h"
+#include <ProxyModels/DeepFilterProxyModel.h>
 
 namespace ACE
 {
 
 class IAudioSystemEditor;
 class IAudioSystemItem;
+
+namespace AudioModelUtils
+{
+void DecodeImplMimeData(const QMimeData* pData, std::vector<IAudioSystemItem*>& outItems);
+}
 
 class QAudioSystemModel : public QAbstractItemModel
 {
@@ -58,10 +63,11 @@ private:
 class QAudioSystemModelProxyFilter : public QDeepFilterProxyModel
 {
 public:
-	QAudioSystemModelProxyFilter::QAudioSystemModelProxyFilter(QObject* parent);
+	QAudioSystemModelProxyFilter(QObject* parent);
 	virtual bool rowMatchesFilter(int source_row, const QModelIndex& source_parent) const override;
 	void         SetAllowedControlsMask(uint allowedControlsMask);
 	void         SetHideConnected(bool bHideConnected);
+	virtual bool lessThan(const QModelIndex& left, const QModelIndex& right) const override;
 
 private:
 	uint m_allowedControlsMask;

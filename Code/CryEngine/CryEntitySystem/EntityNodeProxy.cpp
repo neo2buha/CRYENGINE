@@ -17,12 +17,18 @@
 #include <CryAction/IMaterialEffects.h>
 #include <CryAnimation/ICryAnimation.h>
 
-void CEntityNodeProxy::Initialize(const SComponentInitializer& init)
+CRYREGISTER_CLASS(CEntityComponentTrackViewNode);
+
+CEntityComponentTrackViewNode::CEntityComponentTrackViewNode()
 {
-	m_pEntity = init.m_pEntity;
+	m_componentFlags.Add(EEntityComponentFlags::NoSave);
 }
 
-void CEntityNodeProxy::ProcessEvent(SEntityEvent& event)
+void CEntityComponentTrackViewNode::Initialize()
+{
+}
+
+void CEntityComponentTrackViewNode::ProcessEvent(SEntityEvent& event)
 {
 	switch (event.event)
 	{
@@ -77,4 +83,10 @@ void CEntityNodeProxy::ProcessEvent(SEntityEvent& event)
 			}
 		}
 	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+uint64 CEntityComponentTrackViewNode::GetEventMask() const
+{
+	return BIT64(ENTITY_EVENT_ANIM_EVENT);
 }

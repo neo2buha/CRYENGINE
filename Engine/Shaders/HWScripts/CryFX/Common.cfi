@@ -6,8 +6,6 @@
 //	 - only add when really necessary, this will propagate to ALL shaders
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#define INST_STREAM_CUSTOM   \
-
 #define PI 3.1415
 #define PI_X2 6.2831
 #define PI_X4 12.5663
@@ -97,6 +95,7 @@ half2 GetXYNormalMap(sampler2D bumpMap, float2 bumpTC)                          
 half2 GetXYNormalMap(Texture2D bumpTex, float2 bumpTC)                                           { return GetTexture2D(bumpTex, ssMaterialAnisoHigh, bumpTC).yx; }
 half2 GetXYNormalMap(Texture2D bumpTex, SamplerState samplerState, float2 bumpTC)                { return GetTexture2D(bumpTex, samplerState, bumpTC).yx; }
 half2 GetXYNormalMapLod(sampler2D bumpMap, float4 bumpTC)                                        { return GetTexture2DLod(bumpMap, bumpTC).yx; }
+half2 GetXYNormalMapLod(Texture2D bumpTex, SamplerState samplerState, float4 bumpTC)             { return GetTexture2DLod(bumpTex, samplerState, bumpTC).yx; }
 half2 GetXYNormalMapGrad(Texture2D bumpTex, float2 bumpTC, float2 ddx_bumpTC, float2 ddy_bumpTC) { return GetTexture2DGrad(bumpTex, ssMaterialAnisoHigh, bumpTC, ddx_bumpTC, ddy_bumpTC).yx; }
 
 half3 GetNormalMap(sampler2D bumpMap, float2 bumpTC)
@@ -119,11 +118,31 @@ half3 GetNormalMap(Texture2D bumpTex, float2 bumpTC)
   return bumpNormal;
 }
 
+half3 GetNormalMap(Texture2D bumpTex, SamplerState samplerState, float2 bumpTC)
+{
+  half3 bumpNormal;
+
+  bumpNormal.xy = GetXYNormalMap(bumpTex, samplerState, bumpTC.xy);
+  bumpNormal.z = sqrt(saturate(1.h + dot(bumpNormal.xy, -bumpNormal.xy)));
+
+  return bumpNormal;
+}
+
 half3 GetNormalMapLod(sampler2D bumpMap, float4 bumpTC)
 {
   half3 bumpNormal;
 
   bumpNormal.xy = GetXYNormalMapLod(bumpMap, bumpTC);
+  bumpNormal.z = sqrt(saturate(1.h + dot(bumpNormal.xy, -bumpNormal.xy)));
+
+  return bumpNormal;
+}
+
+half3 GetNormalMapLod(Texture2D bumpTex, SamplerState samplerState, float4 bumpTC)
+{
+  half3 bumpNormal;
+
+  bumpNormal.xy = GetXYNormalMapLod(bumpTex, samplerState, bumpTC);
   bumpNormal.z = sqrt(saturate(1.h + dot(bumpNormal.xy, -bumpNormal.xy)));
 
   return bumpNormal;
@@ -177,13 +196,19 @@ half4 GetSceneTex(Texture2D tex, float2 texTC)                                  
 half4 GetSceneTexProj(Texture2D tex, float4 texTC)                                                  { return GetTexture2DProj(tex, ssPointClamp, texTC.xyzw); } // TODO: convert to load
 half4 GetDissolveTex(Texture2D tex, float2 texTC)                                                   { return GetTexture2D(tex, ssPointWrap, texTC.xy); }
 half4 GetDissolveTexLod(Texture2D tex, float4 texTC)                                                { return GetTexture2DLod(tex, ssPointWrap, texTC.xyzw); }
+half4 GetPerlinNoiseTexLod(Texture2D tex, float4 texTC)                                             { return GetTexture2DLod(tex, ssMaterialTrilinear, texTC.xyzw); }
 half4 GetTerrainTex(Texture2D tex, float2 terrainTC)                                                { return GetTexture2D(tex, ssMaterialBilinearClamp, terrainTC) * g_PS_TerrainInfo.x; }
 half3 GetTerrainNormal(Texture2D tex, float2 terrainTC) 
 { 
 	half3 terrainNor = GetTexture2D(tex, ssMaterialBilinearClamp, terrainTC).xzy; 
 	terrainNor.xy = (terrainNor.xy - 0.5h) * 2.h; 
-	terrainNor.z = sqrt(saturate(1.h - (terrainNor.x * terrainNor.x + terrainNor.y * terrainNor.y))); 
+	terrainNor.z = sqrt(saturate(1.02h - (terrainNor.x * terrainNor.x + terrainNor.y * terrainNor.y))); 
 	return terrainNor; 
+}
+float GetTerrainElevation(Texture2D tex, float2 terrainTC)
+{
+	half4 terrainElev = GetTexture2D(tex, ssMaterialBilinearClamp, terrainTC);
+	return terrainElev.x;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -203,18 +228,18 @@ float GetGradientMap(sampler2D gradientSampler, float2 vTC, float fGradientAnima
 
 #define USE_DEVICE_DEPTH
 
-float GetDepthMap(sampler2D depthSampler, float2 ScreenTC)
+float GetDeviceDepth(sampler2D depthSampler, float2 ScreenTC)
 {
 	return GetTexture2D(depthSampler, ScreenTC.xy).x;
 }
 
-float GetDepthMap(Texture2D depthTexture, float2 ScreenTC)
+float GetDeviceDepth(Texture2D depthTexture, float2 ScreenTC)
 {
 	int3 vPixCoord = int3(ScreenTC * PS_ScreenSize.xy, 0);
 	return depthTexture.Load(vPixCoord).x;
 }
 
-float GetLinearDepth(float fDevDepth, bool bDrawNearAdjust = true, bool bScaled = false)
+float GetLinearDepth(float fDevDepth, bool bScaled = false)
 {
 	return fDevDepth * (bScaled ? PS_NearFarClipDist.y : 1.0f);
 }
@@ -232,38 +257,54 @@ float GetDeviceDepthH(sampler2D depthSampler, float2 ScreenTC)
 	return Z;
 }
 
-float GetLinearDepth(sampler2D depthSampler, float2 ScreenTC, bool bDrawNearAdjust = true)
+float GetLinearDepth(sampler2D depthSampler, float2 ScreenTC, bool bScaled = false)
 {
 	float fDepth = GetTexture2D(depthSampler, ScreenTC.xy).x;
-	return GetLinearDepth(fDepth, bDrawNearAdjust);
+	return GetLinearDepth(fDepth, bScaled);
 }
 
-float GetLinearDepth(Texture2D depthTexture, float2 ScreenTC, bool bDrawNearAdjust = true)
+float GetLinearDepth(Texture2D depthTexture, int2 vPixCoord, bool bScaled = false)
 {
-	int3 vPixCoord = int3(ScreenTC * PS_ScreenSize.xy, 0);
+	float fDepth = depthTexture.Load(int3(vPixCoord, 0)).x;
+	return GetLinearDepth(fDepth, bScaled);
+}
+
+float GetLinearDepth(Texture2D depthTexture, float2 ScreenTC, bool bScaled = false)
+{
+	int2 vPixCoord = int2(ScreenTC * PS_ScreenSize.xy);
+	return GetLinearDepth(depthTexture, vPixCoord, bScaled);
+}
+
+float GetLinearDepthUnclamped(Texture2D depthTexture, float2 ScreenTC, bool bScaled = false)
+{
+	int3 vPixCoord = int3(max(min(ScreenTC * PS_ScreenSize.xy, PS_ScreenSize.xy - float2(1.0f, 1.0f)), float2(0.0f, 0.0f)), 0);
 	float fDepth = depthTexture.Load(vPixCoord).x;
-	return GetLinearDepth(fDepth, bDrawNearAdjust);
+	return GetLinearDepth(fDepth, bScaled);
 }
 
-float GetLinearDepth_ProjTC(sampler2D depthSampler, float4 ProjTC, bool bDrawNearAdjust = true)
+float GetLinearDepthProj(Texture2D sceneLinearDepthTex, float4 ProjTC)
 {
-	float fDepth = GetTexture2DProj(depthSampler, ProjTC).x;
-	return GetLinearDepth(fDepth, bDrawNearAdjust);
+ 	return GetLinearDepth(sceneLinearDepthTex, ProjTC.xy / ProjTC.w);
 }
 
-float GetLinearDepthPrecise(sampler2D depthSampler, float2 ScreenTC, bool bDrawNearAdjust = true)
+float GetLinearDepthPrecise(sampler2D depthSampler, float2 ScreenTC)
 {
-	return GetLinearDepth(depthSampler, ScreenTC, bDrawNearAdjust);
-}
-
-float GetLinearDepthScaled(sampler2D smpDepth, float2 ScreenTC)
-{
-	return GetLinearDepth(smpDepth, ScreenTC) * PS_NearFarClipDist.y;
+	return GetLinearDepth(depthSampler, ScreenTC, false);
 }
 
 float GetLinearDepthScaled(Texture2D texDepth, float2 ScreenTC)
 {
-	return GetLinearDepth(texDepth, ScreenTC) * PS_NearFarClipDist.y;
+	return GetLinearDepth(texDepth, ScreenTC, true);
+}
+
+float GetLinearDepthScaledUnclamped(Texture2D texDepth, float2 ScreenTC)
+{
+	return GetLinearDepthUnclamped(texDepth, ScreenTC, true);
+}
+
+float GetLinearDepthScaledProj(Texture2D sceneLinearDepthTex, float4 ProjTC)
+{
+ 	return GetLinearDepth(sceneLinearDepthTex, ProjTC.xy / ProjTC.w, true);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -324,11 +365,6 @@ float UnpackFloatFromVec3(const float3 value)
 	return dot(value, bitSh);
 }
 
-half GetDownscaledDepth(in float4 rawDepth)
-{
-	return rawDepth.x;
-}
-
 half GetUnnormalizedLinearDownscaledDepth(in float4 rawDepth)
 {
 	return rawDepth.x;
@@ -338,12 +374,6 @@ half GetUnnormalizedLinearDownscaledDepth(in sampler2D depthSmp, in float2 scree
 {
 	float4 data = tex2D(depthSmp, screenCoord);
 	return GetUnnormalizedLinearDownscaledDepth(data);
-}
-
-half GetDownscaledDepth(in sampler2D depthSmp, in float2 screenCoord)
-{
-	float4 data = tex2D(depthSmp, screenCoord);
-	return GetDownscaledDepth(data);
 }
 
 // get 2d homogeneous position
@@ -357,11 +387,7 @@ float4 Get2dHPos(float4 pos)
 
 float2 GetScaledScreenTC(float2 TC)
 {
-#ifdef %_PS
-	return TC*PS_HPosScale.xy;
-#else
-	return TC*g_VS_HPosScale.xy;
-#endif
+	return TC * CV_HPosScale;
 }
 
 float4 HPosToScreenTC(float4 HPos, bool scaled = true)
@@ -375,6 +401,23 @@ float4 HPosToScreenTC(float4 HPos, bool scaled = true)
   }
 
   return ScrTC;
+}
+
+float3 ReconstructWorldPos(int2 WPos, float linearDepth, bool bRelativeToCamera = false)
+{
+	float4 wposScaled = float4(WPos * linearDepth, linearDepth, bRelativeToCamera ? 0.0 : 1.0);
+	return mul(CV_ScreenToWorldBasis, wposScaled);
+}
+
+float3 ReconstructWorldPos(int2 WPos, Texture2D sceneDepthTex, bool bRelativeToCamera = false)
+{
+	float linearDepth = sceneDepthTex.Load(int3(WPos, 0)).x;
+	return ReconstructWorldPos(WPos, linearDepth, bRelativeToCamera);
+}
+
+float3 GetWorldViewPos()
+{
+	return CV_ScreenToWorldBasis._m03_m13_m23;
 }
 
 float2 ClampScreenTC(float2 TC, float2 maxTC)
@@ -402,7 +445,7 @@ void CompressUnsignedNormalToNormalsBuffer(inout half4 vNormal)
 		// get the main axis for cubemap lookup
 		half maxNAbs = max(vNormalUns.z, max(vNormalUns.x, vNormalUns.y));
 		// get texture coordinates in a collapsed cubemap
-		float2 vTexCoord = vNormalUns.z<maxNAbs?(vNormalUns.y<maxNAbs?vNormalUns.yz:vNormalUns.xz):vNormalUns.xy;
+		float2 vTexCoord = vNormalUns.z < maxNAbs ? (vNormalUns.y < maxNAbs?vNormalUns.yz : vNormalUns.xz) : vNormalUns.xy;
 		vTexCoord = vTexCoord.x < vTexCoord.y ? vTexCoord.yx : vTexCoord.xy;
 		vTexCoord.y /= vTexCoord.x;
 		// fit normal into the edge of unit cube
@@ -410,7 +453,7 @@ void CompressUnsignedNormalToNormalsBuffer(inout half4 vNormal)
 
 		// look-up fitting length and scale the normal to get the best fit
 		#if %_RT_QUALITY || %_RT_QUALITY1
-			float fFittingScale = normalsFittingTex.Load(int3(vTexCoord * 512, 0)).a;
+			float fFittingScale = GetTexture2DLod(normalsFittingTex, ssPointClamp, float4(vTexCoord, 0, 0)).a;
 		#else
 			float fFittingScale = GetTexture2D(normalsFittingTex, ssPointClamp, vTexCoord).a;
 		#endif
@@ -451,6 +494,11 @@ MaterialAttribsCommon MaterialAttribsDefault()
 {
 	MaterialAttribsCommon attribs = (MaterialAttribsCommon) 0;
 	return attribs;
+}
+
+half GetLuminance( half3 color )
+{
+	return dot( color, half3( 0.2126h, 0.7152h, 0.0722h ) );
 }
 
 half3 EncodeColorYCC( half3 col )
@@ -517,6 +565,18 @@ void EncodeGBuffer( MaterialAttribsCommon attribs, out half4 bufferA, out half4 
 	bufferA.w = ((float)attribs.LightingModel + (bufferA.w * MAX_FRACTIONAL_8_BIT)) / TWO_BITS_EXTRACTION_FACTOR;
 }
 
+void EncodeMicroGBuffer(MaterialAttribsCommon attribs, inout half4 bufferA, int2 WPos)
+{
+	float3 normalView = mul((float3x3)CV_ViewMatr, attribs.NormalWorld);
+	float2 normalEnc = normalView.xy * rsqrt(8 * normalView.z + 8) + 0.5;
+	
+	bool bChecker0 = (WPos.x & 1) == (WPos.y & 1);
+	float3 baseColorYCC = EncodeColorYCC(attribs.Albedo);
+	bufferA.xy = bChecker0 ? baseColorYCC.xy : baseColorYCC.xz;
+	bufferA.z = bChecker0 ? attribs.Smoothness : normalEnc.x;
+	bufferA.w = bChecker0 ? GetLuminance(attribs.Reflectance) : normalEnc.y;
+}
+
 void SetGBufferBlending( inout half4 bufferA, inout half4 bufferB, inout half4 bufferC,
                          half alphaNormals, half alphaDiffuse, half alphaSpecular )
 {
@@ -572,14 +632,10 @@ half DecodeGBufferTransmittanceLum( half4 bufferA )
 
 float  NumInstructions		: PI_NumInstructions;
 
-sampler2D DebugMipColorsDiffuseSampler = sampler_state
-{
- Texture = $MipColors_Diffuse;
-};
-sampler2D DebugMipColorsBumpSampler = sampler_state
-{
- Texture = $MipColors_Bump;
-};
+Texture2D DebugMipColorsDiffuse = $MipColors_Diffuse;
+Texture2D DebugMipColorsBump = $MipColors_Bump;
+
+SamplerState DebugMipColorsSamplerState = SS_TrilinearClamp;
 
 float4 DVColor(float2 d)
 { 
@@ -627,10 +683,10 @@ void DebugOutput(out half4 Color, in float4 baseTC)
   if (d < HalfDiag) { dd.z = 1.0;}
   Color = dd;
  #elif %_RT_DEBUG0 && %_RT_DEBUG1 && %_RT_DEBUG2 && !%_RT_DEBUG3 // 1110
-  float4 mipColor = tex2D(DebugMipColorsDiffuseSampler, baseTC.xy);
+  float4 mipColor = GetTexture2D(DebugMipColorsDiffuse, DebugMipColorsSamplerState, baseTC.xy);
   Color = mipColor;
  #elif !%_RT_DEBUG0 && !%_RT_DEBUG1 && !%_RT_DEBUG2 && %_RT_DEBUG3 // 0001
-  float4 mipColor = tex2D(DebugMipColorsBumpSampler, baseTC.xy);
+  float4 mipColor = GetTexture2D(DebugMipColorsBump, DebugMipColorsSamplerState, baseTC.xy);
   Color = mipColor;
  #elif %_RT_DEBUG0 && %_RT_DEBUG1 && %_RT_DEBUG2 && %_RT_DEBUG3 // 1111
   Color.xyz = NumInstructions;	// Measure overdraw
@@ -664,8 +720,14 @@ half3 GetTerrainNormal(sampler2D s, float2 terrainTC)
 
 	half3 terrainNor = float3(tex2D(s, terrainTC).xz,0);
 	terrainNor.xy = (terrainNor.xy - 0.5h) * 2.h;
-	terrainNor.z = sqrt( saturate( 1.h - (terrainNor.x * terrainNor.x + terrainNor.y * terrainNor.y) ) );
+	terrainNor.z = sqrt( saturate( 1.02h - (terrainNor.x * terrainNor.x + terrainNor.y * terrainNor.y) ) );
 	return terrainNor;
+}
+
+half3 GetTerrainElevation(sampler2D s, float2 terrainTC)
+{
+	half4 terrainElev = tex2D(s, terrainTC);
+	return terrainElev.x;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -776,12 +838,13 @@ float4 tex2D_rgb10a2f( sampler2D s, float2 vTexCoord )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-half GetLuminance( half3 color )
+// Checks normalized sun light direction from level and applies it to the UV for the Cloud Shadows.
+float2 ComputeCloudShadowMapUV(in float3 worldPos, in float3 sunDirNormalized)
 {
-	return dot( color, half3( 0.2126h, 0.7152h, 0.0722h ) );
+	const float t = -worldPos.z / sunDirNormalized.z;
+	return worldPos.xy + t * sunDirNormalized.xy;
 }
 
-// Checks normalized sun light direction from level and applies it to the UV for the Cloud Shadows.
 float2 ComputeCloudShadowMapUV(in float3 worldPos)
 {
 #if %_PS
@@ -793,6 +856,69 @@ float2 ComputeCloudShadowMapUV(in float3 worldPos)
 #else
 	const float3 sunDir = normalize(float3(0.1, 0.1, 1.0));
 #endif
-	const float t = -worldPos.z / sunDir.z;
-	return worldPos.xy + t * sunDir.xy;
+	return ComputeCloudShadowMapUV(worldPos, sunDir);
+}
+
+//////////////////////////// ///////////////////////////////////////////////////
+// Helper functions for remapping between coordinate spaces:
+//
+// Raster Space:   Normalized rasterizer output coordinate system, i.e. output rendertarget
+//                 top left      = ( 0,  0)    and     bottom right     = (1, 1)
+// Viewport Space: Normalized main render viewport coordinate system (full screen viewport for multires shading)
+//                  top left     = ( 0,  0)    and     bottom right     = (1, 1)
+// Clip Space:     Main render camera clip space
+//                 top left near = (-1,  1, 0) and     bottom right far = (1,-1, 1)
+//
+// Unless otherwise noted, coordinates are assumed to be normalized to (0, 1) range [(-1, 1) for clip space x and y axis]
+// Unnormalized coordinates are in assumed to be in pixels.
+
+#if %_RT_PROJECTION_MULTI_RES || %_RT_PROJECTION_LENS_MATCHED
+	#include "nv_vr.cfi"
+#endif
+
+float2 MapRasterToViewport(float2 normalizedRasterPos)
+{
+	#if !%_RT_PROJECTION_MULTI_RES && !%_RT_PROJECTION_LENS_MATCHED
+		return normalizedRasterPos;
+	#else
+		return NV_VR_MapTexCoordToUV(normalizedRasterPos);
+	#endif
+}
+
+float2 MapViewportToRaster(float2 normalizedViewportPos, bool bOtherEye = false)
+{
+	#if !%_RT_PROJECTION_MULTI_RES && !%_RT_PROJECTION_LENS_MATCHED
+		return normalizedViewportPos;
+	#else
+		return bOtherEye 
+			? NV_VR_MapUVToTexCoord_OtherEye(normalizedViewportPos) 
+			: NV_VR_MapUVToTexCoord(normalizedViewportPos);
+	#endif
+}
+
+float2 MapViewportToUnnormalizedRaster(float2 normalizedViewportPos)
+{
+	#if !%_RT_PROJECTION_MULTI_RES && !%_RT_PROJECTION_LENS_MATCHED
+		return normalizedViewportPos;
+	#else
+		return NV_VR_MapUVToWindow(NvGetProjectionData(), normalizedViewportPos);
+	#endif
+}
+
+float4 MapUnnormalizedRasterToClip(float2 unnormalizedRasterPos, float depth, bool bPerformPerspectiveDivision = true)
+{
+	#if !%_RT_PROJECTION_MULTI_RES && !%_RT_PROJECTION_LENS_MATCHED
+		return float4(unnormalizedRasterPos, depth, 1.0);
+	#else
+		return NV_VR_MapWindowToClip(NvGetProjectionData(), float3(unnormalizedRasterPos, depth), bPerformPerspectiveDivision);
+	#endif
+}
+
+float2 MapUnnormalizedRasterToViewport(float2 unnormalizedRasterPos)
+{
+	#if !%_RT_PROJECTION_MULTI_RES && !%_RT_PROJECTION_LENS_MATCHED
+		return unnormalizedRasterPos;
+	#else
+		return NV_VR_MapWindowToUV(NvGetProjectionData(), unnormalizedRasterPos);
+	#endif
 }

@@ -28,6 +28,9 @@ SContext::EState SStartAnimationProcessing::operator()(const SContext& ctx)
 	{
 		ctx.pInstance->SetupThroughParams(m_pParams);
 	}
+
+	const uint32 wasAnimPlaying = ctx.pInstance->m_SkeletonAnim.m_IsAnimPlaying;
+
 	ctx.pInstance->m_SkeletonAnim.m_IsAnimPlaying = false;
 	QuatTS location = ctx.pInstance->m_location;
 
@@ -47,6 +50,11 @@ SContext::EState SStartAnimationProcessing::operator()(const SContext& ctx)
 
 	pSkeletonPose->m_physics.SetLocation(location);
 	pSkeletonPose->m_physics.Job_SynchronizeWithPhysicsPrepare(*GetMemoryPool());
+
+	if (wasAnimPlaying && !ctx.pInstance->m_SkeletonAnim.m_IsAnimPlaying && ctx.pInstance->GetObjectType() == CGA)
+	{
+		pSkeletonPose->m_physics.RequestForcedPostSynchronization();
+	}
 
 	return SContext::EState::StartAnimationProcessed;
 }
@@ -81,11 +89,9 @@ SContext::EState SExecuteJob::operator()(const SContext& ctx)
 
 	pSkeletonPose->GetPoseData().Validate(*pSkeletonPose->m_pInstance->m_pDefaultSkeleton);
 
-	if (pSkeletonPose->m_pInstance->IsCharacterVisible())
-	{
-		pSkeletonPose->m_pInstance->m_AttachmentManager.UpdateLocationsExceptExecute(
-		  *pSkeletonPose->GetPoseDataWriteable());
-	}
+	pSkeletonPose->m_pInstance->m_AttachmentManager.UpdateLocationsExceptExecute(
+		*pSkeletonPose->GetPoseDataWriteable());
+
 	pSkeletonPose->m_pInstance->m_AttachmentManager.UpdateLocationsExecute(
 	  *pSkeletonPose->GetPoseDataWriteable());
 
@@ -171,11 +177,7 @@ SContext::EState SFinishAnimationComputations::operator()(const SContext& ctx)
 	return SContext::EState::Finished;
 }
 
-void SContext::Initialize(
-  CCharInstance* _pInst,
-  const CAttachmentBONE* _pBone,
-  const CCharInstance* _pParent,
-  int _numChildren)
+void SContext::Initialize(CCharInstance* _pInst, const CAttachmentBONE* _pBone, const CCharInstance* _pParent, int _numChildren)
 {
 	pInstance = _pInst;
 	pBone = _pBone;
@@ -183,6 +185,13 @@ void SContext::Initialize(
 	numChildren = _numChildren;
 	pCommandBuffer = (Command::CBuffer*)CharacterInstanceProcessing::GetMemoryPool()->Allocate(sizeof(Command::CBuffer));
 	job = CJob(this);
+}
+
+bool SContext::IsInProgress() const
+{
+	return (state != EState::Unstarted) 
+		&& (state != EState::Finished) 
+		&& (state != EState::Failure);
 }
 
 SContext& CContextQueue::AppendContext()

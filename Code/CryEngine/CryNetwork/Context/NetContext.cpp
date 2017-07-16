@@ -17,8 +17,6 @@
 #include "Streams/ByteStream.h"
 #include "NetProfile.h"
 
-#include "Lobby/ICryMatchMakingPrivate.h"
-
 #if ENABLE_SESSION_IDS
 static int SessionIDCounter = 10101;
 #endif
@@ -123,7 +121,6 @@ CNetContext::CNetContext(IGameContext* pGameContext, uint32 flags) :
 	m_delegatableAspects(0),
 	m_regularlyUpdatedAspects(0),
 	m_serverManagedProfileAspects(0),
-	m_hashAspects(0),
 	m_timestampedAspects(0),
 	m_disabledCompressionAspects(0),
 	m_pGameContext(pGameContext),
@@ -155,10 +152,6 @@ CNetContext::CNetContext(IGameContext* pGameContext, uint32 flags) :
 		// voice stuff disabled in single player game
 		m_pVoiceContext = new CVoiceContext(this);
 	}
-#endif
-
-#if NETWORK_HOST_MIGRATION
-	CNetwork::Get()->AddHostMigrationEventListener(this, "CNetContext", ELPT_Engine);
 #endif
 
 	NET_PROFILE_INITIALISE(m_multiplayer);
@@ -231,10 +224,6 @@ CNetContext::~CNetContext()
 {
 	SCOPED_GLOBAL_LOCK;
 	TIMER.CancelTimer(m_backgroundPassthrough);
-
-#if NETWORK_HOST_MIGRATION
-	CNetwork::Get()->RemoveHostMigrationEventListener(this);
-#endif
 
 	CNetwork::Get()->GetCompressionManager().Reset(false, true);
 	--g_objcnt.netContext;
@@ -311,10 +300,7 @@ void CNetContext::SyncWithGame(ENetworkGameSync type)
 		ASSERT_PRIMARY_THREAD;
 
 		m_pGameContext->OnStartNetworkFrame();
-		if (!(gEnv->bHostMigrating && gEnv->bMultiplayer))
-		{
-			m_pState->PropogateChangesToGame();
-		}
+		m_pState->PropogateChangesToGame();
 
 		syncEvent.event = eNOE_SyncWithGame_Start;
 
@@ -323,10 +309,7 @@ void CNetContext::SyncWithGame(ENetworkGameSync type)
 	case eNGS_FrameEnd:
 		ASSERT_PRIMARY_THREAD;
 		m_pGameContext->OnEndNetworkFrame();
-		if (!(gEnv->bHostMigrating && gEnv->bMultiplayer))
-		{
-			m_pState->FetchAndPropogateChangesFromGame(true);
-		}
+		m_pState->FetchAndPropogateChangesFromGame(true);
 		m_pState->DrawDebugScreens();
 
 		syncEvent.event = eNOE_SyncWithGame_End;
@@ -386,8 +369,6 @@ void CNetContext::DeclareAspect(const char* name, NetworkAspectType aspectBit, u
 		m_delegatableAspects |= aspectBit;
 	if (aspectFlags & eAF_ServerManagedProfile)
 		m_serverManagedProfileAspects |= aspectBit;
-	if (aspectFlags & eAF_HashState)
-		m_hashAspects |= aspectBit;
 	if (aspectFlags & eAF_TimestampState)
 		m_timestampedAspects |= aspectBit;
 	if (aspectFlags & eAF_NoCompression)
@@ -407,59 +388,6 @@ bool CNetContext::ChangeContext()
 	m_pState->Broadcast(&evt);
 	m_pState = pNewState;
 	TO_GAME_LAZY(&CNetContextState::GC_BeginContext, &*m_pState, g_time);
-	return true;
-}
-
-bool CNetContext::StoreAndChangeContext()
-{
-#if NETWORK_HOST_MIGRATION
-	SCOPED_GLOBAL_LOCK;
-
-	ICryLobby* pLobby = CNetwork::Get()->GetLobby();
-	if (pLobby)
-	{
-		ICryMatchMakingPrivate* pMatchMaking = static_cast<ICryMatchMakingPrivate*>(pLobby->GetMatchMaking());
-		if (pMatchMaking)
-		{
-			// Store existing context state
-			pMatchMaking->HostMigrationStoreNetContextState(m_pState);
-
-			// Now create a new one
-			_smart_ptr<CNetContextState> pNewState = new CNetContextState(this, m_ctxSerial++, m_pState);
-			SNetObjectEvent evt;
-			evt.event = eNOE_ChangeContext;
-			evt.pNewState = pNewState;
-
-			// Fire event using active state since that's where the listeners are
-			m_pState->Broadcast(&evt);
-
-			// Now switch to the new one
-			m_pState = pNewState;
-
-			return true;
-		}
-	}
-#endif
-	return false;
-}
-
-bool CNetContext::RestoreSavedContext(CNetContextState* pSavedContext)
-{
-#if NETWORK_HOST_MIGRATION
-	SCOPED_GLOBAL_LOCK;
-
-	// Kill the current one
-	m_pState->Die();
-	SNetObjectEvent evt;
-	evt.event = eNOE_ChangeContext;
-	evt.pNewState = pSavedContext;
-
-	// Fire event using active state since that's where the listeners are
-	m_pState->Broadcast(&evt);
-
-	// Now switch to the new one
-	m_pState = pSavedContext;
-#endif
 	return true;
 }
 
@@ -762,62 +690,3 @@ XmlNodeRef CNetContext::GetServerControlledXml(const char* filename)
 	return gEnv->pSystem->LoadXmlFromFile(filename);
 }
 #endif // SERVER_FILE_SYNC_MODE
-
-#if NETWORK_HOST_MIGRATION
-// IHostMigrationEventListener
-IHostMigrationEventListener::EHostMigrationReturn CNetContext::OnInitiate(SHostMigrationInfo& hostMigrationInfo, HMStateType& state)
-{
-	return IHostMigrationEventListener::Listener_Done;
-}
-
-IHostMigrationEventListener::EHostMigrationReturn CNetContext::OnDisconnectClient(SHostMigrationInfo& hostMigrationInfo, HMStateType& state)
-{
-	return IHostMigrationEventListener::Listener_Done;
-}
-
-IHostMigrationEventListener::EHostMigrationReturn CNetContext::OnDemoteToClient(SHostMigrationInfo& hostMigrationInfo, HMStateType& state)
-{
-	return IHostMigrationEventListener::Listener_Done;
-}
-
-IHostMigrationEventListener::EHostMigrationReturn CNetContext::OnPromoteToServer(SHostMigrationInfo& hostMigrationInfo, HMStateType& state)
-{
-	return IHostMigrationEventListener::Listener_Done;
-}
-
-IHostMigrationEventListener::EHostMigrationReturn CNetContext::OnReconnectClient(SHostMigrationInfo& hostMigrationInfo, HMStateType& state)
-{
-	return IHostMigrationEventListener::Listener_Done;
-}
-
-IHostMigrationEventListener::EHostMigrationReturn CNetContext::OnFinalise(SHostMigrationInfo& hostMigrationInfo, HMStateType& state)
-{
-	return IHostMigrationEventListener::Listener_Done;
-}
-
-void CNetContext::OnComplete(SHostMigrationInfo& hostMigrationInfo)
-{
-}
-
-IHostMigrationEventListener::EHostMigrationReturn CNetContext::OnTerminate(SHostMigrationInfo& hostMigrationInfo, HMStateType& state)
-{
-	return IHostMigrationEventListener::Listener_Done;
-}
-
-IHostMigrationEventListener::EHostMigrationReturn CNetContext::OnReset(SHostMigrationInfo& hostMigrationInfo, HMStateType& state)
-{
-	ICryLobby* pLobby = CNetwork::Get()->GetLobby();
-	if (pLobby)
-	{
-		ICryMatchMakingPrivate* pMatchMaking = static_cast<ICryMatchMakingPrivate*>(pLobby->GetMatchMaking());
-		if (pMatchMaking && hostMigrationInfo.ShouldMigrateNub() && (pMatchMaking->HostMigrationGetNetContextState() != NULL))
-		{
-			RestoreSavedContext((CNetContextState*)pMatchMaking->HostMigrationGetNetContextState());
-			pMatchMaking->HostMigrationResetNetContextState();
-		}
-	}
-
-	return IHostMigrationEventListener::Listener_Done;
-}
-// ~IHostMigrationEventListener
-#endif

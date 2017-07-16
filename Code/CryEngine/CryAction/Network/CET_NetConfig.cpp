@@ -67,55 +67,23 @@ void AddDeclareWitness(IContextEstablisher* pEst, EContextViewState state)
 }
 
 /*
- * Add rebroadcaster connection
- */
-
-class CCET_PopulateRebroadcaster : public CCET_Base
-{
-public:
-	const char*                 GetName() { return "PopulateRebroadcaster"; }
-
-	EContextEstablishTaskResult OnStep(SContextEstablishState& state)
-	{
-		CGameServerNub* pNub = CCryAction::GetCryAction()->GetGameServerNub();
-		if (pNub != NULL)
-		{
-			gEnv->pNetwork->AddRebroadcasterConnection(state.pSender, pNub->GetChannelId(state.pSender));
-			return eCETR_Ok;
-		}
-		return eCETR_Failed;
-	}
-};
-
-void AddPopulateRebroadcaster(IContextEstablisher* pEst, EContextViewState state)
-{
-	pEst->AddTask(state, new CCET_PopulateRebroadcaster());
-}
-
-/*
  * Delegate authority to player
  */
 
-class CCET_DelegateAuthority : public CCET_Base
+class CCET_DelegateAuthority_ToClientActor : public CCET_Base
 {
+public:
+	const char* GetName() { return "DelegateAuthorityToClientActor"; }
+
 public:
 	EContextEstablishTaskResult OnStep(SContextEstablishState& state)
 	{
 		EntityId entityId = GetEntity(state);
 		if (!entityId || !gEnv->pEntitySystem->GetEntity(entityId))
-			return eCETR_Failed;
+			return eCETR_Ok; // Proceed even if there is no Actor
 		CCryAction::GetCryAction()->GetGameContext()->GetNetContext()->DelegateAuthority(entityId, state.pSender);
 		return eCETR_Ok;
 	}
-
-private:
-	virtual EntityId GetEntity(SContextEstablishState& state) = 0;
-};
-
-class CCET_DelegateAuthority_ToClientActor : public CCET_DelegateAuthority
-{
-public:
-	const char* GetName() { return "DelegateAuthorityToClientActor"; }
 
 private:
 	EntityId GetEntity(SContextEstablishState& state)
@@ -145,7 +113,6 @@ public:
 
 	EContextEstablishTaskResult OnStep(SContextEstablishState& state)
 	{
-		gEnv->pGame->OnClearPlayerIds();
 		if (CGameServerNub* pNub = CCryAction::GetCryAction()->GetGameServerNub())
 		{
 			TServerChannelMap* pMap = pNub->GetServerChannelMap();

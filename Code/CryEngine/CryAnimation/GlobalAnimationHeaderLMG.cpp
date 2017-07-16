@@ -617,20 +617,9 @@ bool GlobalAnimationHeaderLMG::LoadFromXML(CAnimationSet* pAnimationSet, XmlNode
 						f32 w1 = 1.0f;
 
 						nodeExample->getAttr("p0", i0);
-						assert(i0 < numExamples);
 						nodeExample->getAttr("p1", i1);
-						assert(i1 < numExamples);
-
 						nodeExample->getAttr("w0", w0);
 						nodeExample->getAttr("w1", w1);
-
-						f32 sum = w0 + w1;
-						assert(fabsf(1.0f - sum) < 0.00001f);
-
-						m_arrParameter[numExamples + i].i0 = i0;
-						m_arrParameter[numExamples + i].w0 = w0;
-						m_arrParameter[numExamples + i].i1 = i1;
-						m_arrParameter[numExamples + i].w1 = w1;
 
 						if (i0 >= numExamples)
 						{
@@ -646,8 +635,22 @@ bool GlobalAnimationHeaderLMG::LoadFromXML(CAnimationSet* pAnimationSet, XmlNode
 							return false;
 						}
 
-						//	m_arrParameter[numExamples+i].m_Para=m_arrParameter[i0].m_Para*w0 + m_arrParameter[i1].m_Para*w1;
-						//	Vec4 w4=m_arrParameter[numExamples+i].m_Para;
+						const f32 wSum = w0 + w1;
+						if (fabsf(wSum) > 0.00001f)
+						{
+							w0 /= wSum;
+							w1 /= wSum;
+						}
+						else
+						{
+							w0 = 0.5f;
+							w1 = 0.5f;
+						}
+
+						m_arrParameter[numExamples + i].i0 = i0;
+						m_arrParameter[numExamples + i].w0 = w0;
+						m_arrParameter[numExamples + i].i1 = i1;
+						m_arrParameter[numExamples + i].w1 = w1;
 					}
 				}
 				continue;
@@ -667,56 +670,22 @@ bool GlobalAnimationHeaderLMG::LoadFromXML(CAnimationSet* pAnimationSet, XmlNode
 					if (strcmp(ExampleTag, "Face") == 0)
 					{
 						BSBlendable face;
-						uint32 res;
-						res = nodeExample->getAttr("p0", face.idx0);
-						if (res)
-						{
-							assert(face.idx0 < (numExamples + numPseudo));
-							face.num++;
-						}
-						res = nodeExample->getAttr("p1", face.idx1);
-						if (res)
-						{
-							assert(face.idx1 < (numExamples + numPseudo));
-							face.num++;
-						}
 
-						res = nodeExample->getAttr("p2", face.idx2);
-						if (res)
-						{
-							assert(face.idx2 < (numExamples + numPseudo));
-							face.num++;
-						}
+						const char* facePointNames[] = { "p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7" };
+						static_assert(CRY_ARRAY_COUNT(facePointNames) == CRY_ARRAY_COUNT(face.idx), "facePointNames[]'s size is expected to match BSBlendable::idx[]");
 
-						res = nodeExample->getAttr("p3", face.idx3);
-						if (res)
+						for (size_t p = 0; p < CRY_ARRAY_COUNT(facePointNames); ++p)
 						{
-							assert(face.idx3 < (numExamples + numPseudo));
-							face.num++;
-						}
-						res = nodeExample->getAttr("p4", face.idx4);
-						if (res)
-						{
-							assert(face.idx4 < (numExamples + numPseudo));
-							face.num++;
-						}
-						res = nodeExample->getAttr("p5", face.idx5);
-						if (res)
-						{
-							assert(face.idx5 < (numExamples + numPseudo));
-							face.num++;
-						}
-						res = nodeExample->getAttr("p6", face.idx6);
-						if (res)
-						{
-							assert(face.idx6 < (numExamples + numPseudo));
-							face.num++;
-						}
-						res = nodeExample->getAttr("p7", face.idx7);
-						if (res)
-						{
-							assert(face.idx7 < (numExamples + numPseudo));
-							face.num++;
+							if (nodeExample->getAttr(facePointNames[p], face.idx[p]))
+							{
+								if (face.idx[p] >= (numExamples + numPseudo))
+								{
+									m_Status.Format("Error: Blend annotation %d contains a reference to non-existing example with index %d.", int32(i), int32(face.idx[p]));
+									gEnv->pLog->LogError("CryAnimation %s: %s", m_Status.c_str(), pathnameLMG);
+									return false;
+								}
+								face.num++;
+							}
 						}
 
 						m_arrBSAnnotations.push_back(face);
@@ -1043,16 +1012,16 @@ void GlobalAnimationHeaderLMG::CreateInternalType_Para1D()
 	//set blend-annotation-list                          --
 	m_arrBSAnnotations.reserve(3);
 	BSBlendable face;
-	face.idx0 = 2;
-	face.idx1 = 0;
+	face.idx[0] = 2;
+	face.idx[1] = 0;
 	face.num = 2;
 	m_arrBSAnnotations.push_back(face);
-	face.idx0 = 0;
-	face.idx1 = 1;
+	face.idx[0] = 0;
+	face.idx[1] = 1;
 	face.num = 2;
 	m_arrBSAnnotations.push_back(face);
-	face.idx0 = 1;
-	face.idx1 = 3;
+	face.idx[0] = 1;
+	face.idx[1] = 3;
 	face.num = 2;
 	m_arrBSAnnotations.push_back(face);
 

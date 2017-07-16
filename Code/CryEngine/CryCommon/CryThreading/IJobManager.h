@@ -59,8 +59,8 @@ public:
 	{
 		m_Notify.Lock();
 		m_nFinished = 1;
+		m_Notify.Unlock();	
 		m_CondNotify.Notify();
-		m_Notify.Unlock();
 	}
 
 	void SetRunning()
@@ -171,7 +171,7 @@ struct CRY_ALIGN(128) SWorkerStats
 typedef uint16 TSemaphoreHandle;
 
 //! Magic value to reprensent an invalid job handle.
-enum { INVALID_JOB_HANDLE = ((unsigned int)-1) };
+enum  : uint32 { INVALID_JOB_HANDLE = ((unsigned int)-1) };
 
 //! BackEnd Type.
 enum EBackEndType
@@ -1256,7 +1256,6 @@ ILINE JobManager::CProdConsQueue<TJobType, Size>::CProdConsQueue() : m_Initializ
 template<class TJobType, unsigned int Size>
 ILINE void JobManager::CProdConsQueue<TJobType, Size >::Init(const uint32 cPacketSize)
 {
-	ScopedSwitchToGlobalHeap heapSwitch;
 	assert((cPacketSize & 15) == 0);
 	m_AddPacketDataOffset = cPacketSize;
 	m_PullIncrement = m_AddPacketDataOffset + sizeof(SAddPacketData);

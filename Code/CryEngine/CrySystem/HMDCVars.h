@@ -5,36 +5,19 @@
 #include <CrySystem/IConsole.h>
 #include <CrySystem/ISystem.h>
 
+#include <CrySystem/VR/IHMDManager.h>
+
 namespace CryVR
 {
-enum EVRCmd
-{
-	eVRC_Recenter,
-};
-enum EVRCallbackVars
-{
-	eVRCV_Gamma,
-};
-
-struct IVRCmdListener
-{
-public:
-	virtual void OnCommand(EVRCmd cmd, IConsoleCmdArgs* pArgs) = 0;
-protected:
-	virtual ~IVRCmdListener() {}
-};
-
 class CVars
 {
 private:
-	typedef std::vector<IVRCmdListener*> Listeners;
-	static Listeners ms_listener;
-
 public:
 	// Shared variables:
 	static int hmd_info;
 	static int hmd_social_screen;
 	static int hmd_social_screen_keep_aspect;
+<<<<<<< HEAD
 	static int hmd_driver;
 	static int hmd_post_inject_camera;
 
@@ -54,14 +37,16 @@ public:
 	static float hmd_quad_width;
 	static int hmd_quad_absolute;
 #endif                           // defined(INCLUDE_OPENVR_SDK)
+=======
+	static int hmd_tracking_origin;
+	static float hmd_resolution_scale;
+	static ICVar* pSelectedHmdNameVar;
+>>>>>>> upstream/stabilisation
 
-private:
-	static void Raise(EVRCmd cmd, IConsoleCmdArgs* pArgs)
-	{
-		for (Listeners::iterator it = ms_listener.begin(); it != ms_listener.end(); ++it)
-			(*it)->OnCommand(cmd, pArgs);
+	static void OnHmdRecenter(IConsoleCmdArgs* pArgs) 
+	{ 
+		gEnv->pSystem->GetHmdManager()->RecenterPose();
 	}
-	static void OnHmdRecenter(IConsoleCmdArgs* pArgs) { Raise(eVRC_Recenter, pArgs); }
 
 public:
 	static void Register()
@@ -84,20 +69,15 @@ public:
 		                        "1 - On\n"
 		               );
 
-		REGISTER_CVAR2("hmd_driver", &hmd_driver, hmd_driver,
-		               VF_NULL, "(Only) use specific VR driver:\n"
-		                        "0 - Any\n"
-		                        "1 - Oculus\n"
-		                        "2 - OpenVR\n"
-		                        "3 - Osvr\n"
-		               );
+		REGISTER_CVAR2("hmd_tracking_origin", &hmd_tracking_origin, hmd_tracking_origin,
+			VF_NULL, "Determine HMD tracking origin point.\n"
+			"0 - Camera (/Actor's head)\n"
+			"1 - Actor's feet\n");
 
-		REGISTER_CVAR2("hmd_post_inject_camera", &hmd_post_inject_camera, hmd_post_inject_camera,
-		               VF_NULL, "Reduce latancy by injecting updated updated camera at render thread as late as possible before submitting draw calls to GPU\n"
-		                        "0 - Disable\n"
-		                        "1 - Enable\n"
-		               );
+		REGISTER_CVAR2("hmd_resolution_scale", &hmd_resolution_scale, hmd_resolution_scale,
+			VF_NULL, "Scales rendered resolution");
 
+<<<<<<< HEAD
 		REGISTER_COMMAND("hmd_recenter_pose", &OnHmdRecenter,
 		                 VF_NULL, "Recenters sensor orientation of the HMD.");
 
@@ -147,16 +127,22 @@ public:
 
 		REGISTER_CVAR2("hmd_quad_absolute", &hmd_quad_absolute, hmd_quad_absolute, VF_NULL, "Should quads be placed relative to the HMD or in absolute tracking space? (Default = 1: Absolute UI positioning)");
 #endif // defined(INCLUDE_OPENVR_SDK)
+=======
+		pSelectedHmdNameVar = REGISTER_STRING("hmd_device", "", VF_NULL, 
+						"Specifies the name of the VR device to use\nAvailable options depend on VR plugins registered with the engine");
+>>>>>>> upstream/stabilisation
 
 		REGISTER_COMMAND("hmd_recenter_pose", &OnHmdRecenter,
 		                 VF_NULL, "Recenters sensor orientation of the HMD.");
 	}
+
 	static void Unregister()
 	{
 		if (IConsole* const pConsole = gEnv->pConsole)
 		{
 			pConsole->UnregisterVariable("hmd_info");
 			pConsole->UnregisterVariable("hmd_social_screen");
+<<<<<<< HEAD
 			pConsole->UnregisterVariable("hmd_driver");
 			pConsole->UnregisterVariable("hmd_recenter_pose");
 #if defined(INCLUDE_OCULUS_SDK)
@@ -174,16 +160,16 @@ public:
 			pConsole->UnregisterVariable("hmd_quad_width");
 			pConsole->UnregisterVariable("hmd_quad_absolute");
 #endif  // defined(INCLUDE_OPENVR_SDK)
+=======
+			pConsole->UnregisterVariable("hmd_social_screen_keep_aspect");
+			pConsole->UnregisterVariable("hmd_tracking_origin");
+			pConsole->UnregisterVariable("hmd_resolution_scale");
+			pConsole->UnregisterVariable("hmd_device");
+
+			pConsole->RemoveCommand("hmd_recenter_pose");
+>>>>>>> upstream/stabilisation
 		}
 
-	}
-	static void RegisterListener(IVRCmdListener* listener)
-	{
-		ms_listener.push_back(listener);
-	}
-	static void UnregisterListener(IVRCmdListener* listener)
-	{
-		ms_listener.erase(std::remove(ms_listener.begin(), ms_listener.end(), listener), ms_listener.end());
 	}
 };
 }

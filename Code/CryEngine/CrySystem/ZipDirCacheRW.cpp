@@ -16,8 +16,9 @@
 
 #ifndef OPTIMIZED_READONLY_ZIP_ENTRY
 
-	#include <zlib.h> // declaration of Z_OK for ZipRawDecompress
-	#include <CryCore/Platform/CryWindows.h>
+#include <zlib.h> // declaration of Z_OK for ZipRawDecompress
+#include <CryCore/Platform/CryWindows.h>
+#include <CryMath/Random.h>
 
 using namespace ZipFile;
 
@@ -428,7 +429,7 @@ ZipDir::ErrorEnum ZipDir::CacheRW::UpdateFileContinuousSegment(const char* szRel
 	#endif
 		return ZD_ERROR_IO_FAILED;
 
-	const bool encrypt = false; // we do not support encription for continous file update
+	const bool encrypt = false; // we do not support encription for continuous file update
 	if (!WriteCompressedData((char*)pUncompressed, nSegmentSize, encrypt))
 	{
 		CryWarning(VALIDATOR_MODULE_SYSTEM, VALIDATOR_ERROR,
@@ -679,9 +680,11 @@ ZipDir::FileEntry* ZipDir::CacheRW::FindFile(const char* szPathSrc, bool bFullIn
 	ZipDir::FindFileRW fd(GetRoot());
 	if (!fd.FindExact(szPath))
 	{
+		// cppcheck-suppress assertWithSideEffect
 		assert(!fd.GetFileEntry());
 		return NULL;
 	}
+	// cppcheck-suppress assertWithSideEffect
 	assert(fd.GetFileEntry());
 	return fd.GetFileEntry();
 }

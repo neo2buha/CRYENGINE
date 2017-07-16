@@ -15,12 +15,30 @@
 #include "DX12/API/DX12Resource.hpp"
 #include "Dx12/API/DX12AsyncCommandQueue.hpp"
 
-CCryDX12SwapChain* CCryDX12SwapChain::Create(CCryDX12Device* pDevice, IDXGIFactory4* factory, DXGI_SWAP_CHAIN_DESC* pDesc)
+CCryDX12SwapChain* CCryDX12SwapChain::Create(CCryDX12Device* pDevice, IDXGIFactory4ToCall* factory, DXGI_SWAP_CHAIN_DESC* pDesc)
 {
 	CCryDX12DeviceContext* pDeviceContext = pDevice->GetDeviceContext();
 	NCryDX12::CSwapChain* pDX12SwapChain = NCryDX12::CSwapChain::Create(pDeviceContext->GetCoreGraphicsCommandListPool(), factory, pDesc);
 
-	return DX12_NEW_RAW(CCryDX12SwapChain(pDevice, pDX12SwapChain));
+	if (pDX12SwapChain)
+	{
+		return DX12_NEW_RAW(CCryDX12SwapChain(pDevice, pDX12SwapChain));
+	}
+
+	return nullptr;
+}
+
+CCryDX12SwapChain* CCryDX12SwapChain::Create(CCryDX12Device* pDevice, IDXGISwapChain1ToCall* swapchain, DXGI_SWAP_CHAIN_DESC1* pDesc)
+{
+	CCryDX12DeviceContext* pDeviceContext = pDevice->GetDeviceContext();
+	NCryDX12::CSwapChain* pDX12SwapChain = NCryDX12::CSwapChain::Create(pDeviceContext->GetCoreGraphicsCommandListPool(), swapchain, pDesc);
+
+	if (pDX12SwapChain)
+	{
+		return DX12_NEW_RAW(CCryDX12SwapChain(pDevice, pDX12SwapChain));
+	}
+
+	return nullptr;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -31,22 +49,19 @@ CCryDX12SwapChain::CCryDX12SwapChain(CCryDX12Device* pDevice, NCryDX12::CSwapCha
 	, m_pDX12SwapChain(pSwapChain)
 {
 	DX12_FUNC_LOG
+
+	m_pBuffers.resize(m_pDX12SwapChain->GetBackBufferCount());
+	memset(m_pBuffers.data(), 0, m_pBuffers.size() * sizeof(m_pBuffers[0]));
 }
 
 CCryDX12SwapChain::~CCryDX12SwapChain()
 {
 	DX12_FUNC_LOG
+
+	m_pDX12SwapChain->Release();
 }
 
 /* IDXGIDeviceSubObject implementation */
-
-HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::GetDevice(
-  _In_ REFIID riid,
-  _Out_ void** ppDevice)
-{
-	DX12_FUNC_LOG
-	return m_pDX12SwapChain->GetDXGISwapChain()->GetDevice(riid, ppDevice);
-}
 
 /* IDXGISwapChain implementation */
 
@@ -56,7 +71,24 @@ HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::Present(
 {
 	DX12_FUNC_LOG
 
+	UINT Buffer = m_pDX12SwapChain->GetCurrentBackbufferIndex();
+	NCryDX12::CResource& dx12Resource = m_pDX12SwapChain->GetBackBuffer(Buffer);
+
+	if (m_pBuffers[Buffer])
+	{
+		// HACK: transfer state from "outside" CResource to "inside" CResource
+		dx12Resource.SetState         (m_pBuffers[Buffer]->GetDX12Resource().GetState         ());
+		dx12Resource.SetAnnouncedState(m_pBuffers[Buffer]->GetDX12Resource().GetAnnouncedState());
+	}
+
 	m_pDevice->GetDeviceContext()->Finish(m_pDX12SwapChain);
+
+	if (m_pBuffers[Buffer])
+	{
+		// HACK: transfer state from "inside" CResource to "outside" CResource
+		m_pBuffers[Buffer]->GetDX12Resource().SetState         (dx12Resource.GetState         ());
+		m_pBuffers[Buffer]->GetDX12Resource().SetAnnouncedState(dx12Resource.GetAnnouncedState());
+	}
 
 	DX12_LOG(g_nPrintDX12, "------------------------------------------------ PRESENT ------------------------------------------------");
 	m_pDX12SwapChain->Present(SyncInterval, Flags);
@@ -72,8 +104,14 @@ HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::GetBuffer(
 	DX12_FUNC_LOG
 	if (riid == __uuidof(ID3D11Texture2D))
 	{
-		const NCryDX12::CResource& dx12Resource = m_pDX12SwapChain->GetBackBuffer(Buffer);
+		if (m_pBuffers[Buffer])
+		{
+			m_pBuffers[Buffer]->AddRef();
+			*ppSurface = m_pBuffers[Buffer];
+			return S_OK;
+		}
 
+		const NCryDX12::CResource& dx12Resource = m_pDX12SwapChain->GetBackBuffer(Buffer);
 		switch (dx12Resource.GetDesc().Dimension)
 		{
 		case D3D12_RESOURCE_DIMENSION_BUFFER:
@@ -83,47 +121,26 @@ HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::GetBuffer(
 			*ppSurface = CCryDX12Texture1D::Create(m_pDevice, this, dx12Resource.GetD3D12Resource());
 			break;
 		case D3D12_RESOURCE_DIMENSION_TEXTURE2D:
-			*ppSurface = CCryDX12Texture2D::Create(m_pDevice, this, dx12Resource.GetD3D12Resource());
+			*ppSurface = m_pBuffers[Buffer] = CCryDX12Texture2D::Create(m_pDevice, this, dx12Resource.GetD3D12Resource());
 			break;
 		case D3D12_RESOURCE_DIMENSION_TEXTURE3D:
 			*ppSurface = CCryDX12Texture3D::Create(m_pDevice, this, dx12Resource.GetD3D12Resource());
 			break;
 		case D3D12_RESOURCE_DIMENSION_UNKNOWN:
 		default:
+			*ppSurface = nullptr;
 			DX12_ASSERT(0, "Not implemented!");
 			break;
 		}
 	}
 	else
 	{
+		*ppSurface = nullptr;
 		DX12_ASSERT(0, "Not implemented!");
 		return -1;
 	}
 
 	return S_OK;
-}
-
-HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::SetFullscreenState(
-  BOOL Fullscreen,
-  _In_opt_ IDXGIOutput* pTarget)
-{
-	DX12_FUNC_LOG
-	return m_pDX12SwapChain->GetDXGISwapChain()->SetFullscreenState(Fullscreen, pTarget);
-}
-
-HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::GetFullscreenState(
-  _Out_opt_ BOOL* pFullscreen,
-  _Out_opt_ IDXGIOutput** ppTarget)
-{
-	DX12_FUNC_LOG
-	return m_pDX12SwapChain->GetDXGISwapChain()->GetFullscreenState(pFullscreen, ppTarget);
-}
-
-HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::GetDesc(
-  _Out_ DXGI_SWAP_CHAIN_DESC* pDesc)
-{
-	DX12_FUNC_LOG
-	return m_pDX12SwapChain->GetDXGISwapChain()->GetDesc(pDesc);
 }
 
 HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::ResizeBuffers(
@@ -157,35 +174,10 @@ HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::ResizeBuffers(
 		m_pDX12SwapChain->AcquireBuffers();
 	}
 
+	m_pBuffers.resize(m_pDX12SwapChain->GetBackBufferCount());
+	memset(m_pBuffers.data(), 0, m_pBuffers.size() * sizeof(m_pBuffers[0]));
+
 	return res;
-}
-
-HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::ResizeTarget(
-  _In_ const DXGI_MODE_DESC* pNewTargetParameters)
-{
-	DX12_FUNC_LOG
-	return m_pDX12SwapChain->ResizeTarget(pNewTargetParameters);
-}
-
-HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::GetContainingOutput(
-  _Out_ IDXGIOutput** ppOutput)
-{
-	DX12_FUNC_LOG
-	return m_pDX12SwapChain->GetDXGISwapChain()->GetContainingOutput(ppOutput);
-}
-
-HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::GetFrameStatistics(
-  _Out_ DXGI_FRAME_STATISTICS* pStats)
-{
-	DX12_FUNC_LOG
-	return m_pDX12SwapChain->GetDXGISwapChain()->GetFrameStatistics(pStats);
-}
-
-HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::GetLastPresentCount(
-  _Out_ UINT* pLastPresentCount)
-{
-	DX12_FUNC_LOG
-	return m_pDX12SwapChain->GetDXGISwapChain()->GetLastPresentCount(pLastPresentCount);
 }
 
 /* IDXGISwapChain1 implementation */
@@ -193,10 +185,3 @@ HRESULT STDMETHODCALLTYPE CCryDX12SwapChain::GetLastPresentCount(
 /* IDXGISwapChain2 implementation */
 
 /* IDXGISwapChain3 implementation */
-
-UINT STDMETHODCALLTYPE CCryDX12SwapChain::GetCurrentBackBufferIndex(
-  void)
-{
-	DX12_FUNC_LOG
-	return m_pDX12SwapChain->GetCurrentBackbufferIndex();
-}

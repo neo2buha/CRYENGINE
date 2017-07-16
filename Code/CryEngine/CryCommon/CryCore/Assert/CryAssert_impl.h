@@ -11,6 +11,13 @@ static bool g_bAssertsAreDisabledForThisModule = false;
 //! We need this pointer so we can access the value even after CSystem is already destroyed.
 static int* g_pAssertsCVarAddress = nullptr;
 
+	#if !CRY_PLATFORM_WINDOWS
+void CryLogAssert(const char* _pszCondition, const char* _pszFile, unsigned int _uiLine, bool* _pbIgnore)
+{
+	// Empty on purpose
+}
+	#endif
+
 	#if CRY_PLATFORM_DURANGO
 		#include <CryAssert/CryAssert_Durango.h>
 	#elif CRY_PLATFORM_MAC
@@ -66,5 +73,33 @@ bool CryAssertIsEnabled()
 	const bool bModuleSuppress = g_bAssertsAreDisabledForThisModule;
 	return !(bGlobalSuppress || bUserSuppress || bModuleSuppress);
 }
+
+namespace Detail
+{
+
+void CryAssertHandler(SAssertData const& data, SAssertCond& cond, char const* const szMessage)
+{
+	CryAssertTrace(szMessage);
+	CryAssertHandler(data, cond);
+}
+
+NO_INLINE
+void CryAssertHandler(SAssertData const& data, SAssertCond& cond)
+{
+	if (cond.bLogAssert) // Just log assert the first time
+	{
+		CryLogAssert(data.szExpression, data.szFile, data.line, &cond.bIgnoreAssert);
+		cond.bLogAssert = false;
+	}
+
+	if (!cond.bIgnoreAssert && CryAssertIsEnabled()) // Don't show assert once it was ignored
+	{
+		if (CryAssert(data.szExpression, data.szFile, data.line, &cond.bIgnoreAssert))
+		{
+			__debugbreak();
+		}
+	}
+}
+} // namespace Detail
 
 #endif // defined(USE_CRY_ASSERT)

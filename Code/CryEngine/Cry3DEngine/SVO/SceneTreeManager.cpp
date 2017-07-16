@@ -23,6 +23,7 @@ extern CSvoEnv* gSvoEnv;
 
 void CSvoManager::CheckAllocateGlobalCloud()
 {
+	LOADING_TIME_PROFILE_SECTION;
 	if (!gSvoEnv && Cry3DEngineBase::GetCVars()->e_svoEnabled)
 	{
 		float fMapSize = (float)Cry3DEngineBase::Get3DEngine()->GetTerrainSize();
@@ -164,12 +165,12 @@ void CSvoManager::Release()
 
 void CSvoManager::Render()
 {
+	LOADING_TIME_PROFILE_SECTION;
 	if (GetCVars()->e_svoTI_Apply && (!m_bLevelLoadingInProgress || gEnv->IsEditor()) && !GetCVars()->e_svoTI_Active)
 	{
 		GetCVars()->e_svoTI_Active = 1;
 		GetCVars()->e_svoLoadTree = 1;
 		GetCVars()->e_svoRender = 1;
-		GetCVars()->e_GI = 0;
 
 		if (GetCVars()->e_svoTI_Troposphere_Active)
 		{
@@ -181,6 +182,7 @@ void CSvoManager::Render()
 
 	if (GetCVars()->e_svoLoadTree)
 	{
+		LOADING_TIME_PROFILE_SECTION_NAMED("SVO Load Tree");
 		SAFE_DELETE(gSvoEnv);
 
 		GetCVars()->e_svoEnabled = 1;
@@ -195,6 +197,8 @@ void CSvoManager::Render()
 
 	if (GetCVars()->e_svoEnabled && GetCVars()->e_svoRender)
 	{
+		LOADING_TIME_PROFILE_SECTION_NAMED("SVO Render");
+
 		CheckAllocateGlobalCloud();
 
 		if (gSvoEnv)
@@ -208,7 +212,7 @@ void CSvoManager::Render()
 				while (gSvoEnv->m_fSvoFreezeTime > 0)
 				{
 					gSvoEnv->Render();
-					CrySleep(0);
+					CrySleep(5);
 				}
 
 				gSvoEnv->m_fSvoFreezeTime = -1;
@@ -251,10 +255,6 @@ void CSvoManager::RegisterMovement(const AABB& objBox)
 {
 	if (gSvoEnv && gSvoEnv->m_pSvoRoot)
 		gSvoEnv->m_pSvoRoot->RegisterMovement(objBox);
-}
-
-void CSvoManager::Voxel_Paint(Vec3 vPaintPos, float fRadius, int nSurfaceTypeId, Vec3 vBaseColor, EVoxelEditOperation eOperation, EVoxelBrushShape eShape, EVoxelEditTarget eTarget, PodArray<IRenderNode*>* pBrushes, float fVoxelSize)
-{
 }
 
 #endif

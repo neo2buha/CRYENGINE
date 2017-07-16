@@ -79,7 +79,7 @@ void CStatObj::RenderStreamingDebugInfo(CRenderObject* pRenderObject)
 #ifndef _RELEASE
 	//	CStatObj * pStreamable = m_pParentObject ? m_pParentObject : this;
 
-	CStatObj* pStreamable = m_pLod0 ? m_pLod0 : this;
+	CStatObj* pStreamable = (m_pLod0 != 0) ? (CStatObj*)m_pLod0 : this;
 
 	int nKB = 0;
 
@@ -163,7 +163,8 @@ void CStatObj::FillRenderObject(const SRendParams& rParams, IRenderNode* pRender
 		return;
 
 	pObj->m_pRenderNode = pRenderNode;
-	pObj->m_fSort = rParams.fCustomSortOffset;
+	pObj->m_editorSelectionID = rParams.nEditorSelectionID;
+
 	SRenderObjData* pOD = NULL;
 	if (rParams.pFoliage || rParams.pInstance || rParams.m_pVisArea || pInstInfo || rParams.nVisionParams || rParams.nHUDSilhouettesParams ||
 	    rParams.pLayerEffectParams || rParams.nSubObjHideMask != 0)
@@ -217,13 +218,16 @@ void CStatObj::FillRenderObject(const SRendParams& rParams, IRenderNode* pRender
 	// Process bending
 	////////////////////////////////////////////////////////////////////////////////////////////////////
 	if (pRenderNode && pRenderNode->GetRndFlags() & ERF_RECVWIND)
-		Get3DEngine()->SetupBending(pObj, pRenderNode, m_fRadiusVert, passInfo, false);
+	{
+		// This can be different for CVegetation class render nodes
+		pObj->m_vegetationBendingData.scale = 1.0f; //#TODO Read it from RenderNode?
+		pObj->m_vegetationBendingData.verticalRadius = GetRadiusVert();
+	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Set render quality
 	////////////////////////////////////////////////////////////////////////////////////////////////////
 
-	pObj->m_nRenderQuality = (uint16)(rParams.fRenderQuality * 65535.0f);
 	pObj->m_fDistance = rParams.fDistance;
 
 	{
@@ -258,8 +262,8 @@ void CStatObj::FillRenderObject(const SRendParams& rParams, IRenderNode* pRender
 		pOD->m_fTempVars[0] = rParams.pTerrainTexInfo->fTexOffsetX;
 		pOD->m_fTempVars[1] = rParams.pTerrainTexInfo->fTexOffsetY;
 		pOD->m_fTempVars[2] = rParams.pTerrainTexInfo->fTexScale;
-		pOD->m_fTempVars[3] = rParams.pTerrainTexInfo->fTerrainMinZ - passInfo.GetCamera().GetPosition().z;
-		pOD->m_fTempVars[4] = rParams.pTerrainTexInfo->fTerrainMaxZ - passInfo.GetCamera().GetPosition().z;
+		pOD->m_fTempVars[3] = 0;
+		pOD->m_fTempVars[4] = 0;
 	}
 
 	if (rParams.nCustomData || rParams.nCustomFlags)
@@ -310,7 +314,6 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 	if (!passInfo.IsGeneralPass())
 		return false;
 
-	IRenderer* pRend = GetRenderer();
 	IMaterial* pMaterial = pObj->m_pCurrMaterial;
 
 	IRenderAuxGeom* pAuxGeom = GetRenderer()->GetIRenderAuxGeom();
@@ -372,8 +375,8 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 			}
 		}
 
-		const int nMaxUsableLod = (m_pLod0) ? m_pLod0->m_nMaxUsableLod : m_nMaxUsableLod;
-		const int nRealNumLods = (m_pLod0) ? m_pLod0->m_nLoadedLodsNum : m_nLoadedLodsNum;
+		const int nMaxUsableLod = (m_pLod0 != 0) ? m_pLod0->m_nMaxUsableLod : m_nMaxUsableLod;
+		const int nRealNumLods = (m_pLod0 != 0) ? m_pLod0->m_nLoadedLodsNum : m_nLoadedLodsNum;
 
 		int nNumLods = nRealNumLods;
 		if (nNumLods > nMaxUsableLod + 1)
@@ -408,9 +411,9 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 				else
 					shortName = PathUtil::GetFile(m_szFileName.c_str());
 				if (nNumLods > 1)
-					pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%s\n%d (LOD %d/%d)", shortName, m_nRenderTrisCount, nLod, nNumLods);
+					IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "%s\n%d (LOD %d/%d)", shortName, m_nRenderTrisCount, nLod, nNumLods);
 				else
-					pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%s\n%d", shortName, m_nRenderTrisCount);
+					IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "%s\n%d", shortName, m_nRenderTrisCount);
 			}
 			break;
 
@@ -437,13 +440,13 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 					pMaterial = GetMatMan()->GetDefaultHelperMaterial();
 				if (pObj)
 				{
-					pObj->m_II.m_AmbColor = ColorF(clr.r / 155.0f, clr.g / 155.0f, clr.b / 155.0f, 1);
 					pObj->m_nMaterialLayers = 0;
 					pObj->m_ObjFlags |= FOB_SELECTED;
+					pObj->m_data.m_nHUDSilhouetteParams = RGBA8(255.0f, clr.b, clr.g, clr.r);
 				}
 
 				if (!bNoText)
-					pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%d", m_nRenderTrisCount);
+					IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "%d", m_nRenderTrisCount);
 
 				return false;
 				//////////////////////////////////////////////////////////////////////////
@@ -489,9 +492,9 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 					pMaterial = GetMatMan()->GetDefaultHelperMaterial();
 				if (pObj)
 				{
-					pObj->m_II.m_AmbColor = ColorF(clr.r / 180.0f, clr.g / 180.0f, clr.b / 180.0f, 1);
 					pObj->m_nMaterialLayers = 0;
 					pObj->m_ObjFlags |= FOB_SELECTED;
+					pObj->m_data.m_nHUDSilhouetteParams = RGBA8(255.0f, clr.b, clr.g, clr.r);
 				}
 
 				if (pObj && nNumLods > 1 && !bNoText)
@@ -500,7 +503,7 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 					const int maxLod = GetMaxUsableLod();
 					const bool bRenderNodeValid(pObj && pObj->m_pRenderNode && ((UINT_PTR)(void*)(pObj->m_pRenderNode) > 0));
 					IRenderNode* pRN = (IRenderNode*)pObj->m_pRenderNode;
-					pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%d [%d;%d] (%d/%.1f)",
+					IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "%d [%d;%d] (%d/%.1f)",
 					                   nLod, nLod0, maxLod,
 					                   bRenderNodeValid ? pRN->GetLodRatio() : -1, pObj->m_fDistance);
 				}
@@ -514,7 +517,7 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 				if (m_pRenderMesh)
 				{
 					int nTexMemUsage = m_pRenderMesh->GetTextureMemoryUsage(pMaterial);
-					pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%d", nTexMemUsage / 1024);    // in KByte
+					IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "%d", nTexMemUsage / 1024);    // in KByte
 				}
 			}
 			break;
@@ -544,13 +547,13 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 					pMaterial = GetMatMan()->GetDefaultHelperMaterial();
 				if (pObj)
 				{
-					pObj->m_II.m_AmbColor = ColorF(clr.r / 155.0f, clr.g / 155.0f, clr.b / 155.0f, 1);
 					pObj->m_nMaterialLayers = 0;
 					pObj->m_ObjFlags |= FOB_SELECTED;
+					pObj->m_data.m_nHUDSilhouetteParams = RGBA8(255.0f, clr.b, clr.g, clr.r);
 				}
 
 				if (!bNoText)
-					pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%d", nRenderMats);
+					IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "%d", nRenderMats);
 			}
 			break;
 
@@ -566,7 +569,7 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 					col = pObj->m_II.m_AmbColor;
 				}
 
-				pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%d,%d,%d,%d", (int)(col.r * 255.0f), (int)(col.g * 255.0f), (int)(col.b * 255.0f), (int)(col.a * 255.0f));
+				IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "%d,%d,%d,%d", (int)(col.r * 255.0f), (int)(col.g * 255.0f), (int)(col.b * 255.0f), (int)(col.a * 255.0f));
 			}
 			break;
 
@@ -574,7 +577,7 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 			if (m_pRenderMesh)
 			{
 				int nTexMemUsage = m_pRenderMesh->GetTextureMemoryUsage(pMaterial);
-				pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%d,%d,%d", m_nRenderTrisCount, nRenderMats, nTexMemUsage / 1024);
+				IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "%d,%d,%d", m_nRenderTrisCount, nRenderMats, nTexMemUsage / 1024);
 			}
 			break;
 
@@ -601,9 +604,9 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 
 					if (m_pParentObject == NULL)
 					{
-						pRend->Draw2dLabel(xOffset, 40.f, 1.5f, yellow, false, "%s", shortName);
+						IRenderAuxText::Draw2dLabel(xOffset, 40.f, 1.5f, yellow, false, "%s", shortName);
 
-						pRend->Draw2dLabel(xOffset, yOffset, 1.5f, color, false,
+						IRenderAuxText::Draw2dLabel(xOffset, yOffset, 1.5f, color, false,
 						                   //"Mesh: %s\n"
 						                   "LOD: %d/%d\n"
 						                   "Num Instances: %d\n"
@@ -631,12 +634,12 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 								//only render the header once
 								if (i == 0)
 								{
-									pRend->Draw2dLabel(600.f, 40.f, 2.f, yellow, false, "Debug Gun: %s", shortName);
+									IRenderAuxText::Draw2dLabel(600.f, 40.f, 2.f, yellow, false, "Debug Gun: %s", shortName);
 								}
 								float y = yOffset + ((i % 4) * 150.f);
 								float x = xOffset - (floor(i / 4.f) * 200.f);
 
-								pRend->Draw2dLabel(x, y, 1.5f, color, false,
+								IRenderAuxText::Draw2dLabel(x, y, 1.5f, color, false,
 								                   "Sub Mesh: %s\n"
 								                   "LOD: %d/%d\n"
 								                   "Num Instances: %d\n"
@@ -675,7 +678,7 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 				if (nPhysTrisCount == 0)
 					color[3] = 0.1f;
 
-				pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%d", nPhysTrisCount);
+				IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "%d", nPhysTrisCount);
 			}
 			return false;
 
@@ -684,7 +687,7 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 				// Show texture usage.
 				if (m_pRenderMesh)
 				{
-					pRend->DrawLabelEx(pos, 1.3f, color, true, true, "[LOD %d: %d]", nLod, m_pRenderMesh->GetVerticesCount());
+					IRenderAuxText::DrawLabelExF(pos, 1.3f, color, true, true, "[LOD %d: %d]", nLod, m_pRenderMesh->GetVerticesCount());
 				}
 			}
 			break;
@@ -726,10 +729,10 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 
 						pMaterial = GetMatMan()->GetDefaultHelperMaterial();
 					}
-
-					pObj->m_II.m_AmbColor = clr;
+					
 					pObj->m_nMaterialLayers = 0;
 					pObj->m_ObjFlags |= FOB_SELECTED;
+					pObj->m_data.m_nHUDSilhouetteParams = RGBA8(255.0f, clr.b * 255.0f, clr.g * 255.0f, clr.r * 255.0f);
 				}
 				return false;
 			}
@@ -763,7 +766,7 @@ bool CStatObj::RenderDebugInfo(CRenderObject* pObj, const SRenderingPassInfo& pa
 
 			// text
 			float color[4] = { 0, 1, 1, 1 };
-			pRend->DrawLabelEx(pos, 1.3f, color, true, true, "%s", pSubObject->name.c_str());
+			IRenderAuxText::DrawLabelEx(pos, 1.3f, color, true, true, pSubObject->name.c_str());
 		}
 	}
 
@@ -812,8 +815,10 @@ float CStatObj::GetExtent(EGeomForm eForm)
 	}
 
 	CGeomExtent& ext = m_Extents.Make(eForm);
-	if (!ext)
+	if (!ext || ext.TotalExtent() == 0.0f)
 	{
+		ext.Clear();
+
 		// Create parts for main and sub-objects.
 		ext.ReserveParts(1 + nSubCount);
 
@@ -857,8 +862,9 @@ void CStatObj::GetRandomPos(PosNorm& ran, CRndGen& seed, EGeomForm eForm) const
 		ran.zero();
 }
 
-void CStatObj::ComputeGeometricMean(SMeshLodInfo& lodInfo)
+SMeshLodInfo CStatObj::ComputeAndStoreLodDistances()
 {
+	SMeshLodInfo lodInfo;
 	lodInfo.Clear();
 
 	lodInfo.fGeometricMean = m_fGeometricMeanFaceArea;
@@ -870,13 +876,41 @@ void CStatObj::ComputeGeometricMean(SMeshLodInfo& lodInfo)
 		{
 			if (m_subObjects[i].nType == STATIC_SUB_OBJECT_MESH && m_subObjects[i].bShadowProxy == false && m_subObjects[i].pStatObj != NULL)
 			{
-				SMeshLodInfo subLodInfo;
-				static_cast<CStatObj*>(m_subObjects[i].pStatObj)->ComputeGeometricMean(subLodInfo);
+				CStatObj* pStatObj = static_cast<CStatObj*>(m_subObjects[i].pStatObj);
+
+				SMeshLodInfo subLodInfo = pStatObj->ComputeAndStoreLodDistances();
 
 				lodInfo.Merge(subLodInfo);
 			}
 		}
 	}
+
+	m_fLodDistance = sqrt(lodInfo.fGeometricMean);
+	return lodInfo;
+}
+
+SMeshLodInfo CStatObj::ComputeGeometricMean() const
+{
+	SMeshLodInfo lodInfo;
+	lodInfo.Clear();
+
+	lodInfo.fGeometricMean = m_fGeometricMeanFaceArea;
+	lodInfo.nFaceCount = m_nRenderTrisCount;
+
+	if (GetFlags() & STATIC_OBJECT_COMPOUND)
+	{
+		for (uint i = 0; i < m_subObjects.size(); ++i)
+		{
+			if (m_subObjects[i].nType == STATIC_SUB_OBJECT_MESH && m_subObjects[i].bShadowProxy == false && m_subObjects[i].pStatObj != NULL)
+			{
+				SMeshLodInfo subLodInfo = static_cast<const CStatObj*>(m_subObjects[i].pStatObj)->ComputeGeometricMean();
+
+				lodInfo.Merge(subLodInfo);
+			}
+		}
+	}
+
+	return lodInfo;
 }
 
 int CStatObj::ComputeLodFromScale(float fScale, float fLodRatioNormalized, float fEntDistance, bool bFoliage, bool bForPrecache)
@@ -901,7 +935,7 @@ int CStatObj::ComputeLodFromScale(float fScale, float fLodRatioNormalized, float
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CStatObj::DebugDraw(const SGeometryDebugDrawInfo& info, float fExtrdueScale)
+void CStatObj::DebugDraw(const SGeometryDebugDrawInfo& info)
 {
 	if (m_nFlags & STATIC_OBJECT_COMPOUND && !m_bMerged)
 	{
@@ -913,12 +947,12 @@ void CStatObj::DebugDraw(const SGeometryDebugDrawInfo& info, float fExtrdueScale
 
 			SGeometryDebugDrawInfo subInfo = info;
 			subInfo.tm = info.tm * m_subObjects[i].tm;
-			m_subObjects[i].pStatObj->DebugDraw(subInfo, fExtrdueScale);
+			m_subObjects[i].pStatObj->DebugDraw(subInfo);
 		}
 	}
 	else if (m_pRenderMesh)
 	{
-		m_pRenderMesh->DebugDraw(info, ~0, fExtrdueScale);
+		m_pRenderMesh->DebugDraw(info, ~0);
 	}
 	else
 	{
@@ -930,10 +964,478 @@ void CStatObj::DebugDraw(const SGeometryDebugDrawInfo& info, float fExtrdueScale
 			{
 				if (m_pLODs[nLod] && m_pLODs[nLod]->m_pRenderMesh)
 				{
-					m_pLODs[nLod]->m_pRenderMesh->DebugDraw(info, ~0, fExtrdueScale);
+					m_pLODs[nLod]->m_pRenderMesh->DebugDraw(info, ~0);
 					break;
 				}
 			}
 		}
 	}
+}
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+void CStatObj::RenderInternal(CRenderObject* pRenderObject, hidemask nSubObjectHideMask, const CLodValue& lodValue, const SRenderingPassInfo& passInfo)
+{
+	FUNCTION_PROFILER_3DENGINE;
+
+	if (m_nFlags & STATIC_OBJECT_HIDDEN)
+		return;
+
+	m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+	if (m_pParentObject)
+		m_pParentObject->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+
+	hidemask *pMask = !nSubObjectHideMask ? &m_nInitialSubObjHideMask : &nSubObjectHideMask;
+	if (!!*pMask)
+	{
+		if ((m_pMergedRenderMesh != NULL) && !(pRenderObject->m_ObjFlags & FOB_MESH_SUBSET_INDICES)) // If not already set by per-instance hide mask.
+		{
+			SRenderObjData* pOD = pRenderObject->GetObjData();
+
+			// Only pass SubObject hide mask for merged objects, because they have a correct correlation between Hide Mask and Render Chunks.
+			pOD->m_nSubObjHideMask = *pMask;
+			pRenderObject->m_ObjFlags |= FOB_MESH_SUBSET_INDICES;
+		}
+	}
+
+	if (pRenderObject->m_pRenderNode)
+	{
+		IRenderNode* pRN = (IRenderNode*)pRenderObject->m_pRenderNode;
+		if (m_bEditor)
+		{
+			if (pRN->m_dwRndFlags & ERF_SELECTED)
+			{
+				m_nSelectedFrameId = passInfo.GetMainFrameID();
+				if (m_pParentObject)
+					m_pParentObject->m_nSelectedFrameId = passInfo.GetMainFrameID();
+				pRenderObject->m_ObjFlags |= FOB_SELECTED;
+			}
+			else
+				pRenderObject->m_ObjFlags &= ~FOB_SELECTED;
+
+			if (!gEnv->IsEditing() && pRN->m_dwRndFlags & ERF_RAYCAST_PROXY)
+			{
+				return;
+			}
+		}
+		else
+		{
+			if (pRN->m_dwRndFlags & ERF_RAYCAST_PROXY)
+			{
+				return;
+			}
+		}
+	}
+
+#ifdef SEG_WORLD
+	if (GetISystem()->GetIConsole()->GetCVar("sw_debugInfo")->GetIVal() == 4)
+	{
+		pRenderObject->m_ObjFlags |= FOB_SELECTED;
+	}
+#endif //SEG_WORLD
+
+	if ((m_nFlags & STATIC_OBJECT_COMPOUND) && !m_bMerged)
+	{
+		//////////////////////////////////////////////////////////////////////////
+		// Render SubMeshes if present.
+		//////////////////////////////////////////////////////////////////////////
+		if (m_nSubObjectMeshCount > 0)
+		{
+			CRenderObject* pRenderObjectB = NULL;
+
+			if (lodValue.DissolveRefB() != 255)
+			{
+				pRenderObject->m_DissolveRef = lodValue.DissolveRefA();
+
+				if (pRenderObject->m_DissolveRef)
+				{
+					if (!(pRenderObject->m_ObjFlags & FOB_DISSOLVE))
+						pRenderObject->m_ObjFlags &= ~FOB_UPDATED_RTMASK;
+					pRenderObject->m_ObjFlags |= FOB_DISSOLVE;
+
+					pRenderObject->m_ObjFlags |= FOB_DISSOLVE_OUT;
+				}
+				else
+				{
+					if ((pRenderObject->m_ObjFlags & FOB_DISSOLVE))
+						pRenderObject->m_ObjFlags &= ~FOB_UPDATED_RTMASK;
+					pRenderObject->m_ObjFlags &= ~FOB_DISSOLVE;
+				}
+
+				if (lodValue.LodB() != -1)
+				{
+					pRenderObjectB = GetRenderer()->EF_DuplicateRO(pRenderObject, passInfo);
+					pRenderObjectB->m_ObjFlags &= ~FOB_DISSOLVE_OUT;
+				}
+			}
+			else
+			{
+				pRenderObject->m_DissolveRef = 0;
+				if ((pRenderObject->m_ObjFlags & FOB_DISSOLVE))
+					pRenderObject->m_ObjFlags &= ~FOB_UPDATED_RTMASK;
+				pRenderObject->m_ObjFlags &= ~(FOB_DISSOLVE | FOB_DISSOLVE_OUT);
+			}
+
+			hidemaskOneBit nBitIndex = hidemask1;
+			Matrix34A renderTM = pRenderObject->m_II.m_Matrix;
+			for (int32 i = 0, subObjectsSize = m_subObjects.size(); i < subObjectsSize; ++i, nBitIndex <<= 1)
+			{
+				const SSubObject& subObj = m_subObjects[i];
+				if (subObj.nType == STATIC_SUB_OBJECT_MESH)  // all the meshes are at the beginning of the array.
+				{
+					CStatObj* const __restrict pStatObj = (CStatObj*)subObj.pStatObj;
+
+					if (pStatObj &&
+						(pStatObj->m_nRenderTrisCount >= 2) &&
+						!(pStatObj->m_nFlags & STATIC_OBJECT_HIDDEN) &&
+						!(*pMask & nBitIndex)
+						)
+					{
+						PrefetchLine(pRenderObject, 0);
+						
+						if (lodValue.LodA() >= 0)
+						{
+						RenderSubObject(pRenderObject, lodValue.LodA(), i, renderTM, passInfo);
+						}
+
+						if (pRenderObjectB && lodValue.LodB()>=0)
+						{
+							PrefetchLine(pRenderObjectB, 0);
+							RenderSubObject(pRenderObjectB, lodValue.LodB(), i, renderTM, passInfo);
+						}
+					}
+				}
+				else
+				{
+					break;
+				}
+			}
+
+			if (GetCVars()->e_DebugDraw)
+			{
+				RenderDebugInfo(pRenderObject, passInfo);
+			}
+		}
+
+		//////////////////////////////////////////////////////////////////////////
+	}
+	else
+	{
+		// draw mesh, don't even try to render childs
+		if (lodValue.LodA() >= 0)
+		{
+		RenderObjectInternal(pRenderObject, lodValue.LodA(), lodValue.DissolveRefA(), true, passInfo);
+		}
+
+		if (lodValue.DissolveRefB() != 255 && lodValue.LodB()>=0) // check here since we're passing in A's ref.
+		{
+			pRenderObject = GetRenderer()->EF_DuplicateRO(pRenderObject, passInfo);
+			RenderObjectInternal(pRenderObject, lodValue.LodB(), lodValue.DissolveRefA(), false, passInfo);
+		}
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////////
+void CStatObj::RenderSubObject(CRenderObject* pRenderObject, int nLod,
+	int nSubObjId, const Matrix34A& renderTM, const SRenderingPassInfo& passInfo)
+{
+	const SSubObject& subObj = m_subObjects[nSubObjId];
+
+	CStatObj* const __restrict pStatObj = (CStatObj*)subObj.pStatObj;
+
+	if (pStatObj == NULL)
+		return;
+
+	SRenderObjData* pOD = 0;
+	if (subObj.pFoliage)
+	{
+		pRenderObject = GetRenderer()->EF_DuplicateRO(pRenderObject, passInfo);
+		pOD = pRenderObject->GetObjData();
+		pOD->m_pSkinningData = subObj.pFoliage->GetSkinningData(pRenderObject->m_II.m_Matrix, passInfo);
+		pOD->m_uniqueObjectId = reinterpret_cast<uintptr_t>(subObj.pFoliage);
+		pRenderObject->m_ObjFlags |= FOB_SKINNED | FOB_DYNAMIC_OBJECT;
+		((CStatObjFoliage*)subObj.pFoliage)->m_pRenderObject = pRenderObject;
+	}
+
+	if (subObj.bIdentityMatrix)
+	{
+		pStatObj->RenderSubObjectInternal(pRenderObject, nLod, passInfo);
+	}
+	else
+	{
+		pRenderObject = GetRenderer()->EF_DuplicateRO(pRenderObject, passInfo);
+		pRenderObject->m_II.m_Matrix = renderTM * subObj.tm;
+		SRenderObjData* pRenderObjectData = pRenderObject->GetObjData();
+		pRenderObjectData->m_uniqueObjectId = pRenderObjectData->m_uniqueObjectId + nSubObjId;
+
+		pStatObj->RenderSubObjectInternal(pRenderObject, nLod, passInfo);
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////////
+void CStatObj::RenderSubObjectInternal(CRenderObject* pRenderObject, int nLod, const SRenderingPassInfo& passInfo)
+{
+	assert(!(m_nFlags & STATIC_OBJECT_HIDDEN));
+	assert(m_nRenderTrisCount);
+
+	m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+	if (m_pParentObject && (m_nFlags & STATIC_OBJECT_MULTIPLE_PARENTS))
+		m_pParentObject->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+
+	assert(!m_pParentObject || m_pParentObject->m_nLastDrawMainFrameId == passInfo.GetMainFrameID());
+
+	assert(!(m_nFlags & STATIC_OBJECT_COMPOUND));
+
+	nLod = CLAMP(nLod, GetMinUsableLod(), (int)m_nMaxUsableLod);
+	assert(nLod < MAX_STATOBJ_LODS_NUM);
+
+	// Skip rendering of this suboject if it is marked as deformable
+	if (GetCVars()->e_MergedMeshes == 1 && nLod == 0 && m_isDeformable)
+		return;
+
+	// try next lod's if selected one is not ready
+	if ((!nLod && m_pRenderMesh && m_pRenderMesh->CanRender()) || !GetCVars()->e_Lods)
+	{
+		PrefetchLine(pRenderObject, 0);
+		RenderRenderMesh(pRenderObject, NULL, passInfo);
+	}
+	else
+	{
+		if (m_pLODs && m_pLODs[nLod])
+		{
+			m_pLODs[nLod]->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+			if (m_pLODs[nLod]->m_pParentObject)
+				m_pLODs[nLod]->m_pParentObject->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+
+			if ((nLod + 1) < MAX_STATOBJ_LODS_NUM && m_pLODs[nLod + 1])
+			{
+				m_pLODs[nLod + 1]->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+				if (m_pLODs[nLod + 1]->m_pParentObject)
+					m_pLODs[nLod + 1]->m_pParentObject->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+			}
+		}
+
+		if (m_pLODs)
+			for (; nLod <= (int)m_nMaxUsableLod; nLod++)
+			{
+				if (m_pLODs[nLod] && m_pLODs[nLod]->m_pRenderMesh && m_pLODs[nLod]->m_pRenderMesh->CanRender())
+				{
+					PrefetchLine(pRenderObject, 0);
+					m_pLODs[nLod]->RenderRenderMesh(pRenderObject, NULL, passInfo);
+					break;
+				}
+			}
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////////
+void CStatObj::RenderObjectInternal(CRenderObject* pRenderObject, int nTargetLod, uint8 uLodDissolveRef, bool dissolveOut, const SRenderingPassInfo& passInfo)
+{
+	if (nTargetLod == -1 || uLodDissolveRef == 255)
+	{
+		return;
+	}
+
+	int nLod = CLAMP(nTargetLod, GetMinUsableLod(), (int)m_nMaxUsableLod);
+	assert(nLod < MAX_STATOBJ_LODS_NUM);
+
+	// Skip rendering of this suboject if it is marked as deformable
+	if (GetCVars()->e_MergedMeshes == 1 && nTargetLod == 0 && m_isDeformable)
+		return;
+
+	if (passInfo.IsShadowPass() && passInfo.GetShadowMapType() == SRenderingPassInfo::SHADOW_MAP_CACHED && pRenderObject->m_pRenderNode)
+	{
+		IShadowCaster* pCaster = static_cast<IShadowCaster*>(pRenderObject->m_pRenderNode);
+		pCaster->m_cStaticShadowLod = nLod;
+	}
+
+	pRenderObject->m_DissolveRef = uLodDissolveRef;
+
+	if (pRenderObject->m_DissolveRef)
+	{
+		if (!(pRenderObject->m_ObjFlags & FOB_DISSOLVE))
+			pRenderObject->m_ObjFlags &= ~FOB_UPDATED_RTMASK;
+		pRenderObject->m_ObjFlags |= FOB_DISSOLVE;
+
+		if (dissolveOut)
+			pRenderObject->m_ObjFlags |= FOB_DISSOLVE_OUT;
+	}
+	else
+	{
+		if ((pRenderObject->m_ObjFlags & FOB_DISSOLVE))
+			pRenderObject->m_ObjFlags &= ~FOB_UPDATED_RTMASK;
+		pRenderObject->m_ObjFlags &= ~FOB_DISSOLVE;
+	}
+
+	// try next lod's if selected one is not ready
+	if ((!nLod && m_pRenderMesh && m_pRenderMesh->CanRender()) || !GetCVars()->e_Lods)
+	{
+		PrefetchLine(pRenderObject, 0);
+		RenderRenderMesh(pRenderObject, NULL, passInfo);
+	}
+	else
+	{
+		if (m_pLODs && m_pLODs[nLod])
+		{
+			m_pLODs[nLod]->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+			if (m_pLODs[nLod]->m_pParentObject)
+				m_pLODs[nLod]->m_pParentObject->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+
+			if ((nLod + 1) < MAX_STATOBJ_LODS_NUM && m_pLODs[nLod + 1])
+			{
+				m_pLODs[nLod + 1]->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+				if (m_pLODs[nLod + 1]->m_pParentObject)
+					m_pLODs[nLod + 1]->m_pParentObject->m_nLastDrawMainFrameId = passInfo.GetMainFrameID();
+			}
+		}
+
+		if (m_pLODs)
+			for (; nLod <= (int)m_nMaxUsableLod; nLod++)
+			{
+				if (m_pLODs[nLod] && m_pLODs[nLod]->m_pRenderMesh && m_pLODs[nLod]->m_pRenderMesh->CanRender())
+				{
+					PrefetchLine(pRenderObject, 0);
+					m_pLODs[nLod]->RenderRenderMesh(pRenderObject, NULL, passInfo);
+					break;
+				}
+			}
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////////
+void CStatObj::RenderRenderMesh(CRenderObject* pRenderObject, SInstancingInfo* pInstInfo, const SRenderingPassInfo& passInfo)
+{
+#if !defined(_RELEASE)
+	//DEBUG - filter which stat objs are rendered
+	if (GetCVars()->e_statObjRenderFilterMode && GetCVars()->e_pStatObjRenderFilterStr && GetCVars()->e_pStatObjRenderFilterStr[0])
+	{
+		if (GetCVars()->e_statObjRenderFilterMode == 1)
+		{
+			//only render elems containing str
+			if (!strstr(m_szFileName.c_str(), GetCVars()->e_pStatObjRenderFilterStr))
+			{
+				return;
+			}
+		}
+		else if (GetCVars()->e_statObjRenderFilterMode == 2)
+		{
+			//exclude elems containing str
+			if (strstr(m_szFileName.c_str(), GetCVars()->e_pStatObjRenderFilterStr))
+			{
+				return;
+			}
+		}
+	}
+
+	if (GetCVars()->e_DebugDraw && (!GetCVars()->e_DebugDrawShowOnlyCompound || (m_bSubObject || m_pParentObject)))
+	{
+		int nLod = 0;
+		if (m_pLod0 && m_pLod0->m_pLODs)
+			for (; nLod < MAX_STATOBJ_LODS_NUM; nLod++)
+			{
+				if (m_pLod0->m_pLODs[nLod] == this)
+				{
+					m_pRenderMesh->SetMeshLod(nLod);
+					break;
+				}
+			}
+
+		if (GetCVars()->e_DebugDrawShowOnlyLod >= 0)
+			if (GetCVars()->e_DebugDrawShowOnlyLod != nLod)
+				return;
+
+		if (RenderDebugInfo(pRenderObject, passInfo))
+			return;
+
+		if (m_bSubObject)
+			pRenderObject = gEnv->pRenderer->EF_DuplicateRO(pRenderObject, passInfo);
+	}
+
+	if (!passInfo.IsShadowPass())
+	{
+		if (GetCVars()->e_StreamCgfDebug == 1)
+		{
+			RenderStreamingDebugInfo(pRenderObject);
+		}
+
+		if (GetCVars()->e_CoverCgfDebug == 1)
+		{
+			RenderCoverInfo(pRenderObject);
+		}
+	}
+#endif
+
+	if (m_pRenderMesh)
+	{
+		CRenderObject* pObj = pRenderObject;
+#if !defined(_RELEASE)
+		if (m_isProxyTooBig)
+		{
+			pObj = GetRenderer()->EF_DuplicateRO(pRenderObject, passInfo);
+			pObj->m_pCurrMaterial = m_pMaterial;
+		}
+#endif
+		m_pRenderMesh->Render(pObj, passInfo);
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////////
+int CStatObj::GetMaxUsableLod()
+{
+	int maxUsable = m_pLod0 ? max((int)m_nMaxUsableLod, (int)m_pLod0->m_nMaxUsableLod) : (int)m_nMaxUsableLod;
+	return min(maxUsable, GetCVars()->e_LodMax);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+int CStatObj::GetMinUsableLod()
+{
+	int minUsable = m_pLod0 ? max((int)m_nMinUsableLod0, (int)m_pLod0->m_nMinUsableLod0) : (int)m_nMinUsableLod0;
+	return max(minUsable, GetCVars()->e_LodMin);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+int CStatObj::FindNearesLoadedLOD(int nLodIn, bool bSearchUp)
+{
+	// make sure requested lod is loaded
+	/*  if(CStatObj * pObjForStreamIn = nLodIn ? m_pLODs[nLodIn] : this)
+	{
+	bool bRenderNodeValid(rParams.pRenderNode && ((int)(void*)(rParams.pRenderNode)>0) && rParams.pRenderNode->m_fWSMaxViewDist);
+	float fImportance = bRenderNodeValid ? (1.f - (rParams.fDistance / rParams.pRenderNode->m_fWSMaxViewDist)) : 0.5f;
+	pObjForStreamIn->UpdateStreamingPrioriryInternal(fImportance);
+	}*/
+
+	// if requested lod is not ready - find nearest ready one
+	int nLod = nLodIn;
+
+	if (nLod == 0 && !GetRenderMesh())
+		nLod++;
+
+	while (nLod && nLod < MAX_STATOBJ_LODS_NUM && (!m_pLODs || !m_pLODs[nLod] || !m_pLODs[nLod]->GetRenderMesh()))
+		nLod++;
+
+	if (nLod >(int)m_nMaxUsableLod)
+	{
+		if (bSearchUp)
+		{
+			nLod = min((int)m_nMaxUsableLod, nLodIn);
+
+			while (nLod && (!m_pLODs || !m_pLODs[nLod] || !m_pLODs[nLod]->GetRenderMesh()))
+				nLod--;
+
+			if (nLod == 0 && !GetRenderMesh())
+				nLod--;
+		}
+		else
+		{
+			nLod = -1;
+		}
+	}
+
+	return nLod;
+}
+
+//////////////////////////////////////////////////////////////////////////
+int CStatObj::AddRef()
+{
+	return CryInterlockedIncrement(&m_nUsers);
 }

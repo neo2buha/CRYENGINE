@@ -7,7 +7,6 @@
 #include <zlib.h>
 #include "ZipFileFormat.h"
 #include "ZipDirStructures.h"
-#include <CryGame/IGame.h>
 
 //////////////////////////////////////////////////////////////////////////
 #ifdef INCLUDE_LIBTOMCRYPT
@@ -190,7 +189,7 @@ bool ZipEncrypt::RSA_VerifyData(const unsigned char** inBuffers, unsigned int* s
 	int sha256 = find_hash("sha256");
 	if (sha256 == -1)
 	{
-	#if !defined(_RELEASE) && !defined(IS_EAAS)
+	#if !defined(_RELEASE)
 		if (g_using_zipencrypt)
 			CryWarning(VALIDATOR_MODULE_SYSTEM, VALIDATOR_ERROR_DBGBRK, "Hash program for RSA_VerifyData could not be found. LibTomCrypt has failed to start.");
 	#endif

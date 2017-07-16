@@ -12,7 +12,6 @@ class CPlayerStateSwim
 public:
 	static void SetParamsFromXml(const IItemParamsNode* pParams) 
 	{
-		ScopedSwitchToGlobalHeap useGlobalHeap;
 		GetSwimParams().SetParamsFromXml( pParams );
 	}
 
@@ -34,7 +33,7 @@ private:
 	float m_headUnderWaterTimer;
 	bool m_onSurface;
 	bool m_bStillDiving;
-	static AudioControlId m_submersionDepthParam;
+	static CryAudio::ControlId m_submersionDepthParam;
 	static float m_previousSubmersionDepth;
 
 	struct CSwimmingParams

@@ -6,6 +6,11 @@
 #include "CryAtomics.h"
 #include <CryCore/BitFiddling.h>
 
+class CryConditionVariable;
+class CrySemaphore;
+class CryFastSemaphore;
+class CryRWLock;
+
 #define THREAD_NAME_LENGTH_MAX 64
 
 enum CryLockType
@@ -13,8 +18,6 @@ enum CryLockType
 	CRYLOCK_FAST      = 1,  //!< A fast potentially (non-recursive) mutex.
 	CRYLOCK_RECURSIVE = 2,  //!< A recursive mutex.
 };
-
-#define CRYLOCK_HAVE_FASTLOCK 1
 
 //! Primitive locks and conditions.
 //! Primitive locks are represented by instance of class CryLockT<Type>.
@@ -28,23 +31,22 @@ template<CryLockType Type> class CryLockT
 //////////////////////////////////////////////////////////////////////////
 typedef CryLockT<CRYLOCK_RECURSIVE> CryCriticalSection;
 typedef CryLockT<CRYLOCK_FAST>      CryCriticalSectionNonRecursive;
-//////////////////////////////////////////////////////////////////////////
 
+//////////////////////////////////////////////////////////////////////////
 //! CryAutoCriticalSection implements a helper class to automatically.
 //! lock critical section in constructor and release on destructor.
 template<class LockClass> class CryAutoLock
 {
-private:
-	LockClass* m_pLock;
-
-	CryAutoLock();
-	CryAutoLock(const CryAutoLock<LockClass>&);
-	CryAutoLock<LockClass>& operator=(const CryAutoLock<LockClass>&);
-
 public:
+	CryAutoLock() = delete;
+	CryAutoLock(const CryAutoLock<LockClass>&) = delete;
+	CryAutoLock<LockClass>& operator=(const CryAutoLock<LockClass>&) = delete;
+
 	CryAutoLock(LockClass& Lock) : m_pLock(&Lock) { m_pLock->Lock(); }
 	CryAutoLock(const LockClass& Lock) : m_pLock(const_cast<LockClass*>(&Lock)) { m_pLock->Lock(); }
 	~CryAutoLock() { m_pLock->Unlock(); }
+private:
+	LockClass* m_pLock;
 };
 
 //! CryOptionalAutoLock implements a helper class to automatically.
@@ -113,6 +115,55 @@ typedef CryAutoLock<CryCriticalSectionNonRecursive> CryAutoCriticalSectionNoRecu
 #define AUTO_LOCK(lock)         AUTO_LOCK_T(CryCriticalSection, lock)
 #define AUTO_LOCK_CS(csLock)    CryAutoCriticalSection __AL__ ## csLock(csLock)
 
+///////////////////////////////////////////////////////////////////////////////
+//! Base class for lockless Producer/Consumer queue, due platforms specific they are implemented in CryThead_platform.h.
+namespace CryMT {
+namespace detail {
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+class SingleProducerSingleConsumerQueueBase
+{
+public:
+	SingleProducerSingleConsumerQueueBase()
+	{}
+
+	void Push(void* pObj, volatile uint32& rProducerIndex, volatile uint32& rConsumerIndex, uint32 nBufferSize, void* arrBuffer, uint32 nObjectSize);
+	void Pop(void* pObj, volatile uint32& rProducerIndex, volatile uint32& rConsumerIndex, uint32 nBufferSize, void* arrBuffer, uint32 nObjectSize);
+};
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+class N_ProducerSingleConsumerQueueBase
+{
+public:
+	N_ProducerSingleConsumerQueueBase()
+	{
+		CryInitializeSListHead(fallbackList);
+	}
+
+	void Push(void* pObj, volatile uint32& rProducerIndex, volatile uint32& rConsumerIndex, volatile uint32& rRunning, void* arrBuffer, uint32 nBufferSize, uint32 nObjectSize, volatile uint32* arrStates);
+	bool Pop(void* pObj, volatile uint32& rProducerIndex, volatile uint32& rConsumerIndex, volatile uint32& rRunning, void* arrBuffer, uint32 nBufferSize, uint32 nObjectSize, volatile uint32* arrStates);
+
+private:
+	SLockFreeSingleLinkedListHeader fallbackList;
+	struct SFallbackList
+	{
+		SLockFreeSingleLinkedListEntry nextEntry;
+		char                           alignment_padding[128 - sizeof(SLockFreeSingleLinkedListEntry)];
+		char                           object[1];         //!< Struct will be overallocated with enough memory for the object
+	};
+};
+
+} // namespace detail
+} // namespace CryMT
+
+//////////////////////////////////////////////////////////////////////////
+namespace CryMT {
+	void CryMemoryBarrier();
+	void CryYieldThread();
+} // namespace CryMT
+
 // Include architecture specific code.
 #if CRY_PLATFORM_WINAPI
 	#include <CryThreading/CryThread_win32.h>
@@ -122,136 +173,6 @@ typedef CryAutoLock<CryCriticalSectionNonRecursive> CryAutoCriticalSectionNoRecu
 // Put other platform specific includes here!
 	#include <CryThreading/CryThread_dummy.h>
 #endif
-
-#if !defined _CRYTHREAD_CONDLOCK_GLITCH
-typedef CryLockT<CRYLOCK_RECURSIVE> CryMutex;
-#endif // !_CRYTHREAD_CONDLOCK_GLITCH
-
-#if !defined _CRYTHREAD_HAVE_RWLOCK && !defined _CRYTHREAD_CONDLOCK_GLITCH
-//! If the architecture specific code does not define a class CryRWLock, then
-//! a default implementation is provided here.
-class CryRWLock
-{
-
-	CryCriticalSection   m_lockExclusiveAccess;
-	CryCriticalSection   m_lockSharedAccessComplete;
-	CryConditionVariable m_condSharedAccessComplete;
-
-	int                  m_nSharedAccessCount;
-	int                  m_nCompletedSharedAccessCount;
-	bool                 m_bExclusiveAccess;
-
-	CryRWLock(const CryRWLock&);
-	CryRWLock& operator=(const CryRWLock&);
-
-	void       AdjustSharedAccessCount()
-	{
-		m_nSharedAccessCount -= m_nCompletedSharedAccessCount;
-		m_nCompletedSharedAccessCount = 0;
-	}
-
-public:
-	CryRWLock()
-		: m_nSharedAccessCount(0),
-		m_nCompletedSharedAccessCount(0),
-		m_bExclusiveAccess(false)
-	{}
-
-	void RLock()
-	{
-		m_lockExclusiveAccess.Lock();
-		if (++m_nSharedAccessCount == INT_MAX)
-		{
-			m_lockSharedAccessComplete.Lock();
-			AdjustSharedAccessCount();
-			m_lockSharedAccessComplete.Unlock();
-		}
-		m_lockExclusiveAccess.Unlock();
-	}
-
-	bool TryRLock()
-	{
-		if (!m_lockExclusiveAccess.TryLock())
-			return false;
-		if (++m_nSharedAccessCount == INT_MAX)
-		{
-			m_lockSharedAccessComplete.Lock();
-			AdjustSharedAccessCount();
-			m_lockSharedAccessComplete.Unlock();
-		}
-		m_lockExclusiveAccess.Unlock();
-		return true;
-	}
-
-	void RUnlock()
-	{
-		Unlock();
-	}
-
-	void WLock()
-	{
-		m_lockExclusiveAccess.Lock();
-		m_lockSharedAccessComplete.Lock();
-		assert(!m_bExclusiveAccess);
-		AdjustSharedAccessCount();
-		if (m_nSharedAccessCount > 0)
-		{
-			m_nCompletedSharedAccessCount -= m_nSharedAccessCount;
-			do
-			{
-				m_condSharedAccessComplete.Wait(m_lockSharedAccessComplete);
-			}
-			while (m_nCompletedSharedAccessCount < 0);
-			m_nSharedAccessCount = 0;
-		}
-		m_bExclusiveAccess = true;
-	}
-
-	bool TryWLock()
-	{
-		if (!m_lockExclusiveAccess.TryLock())
-			return false;
-		if (!m_lockSharedAccessComplete.TryLock())
-		{
-			m_lockExclusiveAccess.Unlock();
-			return false;
-		}
-		assert(!m_bExclusiveAccess);
-		AdjustSharedAccessCount();
-		if (m_nSharedAccessCount > 0)
-		{
-			m_lockSharedAccessComplete.Unlock();
-			m_lockExclusiveAccess.Unlock();
-			return false;
-		}
-		else
-			m_bExclusiveAccess = true;
-		return true;
-	}
-
-	void WUnlock()
-	{
-		Unlock();
-	}
-
-	void Unlock()
-	{
-		if (!m_bExclusiveAccess)
-		{
-			m_lockSharedAccessComplete.Lock();
-			if (++m_nCompletedSharedAccessCount == 0)
-				m_condSharedAccessComplete.NotifySingle();
-			m_lockSharedAccessComplete.Unlock();
-		}
-		else
-		{
-			m_bExclusiveAccess = false;
-			m_lockSharedAccessComplete.Unlock();
-			m_lockExclusiveAccess.Unlock();
-		}
-	}
-};
-#endif // !defined _CRYTHREAD_HAVE_RWLOCK
 
 //! Sync primitive for multiple reads and exclusive locking change access.
 //! Useful in case if you have rarely modified object that needs
@@ -380,6 +301,145 @@ public:
 	#define DEBUG_READLOCK(p)
 	#define DEBUG_MODIFYLOCK(p)
 #endif
+
+///////////////////////////////////////////////////////////////////////////////
+//! Base class for lockless Producer/Consumer queue, due platforms specific they are implemented in CryThead_platform.h.
+namespace CryMT {
+namespace detail {
+
+///////////////////////////////////////////////////////////////////////////////
+inline void SingleProducerSingleConsumerQueueBase::Push(void* pObj, volatile uint32& rProducerIndex, volatile uint32& rConsumerIndex, uint32 nBufferSize, void* arrBuffer, uint32 nObjectSize)
+{
+	// spin if queue is full
+	CSimpleThreadBackOff backoff;
+	while (rProducerIndex - rConsumerIndex == nBufferSize)
+	{
+		backoff.backoff();
+	}
+
+	CryMT::CryMemoryBarrier();
+	char* pBuffer = alias_cast<char*>(arrBuffer);
+	uint32 nIndex = rProducerIndex % nBufferSize;
+
+	memcpy(pBuffer + (nIndex * nObjectSize), pObj, nObjectSize);
+	CryMT::CryMemoryBarrier();
+	rProducerIndex += 1;
+	CryMT::CryMemoryBarrier();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+inline  void SingleProducerSingleConsumerQueueBase::Pop(void* pObj, volatile uint32& rProducerIndex, volatile uint32& rConsumerIndex, uint32 nBufferSize, void* arrBuffer, uint32 nObjectSize)
+{
+	CryMT::CryMemoryBarrier();
+	// busy-loop if queue is empty
+	CSimpleThreadBackOff backoff;
+	while (rProducerIndex - rConsumerIndex == 0)
+	{
+		backoff.backoff();
+	}
+
+	char* pBuffer = alias_cast<char*>(arrBuffer);
+	uint32 nIndex = rConsumerIndex % nBufferSize;
+
+	memcpy(pObj, pBuffer + (nIndex * nObjectSize), nObjectSize);
+	CryMT::CryMemoryBarrier();
+	rConsumerIndex += 1;
+	CryMT::CryMemoryBarrier();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+inline  void N_ProducerSingleConsumerQueueBase::Push(void* pObj, volatile uint32& rProducerIndex, volatile uint32& rConsumerIndex, volatile uint32& rRunning, void* arrBuffer, uint32 nBufferSize, uint32 nObjectSize, volatile uint32* arrStates)
+{
+	CryMT::CryMemoryBarrier();
+	uint32 nProducerIndex;
+	uint32 nConsumerIndex;
+
+	int iter = 0;
+	CSimpleThreadBackOff backoff;
+	do
+	{
+		nProducerIndex = rProducerIndex;
+		nConsumerIndex = rConsumerIndex;
+
+		if (nProducerIndex - nConsumerIndex == nBufferSize)
+		{
+			if (iter++ > CSimpleThreadBackOff::kHardYieldInterval)
+			{
+				uint32 nSizeToAlloc = sizeof(SFallbackList) + nObjectSize - 1;
+				SFallbackList* pFallbackEntry = (SFallbackList*)CryModuleMemalign(nSizeToAlloc, 128);
+				memcpy(pFallbackEntry->object, pObj, nObjectSize);
+				CryMT::CryMemoryBarrier();
+				CryInterlockedPushEntrySList(fallbackList, pFallbackEntry->nextEntry);
+				return;
+			}
+			backoff.backoff();
+			continue;
+		}
+
+		if (CryInterlockedCompareExchange(alias_cast<volatile LONG*>(&rProducerIndex), nProducerIndex + 1, nProducerIndex) == nProducerIndex)
+			break;
+	}
+	while (true);
+
+	CryMT::CryMemoryBarrier();
+	char* pBuffer = alias_cast<char*>(arrBuffer);
+	uint32 nIndex = nProducerIndex % nBufferSize;
+
+	memcpy(pBuffer + (nIndex * nObjectSize), pObj, nObjectSize);
+	CryMT::CryMemoryBarrier();
+	arrStates[nIndex] = 1;
+	CryMT::CryMemoryBarrier();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+inline  bool N_ProducerSingleConsumerQueueBase::Pop(void* pObj, volatile uint32& rProducerIndex, volatile uint32& rConsumerIndex, volatile uint32& rRunning, void* arrBuffer, uint32 nBufferSize, uint32 nObjectSize, volatile uint32* arrStates)
+{
+	CryMT::CryMemoryBarrier();
+
+	// busy-loop if queue is empty
+	CSimpleThreadBackOff backoff;
+	if (rRunning && rProducerIndex - rConsumerIndex == 0)
+	{
+		while (rRunning && rProducerIndex - rConsumerIndex == 0)
+		{
+			backoff.backoff();
+		}
+	}
+
+	if (rRunning == 0 && rProducerIndex - rConsumerIndex == 0)
+	{
+		SFallbackList* pFallback = (SFallbackList*)CryInterlockedPopEntrySList(fallbackList);
+		IF (pFallback, 0)
+		{
+			memcpy(pObj, pFallback->object, nObjectSize);
+			CryModuleMemalignFree(pFallback);
+			return true;
+		}
+		// if the queue was empty, make sure we really are empty
+		return false;
+	}
+
+	backoff.reset();
+	while (arrStates[rConsumerIndex % nBufferSize] == 0)
+	{
+		backoff.backoff();
+	}
+
+	char* pBuffer = alias_cast<char*>(arrBuffer);
+	uint32 nIndex = rConsumerIndex % nBufferSize;
+
+	memcpy(pObj, pBuffer + (nIndex * nObjectSize), nObjectSize);
+	CryMT::CryMemoryBarrier();
+	arrStates[nIndex] = 0;
+	CryMT::CryMemoryBarrier();
+	rConsumerIndex += 1;
+	CryMT::CryMemoryBarrier();
+
+	return true;
+}
+
+} // namespace detail
+} // namespace CryMT
 
 // Include all multithreading containers.
 #include "MultiThread_Containers.h"

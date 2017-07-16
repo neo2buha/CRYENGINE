@@ -187,7 +187,6 @@ void CGeomCacheRenderNode::Render(const struct SRendParams& rendParams, const SR
 	SRendParams drawParams = rendParams;
 
 	drawParams.pMatrix = &m_matrix;
-	drawParams.nClipVolumeStencilRef = 0;
 
 	static ICVar* pGraphicsPipelineCV = gEnv->pConsole->GetCVar("r_GraphicsPipeline");
 	static ICVar* pMotionVectorsCV = gEnv->pConsole->GetCVar("r_MotionVectors");
@@ -244,7 +243,7 @@ void CGeomCacheRenderNode::Render(const struct SRendParams& rendParams, const SR
 									continue;
 								}
 
-								CRendElementBase* RESTRICT_POINTER pREMesh = chunk.pRE;
+								CRenderElement* RESTRICT_POINTER pREMesh = chunk.pRE;
 								IRenderShaderResources* pR = shaderItem.m_pShaderResources;
 								IShader* RESTRICT_POINTER pS = shaderItem.m_pShader;
 
@@ -277,14 +276,14 @@ void CGeomCacheRenderNode::Render(const struct SRendParams& rendParams, const SR
 										{
 											uint8 hashableData[] =
 											{
-												0,                                                                 0,          0, 0, 0, 0, 0, 0,
+												0, 0, 0, 0, 0, 0, 0, 0,  //this part will be filled with the address of pCREGeomCache
 												(uint8)std::distance(pCREGeomCache->GetMeshFillDataPtr()->begin(), &meshData),
 												(uint8)std::distance(meshData.m_pRenderMesh->GetChunks().begin(),  &chunk),
 												(uint8)std::distance(meshData.m_instances.begin(),                 &instance)
 											};
 
-											memcpy(hashableData, pCREGeomCache, sizeof(pCREGeomCache));
-											pRenderObjData->m_uniqueObjectId = static_cast<uintptr_t>(XXH64(hashableData, sizeof(hashableData), 0));
+											memcpy(hashableData, &pCREGeomCache, sizeof(CREGeomCache*)); //copy the address of the pCREGeomCache into our hash-data-object
+											pRenderObjData->m_uniqueObjectId = static_cast<uintptr_t>(XXH64(hashableData, sizeof(hashableData), 0)) + reinterpret_cast<uintptr_t>(this);
 
 											pCREGeomCache->SetupMotionBlur(pInstanceRenderObject, passInfo);
 										}
@@ -371,6 +370,14 @@ void CGeomCacheRenderNode::GetMemoryUsage(ICrySizer* pSizer) const
 {
 	SIZER_COMPONENT_NAME(pSizer, "GeomCache");
 	pSizer->AddObject(this, sizeof(*this));
+}
+
+//////////////////////////////////////////////////////////////////////////
+void CGeomCacheRenderNode::UpdateStreamingPriority(const SUpdateStreamingPriorityContext& ctx)
+{
+	float fObjScale = max(0.001f, GetMatrix().GetColumn0().GetLength());
+	float fInvObjScale = 1.0f / fObjScale;
+	UpdateStreamableComponents(ctx.importance, ctx.distance, ctx.bFullUpdate, ctx.lod, fInvObjScale, ctx.bFullUpdate);
 }
 
 void CGeomCacheRenderNode::SetMatrix(const Matrix34& matrix)
@@ -872,7 +879,6 @@ void CGeomCacheRenderNode::FillRenderObject(const SRendParams& rendParams, const
 	IRenderer* const pRenderer = GetRenderer();
 
 	pRenderObject->m_pRenderNode = rendParams.pRenderNode;
-	pRenderObject->m_fSort = rendParams.fCustomSortOffset;
 	pRenderObject->m_fDistance = rendParams.fDistance;
 
 	pRenderObject->m_ObjFlags |= FOB_TRANS_MASK | FOB_DYNAMIC_OBJECT;
@@ -966,7 +972,7 @@ _smart_ptr<IRenderMesh> CGeomCacheRenderNode::SetupDynamicRenderMesh(SGeomCacheR
 	}
 
 	_smart_ptr<IRenderMesh> pRenderMesh = gEnv->pRenderer->CreateRenderMeshInitialized(NULL, meshData.m_numVertices,
-	                                                                                   eVF_P3F_C4B_T2F, NULL, numIndices, prtTriangleList,
+	                                                                                   EDefaultInputLayouts::P3F_C4B_T2F, NULL, numIndices, prtTriangleList,
 	                                                                                   "GeomCacheDynamicMesh", m_pGeomCache->GetFilePath(), eRMT_Dynamic);
 
 	pRenderMesh->LockForThreadAccess();
@@ -1078,7 +1084,7 @@ IStatObj* CGeomCacheRenderNode::GetStandIn(const EStandInType type) const
 	return NULL;
 }
 
-void CGeomCacheRenderNode::DebugDraw(const SGeometryDebugDrawInfo& info, float fExtrudeScale, uint nodeIndex) const
+void CGeomCacheRenderNode::DebugDraw(const SGeometryDebugDrawInfo& info, uint nodeIndex) const
 {
 	CryAutoLock<CryCriticalSection> fillLock(m_fillCS);
 
@@ -1095,29 +1101,29 @@ void CGeomCacheRenderNode::DebugDraw(const SGeometryDebugDrawInfo& info, float f
 			{
 				const std::vector<SGeomCacheStaticNodeData>& staticNodeData = m_pGeomCache->GetStaticNodeData();
 				nodeIndex = std::min(nodeIndex, (uint)(staticNodeData.size() - 1));
-				DebugDrawRec(info, fExtrudeScale, nodeIndex, staticNodeData);
+				DebugDrawRec(info, nodeIndex, staticNodeData);
 			}
 			break;
 		}
 	case eStandInType_Default:
 		{
-			m_pStandIn->DebugDraw(info, fExtrudeScale);
+			m_pStandIn->DebugDraw(info);
 			break;
 		}
 	case eStandInType_FirstFrame:
 		{
-			m_pFirstFrameStandIn->DebugDraw(info, fExtrudeScale);
+			m_pFirstFrameStandIn->DebugDraw(info);
 			break;
 		}
 	case eStandInType_LastFrame:
 		{
-			m_pLastFrameStandIn->DebugDraw(info, fExtrudeScale);
+			m_pLastFrameStandIn->DebugDraw(info);
 			break;
 		}
 	}
 }
 
-void CGeomCacheRenderNode::DebugDrawRec(const SGeometryDebugDrawInfo& info, float fExtrudeScale,
+void CGeomCacheRenderNode::DebugDrawRec(const SGeometryDebugDrawInfo& info,
                                         uint& currentNodeIndex, const std::vector<SGeomCacheStaticNodeData>& staticNodeData) const
 {
 	const SGeomCacheStaticNodeData& currentNodeData = staticNodeData[currentNodeIndex];
@@ -1141,7 +1147,7 @@ void CGeomCacheRenderNode::DebugDrawRec(const SGeometryDebugDrawInfo& info, floa
 					SGeometryDebugDrawInfo subInfo = info;
 					subInfo.tm = pieceMatrix;
 
-					pRenderMesh->DebugDraw(subInfo, ~0, fExtrudeScale);
+					pRenderMesh->DebugDraw(subInfo, ~0);
 					break;
 				}
 			}
@@ -1153,7 +1159,7 @@ void CGeomCacheRenderNode::DebugDrawRec(const SGeometryDebugDrawInfo& info, floa
 	const uint32 numChildren = currentNodeData.m_numChildren;
 	for (uint32 i = 0; i < numChildren; ++i)
 	{
-		DebugDrawRec(info, fExtrudeScale, currentNodeIndex, staticNodeData);
+		DebugDrawRec(info, currentNodeIndex, staticNodeData);
 	}
 }
 
@@ -1293,7 +1299,7 @@ void CGeomCacheRenderNode::InstancingDebugDrawRec(uint& currentNodeIndex, const 
 
 					SGeometryDebugDrawInfo info;
 					info.bNoLines = true;
-					info.bExtrude = false;
+					info.bDrawInFront = false;
 					info.tm = pieceMatrix;
 
 					const uint64 kMul = 0x9ddfea08eb382d69ULL;

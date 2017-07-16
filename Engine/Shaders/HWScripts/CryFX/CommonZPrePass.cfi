@@ -19,34 +19,38 @@ struct pixout_zprepass
 #endif
 };
 
-vert2fragZPrepass Common_ZPrepassVS(app2vertZGeneral IN)
+vert2fragZPrepass Common_ZPrepassVS(app2vertZGeneral IN_common)
 {
 	vert2fragZPrepass OUT = (vert2fragZPrepass)0;
+
+	app2vertZGeneral IN = IN_common;
+#if %TEMP_TERRAIN
+	IN.vertCommon.Position.z = IN_common.vertCommon.baseTC.x;
+#endif
+
 	streamPos vertPassPos = (streamPos)0;
 	streamPos_FromZ(IN, vertPassPos);
-
-	OUT.HPosition = Pos_VS_General(g_VS_ViewProjZeroMatr, vertPassPos);
 	
+#if %TEMP_TERRAIN
+	OUT.HPosition = Pos_VS_Terrain(0.0005f, g_VS_ViewProjZeroMatr, vertPassPos);
+#else  
+	OUT.HPosition = Pos_VS_General(g_VS_ViewProjZeroMatr, vertPassPos);
+#endif
+
 #if %_RT_ALPHATEST
-    // For regular materials using alpha test, we use PB_AlphaTest
-	int nInstance = 0;
-	#if %_RT_ENVIRONMENT_CUBEMAP
-		nInstance = vertPassPos.nInstance;
-	#endif
-    float4 fAlphaTest = Get_SPI_AlphaTest(nInstance);
+	_TCModify(vertPassPos.baseTC, OUT.baseTC, vertPassPos.Position, vertPassPos.ObjToTangentSpace[2], TS_DIFFUSE);
+	OUT.baseTC.wz = float2(Get_MaterialAlphaTest(), Get_SPI_Dissolve());
 
 	// todo: generalize alpha testing code
-	OUT.baseTC = vertPassPos.baseTC; 
-	OUT.baseTC.wz = fAlphaTest.wx;
 	#if %LEAVES
 		float3 worldTangentS = mul((const float3x3)vertPassPos.InstMatrix, vertPassPos.ObjToTangentSpace[0]);
 		float3 worldTangentT = mul((const float3x3)vertPassPos.InstMatrix, vertPassPos.ObjToTangentSpace[1]);
 		float3 worldTangentN = mul((const float3x3)vertPassPos.InstMatrix, vertPassPos.ObjToTangentSpace[2]);
 		OUT.baseTC.w = ParallelOpacityFalloff(vertPassPos.WorldPos.xyz, worldTangentN.xyz, CapOpacityFalloff, OUT.baseTC.w);
 	#endif
-#endif
+#endif 
 
-	return OUT;
+  return OUT;
 }
 
 pixout_zprepass Common_ZPrepassPS(vert2fragZPrepass IN)
@@ -71,6 +75,7 @@ technique ZPrepass
 	{
 		VertexShader = Common_ZPrepassVS() ZVS;
 		PixelShader = Common_ZPrepassPS() ZPS;
+		GeometryShader = $AutoGS_MultiRes();
 
 		ZEnable = true;
 		ZWriteEnable = true; 

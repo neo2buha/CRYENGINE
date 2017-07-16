@@ -25,9 +25,12 @@ struct IShader;
 struct IShaderPublicParams;
 struct IMaterial;
 struct IMaterialManager;
+struct IRenderShaderResources;
 class CCamera;
 struct CMaterialCGF;
 struct CRenderChunk;
+struct SEfTexModificator;
+struct SInputShaderResources;
 
 #include <CryRenderer/Tarray.h>
 
@@ -76,14 +79,14 @@ enum EMaterialFlags
 	MTL_FLAG_RAYCAST_PROXY             = 0x100000,
 	MTL_FLAG_REQUIRE_NEAREST_CUBEMAP   = 0x200000,       //!< Materials with alpha blending requires special processing for shadows.
 	MTL_FLAG_CONSOLE_MAT               = 0x400000,
-	MTL_FLAG_DELETE_PENDING            = 0x800000,       //!< Internal use only.
-	MTL_FLAG_BLEND_TERRAIN             = 0x1000000
+	MTL_FLAG_BLEND_TERRAIN             = 0x1000000,
+	MTL_FLAG_TRACEABLE_TEXTURE         = 0x2000000,      //!< Diffuse texture keeps low-res copy for raytracing (in decals, for instance)
 };
 
-#define MTL_FLAGS_SAVE_MASK     (MTL_FLAG_WIRE | MTL_FLAG_2SIDED | MTL_FLAG_ADDITIVE | MTL_FLAG_DETAIL_DECAL | MTL_FLAG_LIGHTING | \
+#define MTL_FLAGS_SAVE_MASK     (MTL_FLAG_WIRE | MTL_FLAG_2SIDED | MTL_FLAG_ADDITIVE | MTL_FLAG_DETAIL_DECAL | MTL_FLAG_LIGHTING | MTL_FLAG_TRACEABLE_TEXTURE | \
   MTL_FLAG_NOSHADOW | MTL_FLAG_MULTI_SUBMTL | MTL_FLAG_SCATTER | MTL_FLAG_REQUIRE_FORWARD_RENDERING | MTL_FLAG_HIDEONBREAK | MTL_FLAG_UIMATERIAL | MTL_64BIT_SHADERGENMASK | MTL_FLAG_REQUIRE_NEAREST_CUBEMAP | MTL_FLAG_CONSOLE_MAT | MTL_FLAG_BLEND_TERRAIN)
 
-#define MTL_FLAGS_TEMPLATE_MASK (MTL_FLAG_WIRE | MTL_FLAG_2SIDED | MTL_FLAG_ADDITIVE | MTL_FLAG_DETAIL_DECAL | MTL_FLAG_LIGHTING | \
+#define MTL_FLAGS_TEMPLATE_MASK (MTL_FLAG_WIRE | MTL_FLAG_2SIDED | MTL_FLAG_ADDITIVE | MTL_FLAG_DETAIL_DECAL | MTL_FLAG_LIGHTING | MTL_FLAG_TRACEABLE_TEXTURE | \
   MTL_FLAG_NOSHADOW | MTL_FLAG_SCATTER | MTL_FLAG_REQUIRE_FORWARD_RENDERING | MTL_FLAG_HIDEONBREAK | MTL_FLAG_UIMATERIAL | MTL_64BIT_SHADERGENMASK | MTL_FLAG_REQUIRE_NEAREST_CUBEMAP | MTL_FLAG_BLEND_TERRAIN)
 
 //! Post-effects flags.
@@ -97,7 +100,7 @@ enum EPostEffectFlags
 };
 
 //! Bit offsets for shader layer flags.
-enum EMaterialLayerFlags
+enum EMaterialLayerFlags : uint32
 {
 	// Active layers flags
 	MTL_LAYER_FROZEN        = 0x0001,
@@ -293,6 +296,7 @@ struct IMaterial
 
 	//! Returns true if streamed in.
 	virtual bool IsStreamedIn(const int nMinPrecacheRoundIds[MAX_STREAM_PREDICTION_ZONES], IRenderMesh* pRenderMesh) const = 0;
+	virtual bool IsStreamedIn(const int nMinPrecacheRoundIds[MAX_STREAM_PREDICTION_ZONES]) const = 0;
 
 	//! Sub-material access.
 	//! Sets number of child sub materials holded by this material.
@@ -354,17 +358,15 @@ struct IMaterial
 
 	virtual size_t GetResourceMemoryUsage(ICrySizer* pSizer) = 0;
 
-	//! Makes this specific material enter sketch mode.
-	//! \param mode Only the following modes are supported: 0=no sketch, 1=normal sketch mode, 2=fast sketch mode.
-	//! \see I3DEngine::LoadCGF
-	virtual void SetSketchMode(int mode) = 0;
-
 	// Debug routine.
 	//! Trace leaking materials by callstack.
 	virtual const char* GetLoadingCallstack() = 0;
 
 	//! Requests texture streamer to start loading textures asynchronously.
 	virtual void RequestTexturesLoading(const float fMipFactor) = 0;
+	//! Force texture streamer to start and finish loading textures asynchronously but within one frame, disregarding mesh visibility etc.
+	virtual void ForceTexturesLoading(const float fMipFactor) = 0;
+	virtual void ForceTexturesLoading(const int iScreenTexels) = 0;
 
 	virtual void PrecacheMaterial(const float fEntDistance, struct IRenderMesh* pRenderMesh, bool bFullUpdate, bool bDrawNear = false) = 0;
 

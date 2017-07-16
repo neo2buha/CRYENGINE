@@ -10,6 +10,8 @@
 #include "ObjMan.h"
 #include <CryThreading/IJobManager.h>
 #include <CryThreading/IJobManager_JobDelegator.h>
+#include <CryEntitySystem/IEntity.h>
+
 #define SMALL_MESH_NUM_INDEX 30
 
 #pragma warning(disable: 4244)
@@ -125,7 +127,7 @@ void CStatObj::PhysicalizeCompiled(CNodeCGF* pNode, int bAppend)
 				FileWarning(0, GetFilePath(), "Phys proxy rejected due to triangle count limit, %d > %d (%s)", pmd->nTris, GetCVars()->e_PhysProxyTriLimit, GetFilePath());
 				GetPhysicalWorld()->GetGeomManager()->UnregisterGeometry(pPhysGeom);
 				m_isProxyTooBig = true;
-				m_pMaterial = Get3DEngine()->GetMaterialManager()->LoadMaterial("EngineAssets/Materials/PhysProxyTooBig");
+				m_pMaterial = Get3DEngine()->GetMaterialManager()->LoadMaterial("%ENGINE%/EngineAssets/Materials/PhysProxyTooBig");
 			}
 			else
 				AssignPhysGeom(nPhysGeomType + PHYS_GEOM_TYPE_DEFAULT, pPhysGeom, bAppend, /*bLoading*/ 1);
@@ -1687,8 +1689,9 @@ IStatObj* CStatObj::UpdateVertices(strided_pointer<Vec3> pVtx, strided_pointer<V
 			if (m_hasClothTangentsData && m_pClothTangentsData)
 				mesh->UnlockStream(VSF_TANGENTS);
 			mesh->UnlockStream(VSF_GENERAL);
-			mesh->UnLockForThreadAccess();
 		}
+
+		mesh->UnLockForThreadAccess();
 	}
 	return pObj;
 }
@@ -1968,7 +1971,15 @@ int CStatObj::Physicalize(IPhysicalEntity* pent, pe_geomparams* pgp, int id, con
 			// add all solid and non-colliding geoms as individual parts
 			for (i = 0; i < m_arrPhysGeomInfo.GetGeomCount(); i++)
 				if (m_arrPhysGeomInfo.GetGeomType(i) == PHYS_GEOM_TYPE_DEFAULT)
+				{
+					int flags1 = pgp->flags;
+					if (m_arrPhysGeomInfo[i]->surface_idx < m_arrPhysGeomInfo[i]->nMats)
+						if (ISurfaceType* pMat = pSurfaceMan->GetSurfaceType(m_arrPhysGeomInfo[i]->pMatMapping[m_arrPhysGeomInfo[i]->surface_idx]))
+							if (pMat->GetPhyscalParams().collType >= 0)
+								(pgp->flags &= ~(geom_collides | geom_floats)) |= pMat->GetPhyscalParams().collType;
 					res = pent->AddGeometry(m_arrPhysGeomInfo[i], pgp, id);
+					pgp->flags = flags1;
+				}
 			pgp->idmatBreakable = -1;
 			for (i = 0; i < m_arrPhysGeomInfo.GetGeomCount(); i++)
 				if (m_arrPhysGeomInfo.GetGeomType(i) == PHYS_GEOM_TYPE_NO_COLLIDE)
@@ -2023,7 +2034,7 @@ int CStatObj::PhysicalizeSubobjects(IPhysicalEntity* pent, const Matrix34* pMtx,
 	for (i = j = 0; i < nObj; i++)
 		if (pSubObj = GetSubObject(i))
 			j += pSubObj->pStatObj && pSubObj->pStatObj->GetPhysGeom(0) != 0;
-	id0 = id0 < 0 ? 0 : AllocPartIdRange(id0, j);
+	id0 = id0 < 0 ? 0 : EntityPhysicsUtils::AllocPartIdRange(id0, j);
 
 	for (i = 0; i < nObj; i++)
 		if ((pSubObj = GetSubObject(i))->nType == STATIC_SUB_OBJECT_MESH && pSubObj->pStatObj && pSubObj->pStatObj->GetPhysGeom() &&
@@ -2968,10 +2979,10 @@ void CStatObj::AnalyzeFoliage(IRenderMesh* pRenderMesh, CContentCGF* pCGF)
 			dstSpine.iAttachSeg = srcSpine.iAttachSeg;
 			dstSpine.nVtx = nVtx;
 
-			COMPILE_TIME_ASSERT(sizeof(Vec3) == sizeof(dstSpine.pVtx[0]) && sizeof(Vec3) == sizeof(srcSpine.pVtx[0]));
+			static_assert(sizeof(Vec3) == sizeof(dstSpine.pVtx[0]) && sizeof(Vec3) == sizeof(srcSpine.pVtx[0]), "Invalid type size!");
 			memcpy(dstSpine.pVtx = new Vec3[nVtx], srcSpine.pVtx, sizeof(Vec3) * nVtx);
 
-			COMPILE_TIME_ASSERT(sizeof(Vec4) == sizeof(dstSpine.pSegDim[0]) && sizeof(Vec4) == sizeof(srcSpine.pSegDim[0]));
+			static_assert(sizeof(Vec4) == sizeof(dstSpine.pSegDim[0]) && sizeof(Vec4) == sizeof(srcSpine.pSegDim[0]), "Invalid type size!");
 			memcpy(dstSpine.pSegDim = new Vec4[nVtx], srcSpine.pSegDim, sizeof(Vec4) * nVtx);
 
 			dstSpine.pVtxCur = new Vec3[nVtx];
@@ -3688,10 +3699,10 @@ CStatObjFoliage::~CStatObjFoliage()
 	m_prev->m_next = m_next;
 	if (m_pStatObj)
 		m_pStatObj->Release();
+	if (*m_ppThis == this)
+		*m_ppThis = nullptr;
 	if (!m_bDelete)
 	{
-		if (*m_ppThis == this)
-			*m_ppThis = 0;
 		if (m_pRenderObject)
 		{
 			m_pRenderObject->m_ObjFlags &= ~(FOB_SKINNED);

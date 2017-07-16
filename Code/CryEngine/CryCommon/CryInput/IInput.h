@@ -12,6 +12,8 @@
 #include <CryCore/Platform/platform.h>
 #include <CryString/CryName.h>
 
+#include <CrySystem/IEngineModule.h>
+
 struct ISystem;
 
 enum EModifierMask
@@ -60,6 +62,7 @@ enum EInputDeviceType
 	eIDT_Keyboard,
 	eIDT_Mouse,
 	eIDT_Joystick,
+	eIDT_EyeTracker,
 	eIDT_Gamepad,
 	eIDT_MotionController,
 	eIDT_Unknown = 0xff,
@@ -103,14 +106,15 @@ inline bool   operator>(const char* str, const TKeyName& n)  { return n > str; }
 
 #endif //USE_CRY_NAME_FOR_KEY_NAMES
 
-#define KI_KEYBOARD_BASE 0
-#define KI_MOUSE_BASE    256
-#define KI_XINPUT_BASE   512
-#define KI_ORBIS_BASE    1024
-#define KI_MOTION_BASE   2048
-#define KI_SYS_BASE      4096
+#define KI_KEYBOARD_BASE   0
+#define KI_MOUSE_BASE      256
+#define KI_XINPUT_BASE     512
+#define KI_ORBIS_BASE      1024
+#define KI_MOTION_BASE     2048
+#define KI_EYETRACKER_BASE 4096
+#define KI_SYS_BASE        8192
 
-enum EKeyId
+enum EKeyId : uint32
 {
 	eKI_Escape = KI_KEYBOARD_BASE,
 	eKI_1,
@@ -344,6 +348,10 @@ enum EKeyId
 	eKI_Motion_OculusTouch_FirstTriggerIndex = eKI_Motion_OculusTouch_L1,
 	eKI_Motion_OculusTouch_LastTriggerIndex  = eKI_Motion_OculusTouch_R2,
 
+	// Eye Tracker
+	eKI_EyeTracker_X = KI_EYETRACKER_BASE,
+	eKI_EyeTracker_Y,
+
 	// OpenVR
 	eKI_Motion_OpenVR_System = KI_MOTION_BASE + eKI_Motion_OculusTouch_NUM_SYMBOLS,
 	eKI_Motion_OpenVR_ApplicationMenu,
@@ -444,13 +452,14 @@ struct SFFTriggerOutputData
 	};
 
 	float  leftGain, rightGain;
+	float  leftStrength, rightStrength;
 	uint16 leftEnv, rightEnv;
 	uint32 flags;
 
 	SFFTriggerOutputData()  { Init(Initial::ZeroIt); }
 	SFFTriggerOutputData(Initial::Value v)  { Init(v); }
-	SFFTriggerOutputData(bool leftTouchToActivate, bool rightTouchToActivate, float lTrigger, float rTrigger, uint16 lTriggerEnv, uint16 rTriggerEnv) :
-		leftGain(lTrigger), rightGain(rTrigger), leftEnv(lTriggerEnv), rightEnv(rTriggerEnv)
+	SFFTriggerOutputData(bool leftTouchToActivate, bool rightTouchToActivate, float lTrigger, float rTrigger, float lStrength, float rStrength, uint16 lTriggerEnv, uint16 rTriggerEnv) :
+		leftGain(lTrigger), rightGain(rTrigger), leftStrength(lStrength), rightStrength(rStrength), leftEnv(lTriggerEnv), rightEnv(rTriggerEnv)
 	{
 		SetFlag(Flags::LeftTouchToActivate, leftTouchToActivate);
 		SetFlag(Flags::RightTouchToActivate, rightTouchToActivate);
@@ -461,13 +470,15 @@ struct SFFTriggerOutputData
 		if (v == Initial::ZeroIt)
 		{
 			flags = 0;
-			leftGain = rightGain = 0.f;
+			leftGain = rightGain = 0.0f;
+			leftStrength = rightStrength = 0.0f;
 			leftEnv = rightEnv = 0;
 		}
 		else if (v == Initial::Default)
 		{
 			flags = 0;
-			leftGain = rightGain = 1.f;
+			leftGain = rightGain = 1.0f;
+			leftStrength = rightStrength = 0.0f;
 			leftEnv = rightEnv = 4;
 		}
 	}
@@ -685,7 +696,7 @@ enum KIN_SKELETON_POSITION_INDEX
 
 #define KIN_IDENTITY_MAX_ENROLLMENT_COUNT 8
 
-enum KIN_IDENTITY_ENROLLMENT
+enum KIN_IDENTITY_ENROLLMENT : uint32
 {
 	KIN_IDENTITY_ENROLLMENT_INDEX_CALL_IDENTIFY = 0xFFFFFFFF,
 	KIN_IDENTITY_ENROLLMENT_INDEX_UNKNOWN       = 0xFFFFFFFE,
@@ -1052,6 +1063,15 @@ struct IKinectInput
 	// </interfuscator:shuffle>
 };
 
+struct IEyeTrackerInput
+{
+	// <interfuscator:shuffle>
+	virtual ~IEyeTrackerInput() {};
+
+	virtual bool Init() = 0;
+	virtual void Update() = 0;
+};
+
 //////////////////////////////////////////////////////////////////////////
 struct IKinectInputListener
 {
@@ -1149,7 +1169,7 @@ struct IInputDevice
 	virtual void                SetUniqueId(uint8 const uniqueId) = 0;
 	virtual const char*         GetKeyName(const SInputEvent& event) const = 0;
 	virtual const char*         GetKeyName(const EKeyId keyId) const = 0;
-	virtual char                GetInputCharAscii(const SInputEvent& event) = 0;
+	virtual uint32              GetInputCharUnicode(const SInputEvent& event) = 0;
 	virtual const char*         GetOSKeyName(const SInputEvent& event) = 0;
 	virtual SInputSymbol*       LookupSymbol(EKeyId id) const = 0;
 	virtual const SInputSymbol* GetSymbolByName(const char* name) const = 0;
@@ -1163,6 +1183,11 @@ struct IInputDevice
 	virtual void SetDeadZone(float fThreshold) = 0;
 	virtual void RestoreDefaultDeadZone() = 0;
 	// </interfuscator:shuffle>
+};
+
+struct IInputEngineModule : public Cry::IDefaultModule
+{
+	CRYINTERFACE_DECLARE(IInputEngineModule, 0x2C8744B167944FE0, 0x80038FC3ADE9076A);
 };
 
 //! Interface to the Input system.
@@ -1233,10 +1258,10 @@ struct IInput
 	//! \return Translated key name.
 	virtual const char* GetKeyName(EKeyId keyId) const = 0;
 
-	//! Gets an input char translated to ascii from the event.
+	//! Gets an input char translated to unicode from the event.
 	//! The function should internally dispatch to all managed input devices and return the first recognized event.
 	//! \param event Input event to translate into a name.
-	virtual char GetInputCharAscii(const SInputEvent& event) = 0;
+	virtual uint32 GetInputCharUnicode(const SInputEvent& event) = 0;
 
 	//! Lookups a symbol for a given symbol and key ids.
 	virtual SInputSymbol* LookupSymbol(EInputDeviceType deviceType, int deviceIndex, EKeyId keyId) = 0;
@@ -1321,6 +1346,10 @@ struct IInput
 	//////////////////////////////////////////////////////////////////////////
 	// SDL
 	virtual bool GrabInput(bool bGrab) = 0;
+
+	//! Allows for Sandbox to intercept and modify events prior to system wide sending.
+	//! \return True if the event is supposed to be broadcasted.
+	bool (* OnFilterInputEvent)(SInputEvent*);
 
 	// </interfuscator:shuffle>
 };

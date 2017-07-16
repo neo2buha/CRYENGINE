@@ -2,28 +2,29 @@
 
 #pragma once
 #include <QObject>
+#include <CrySandbox/CrySignal.h>
 
 namespace ACE
 {
 class IAudioSystemEditor;
-}
 
-class CImplementationManager : public QObject
+class CImplementationManager final : public QObject
 {
 	Q_OBJECT
 
 public:
 	CImplementationManager();
-	virtual ~CImplementationManager();
+	virtual ~CImplementationManager() override;
 
 	bool                     LoadImplementation();
 	void                     Release();
 	ACE::IAudioSystemEditor* GetImplementation();
 
-signals:
-	void ImplementationChanged();
+	CCrySignal<void()> signalImplementationAboutToChange;
+	CCrySignal<void()> signalImplementationChanged;
 
 private:
 	ACE::IAudioSystemEditor* ms_pAudioSystemImpl;
 	HMODULE                  ms_hMiddlewarePlugin;
 };
+} // namespace ACE

@@ -305,6 +305,9 @@ private:
 
 	bool   m_bInstalledToHDD;
 
+	char m_szEngineRootDir[_MAX_PATH];
+	uint m_szEngineRootDirStrLen;
+
 	// this is the list of MOD subdirectories that will be prepended to the actual relative file path
 	// they all have trailing forward slash. "" means the root dir
 	std::vector<string> m_arrMods;
@@ -452,8 +455,6 @@ public: // ---------------------------------------------------------------------
 
 	void                Register(CCachedFileData* p)
 	{
-		ScopedSwitchToGlobalHeap globalHeap;
-
 		// actually, registration may only happen when the set is already locked, but for generality..
 		AUTO_MODIFYLOCK(m_csCachedFiles);
 		m_setCachedFiles.push_back(p);

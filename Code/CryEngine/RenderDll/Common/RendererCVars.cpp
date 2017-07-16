@@ -20,6 +20,8 @@
 
 //////////////////////////////////////////////////////////////////////////
 int CRendererCVars::CV_r_GraphicsPipeline;
+int CRendererCVars::CV_r_GraphicsPipelineMobile;
+int CRendererCVars::CV_r_GraphicsPipelinePassScheduler;
 int CRendererCVars::CV_r_PostProcess_CB;
 int CRendererCVars::CV_r_PostProcess;
 AllocateConstIntCVar(CRendererCVars, CV_r_NightVision);
@@ -46,6 +48,7 @@ int CRendererCVars::CV_r_FullscreenPreemption = 1;
 #endif
 AllocateConstIntCVar(CRendererCVars, CV_r_SyncToFrameFence);
 AllocateConstIntCVar(CRendererCVars, CV_e_DebugTexelDensity);
+AllocateConstIntCVar(CRendererCVars, CV_e_DebugDraw);
 int CRendererCVars::CV_r_minimizeLatency = 0;
 AllocateConstIntCVar(CRendererCVars, CV_r_statsMinDrawcalls);
 AllocateConstIntCVar(CRendererCVars, CV_r_stats);
@@ -72,6 +75,15 @@ int CRendererCVars::CV_r_durango_async_dips;
 int CRendererCVars::CV_r_durango_async_dips_sync;
 int CRendererCVars::CV_r_D3D12SubmissionThread;
 int CRendererCVars::CV_r_D3D12WaitableSwapChain;
+int CRendererCVars::CV_r_D3D12BatchResourceBarriers;
+int CRendererCVars::CV_r_D3D12EarlyResourceBarriers;
+int CRendererCVars::CV_r_D3D12AsynchronousCompute;
+int CRendererCVars::CV_r_D3D12HardwareComputeQueue;
+int CRendererCVars::CV_r_D3D12HardwareCopyQueue;
+int CRendererCVars::CV_r_VkSubmissionThread;
+int CRendererCVars::CV_r_VkBatchResourceBarriers;
+int CRendererCVars::CV_r_VkHardwareComputeQueue;
+int CRendererCVars::CV_r_VkHardwareCopyQueue;
 int CRendererCVars::CV_r_ReprojectOnlyStaticObjects;
 int CRendererCVars::CV_r_ReadZBufferDirectlyFromVMEM;
 int CRendererCVars::CV_r_ReverseDepth;
@@ -82,7 +94,6 @@ int CRendererCVars::CV_r_UpdateInstances;
 
 AllocateConstIntCVar(CRendererCVars, CV_r_multithreaded);
 AllocateConstIntCVar(CRendererCVars, CV_r_multithreadedDrawing);
-AllocateConstIntCVar(CRendererCVars, CV_r_multithreadedDrawingCoalesceMode);
 AllocateConstIntCVar(CRendererCVars, CV_r_multithreadedDrawingMinJobSize);
 int CRendererCVars::CV_r_multigpu;
 AllocateConstIntCVar(CRendererCVars, CV_r_validateDraw);
@@ -93,7 +104,6 @@ AllocateConstIntCVar(CRendererCVars, CV_r_TexturesStreamingDebug);
 AllocateConstIntCVar(CRendererCVars, CV_r_texturesstreamingnoupload);
 AllocateConstIntCVar(CRendererCVars, CV_r_texturesstreamingonlyvideo);
 int CRendererCVars::CV_r_texturesstreamingsync;
-AllocateConstIntCVar(CRendererCVars, CV_r_texturesstreamingResidencyEnabled);
 AllocateConstIntCVar(CRendererCVars, CV_r_texturesstreamingUpdateType);
 AllocateConstIntCVar(CRendererCVars, CV_r_texturesstreamingPrecacheRounds);
 AllocateConstIntCVar(CRendererCVars, CV_r_texturesstreamingSuppress);
@@ -110,12 +120,9 @@ int CRendererCVars::CV_r_texturesstreamingDeferred;
 #if defined(SUPPORTS_INPLACE_TEXTURE_STREAMING)
 int CRendererCVars::CV_r_texturesstreamingInPlace;
 #endif
-float CRendererCVars::CV_r_texturesstreamingResidencyTimeTestLimit;
 float CRendererCVars::CV_r_rain_maxviewdist;
 float CRendererCVars::CV_r_rain_maxviewdist_deferred;
 float CRendererCVars::CV_r_measureoverdrawscale;
-float CRendererCVars::CV_r_texturesstreamingResidencyTime;
-float CRendererCVars::CV_r_texturesstreamingResidencyThrottle;
 AllocateConstIntCVar(CRendererCVars, CV_r_texturesstreamingmipfading);
 int CRendererCVars::CV_r_TexturesStreamPoolSize;
 int CRendererCVars::CV_r_TexturesStreamPoolSecondarySize;
@@ -161,6 +168,7 @@ AllocateConstIntCVar(CRendererCVars, CV_r_debugrendermode);
 AllocateConstIntCVar(CRendererCVars, CV_r_debugrefraction);
 
 int CRendererCVars::CV_r_DeferredShadingTiled;
+int CRendererCVars::CV_r_DeferredShadingTiledDebug;
 int CRendererCVars::CV_r_DeferredShadingTiledHairQuality;
 int CRendererCVars::CV_r_DeferredShadingSSS;
 int CRendererCVars::CV_r_DeferredShadingFilterGBuffer;
@@ -188,8 +196,6 @@ AllocateConstIntCVar(CRendererCVars, CV_r_CBufferUseNativeDepth);
 float CRendererCVars::CV_r_DeferredShadingLightLodRatio;
 float CRendererCVars::CV_r_DeferredShadingLightStencilRatio;
 
-AllocateConstIntCVar(CRendererCVars, CV_r_LightPropagationVolumes);
-
 int CRendererCVars::CV_r_HDRRendering;
 AllocateConstIntCVar(CRendererCVars, CV_r_HDRDebug);
 int CRendererCVars::CV_r_HDRBloom;
@@ -215,7 +221,7 @@ float CRendererCVars::CV_r_ChromaticAberration;
 AllocateConstIntCVar(CRendererCVars, CV_r_geominstancing);
 AllocateConstIntCVar(CRendererCVars, CV_r_geominstancingdebug);
 AllocateConstIntCVar(CRendererCVars, CV_r_materialsbatching);
-#if CRY_PLATFORM_WINDOWS || CRY_PLATFORM_APPLE || CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID
+#if CRY_PLATFORM_WINDOWS || CRY_PLATFORM_APPLE || CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_RENDERER_GNM
 int CRendererCVars::CV_r_SilhouettePOM;
 #endif
 #ifdef WATER_TESSELLATION_RENDERER
@@ -227,8 +233,6 @@ float CRendererCVars::CV_r_displacementfactor;
 
 int CRendererCVars::CV_r_batchtype;
 int CRendererCVars::CV_r_geominstancingthreshold;
-
-int CRendererCVars::CV_r_beams;
 
 AllocateConstIntCVar(CRendererCVars, CV_r_DebugLightVolumes);
 
@@ -246,11 +250,11 @@ float CRendererCVars::CV_r_ShadowsParticleNormalEffect;
 AllocateConstIntCVar(CRendererCVars, CV_r_ShadowGenMode);
 
 AllocateConstIntCVar(CRendererCVars, CV_r_ShadowsUseClipVolume);
-int CRendererCVars::CV_r_shadowblur;
 AllocateConstIntCVar(CRendererCVars, CV_r_shadowtexformat);
 AllocateConstIntCVar(CRendererCVars, CV_r_ShadowsMaskResolution);
 AllocateConstIntCVar(CRendererCVars, CV_r_ShadowsMaskDownScale);
 AllocateConstIntCVar(CRendererCVars, CV_r_ShadowsStencilPrePass);
+AllocateConstIntCVar(CRendererCVars, CV_r_ShadowMaskStencilPrepass);
 int CRendererCVars::CV_r_ShadowsDepthBoundNV;
 int CRendererCVars::CV_r_ShadowsPCFiltering;
 float CRendererCVars::CV_r_shadowbluriness;
@@ -275,11 +279,10 @@ float CRendererCVars::CV_r_RenderMeshHashGridUnitSize;
 AllocateConstIntCVar(CRendererCVars, CV_r_debuglights);
 AllocateConstIntCVar(CRendererCVars, CV_r_lightssinglepass);
 
-AllocateConstIntCVar(CRendererCVars, CV_r_impostersdraw);
-float CRendererCVars::CV_r_imposterratio;
-int CRendererCVars::CV_r_impostersupdateperframe;
 AllocateConstIntCVar(CRendererCVars, CV_r_shaderslazyunload);
 AllocateConstIntCVar(CRendererCVars, CV_r_shadersdebug);
+AllocateConstIntCVar(CRendererCVars, CV_r_shadersCompileStrict);
+AllocateConstIntCVar(CRendererCVars, CV_r_shadersCompileCompatible);
 #if CRY_PLATFORM_DESKTOP
 int CRendererCVars::CV_r_shadersorbis;
 int CRendererCVars::CV_r_shadersdurango;
@@ -289,7 +292,6 @@ int CRendererCVars::CV_r_shadersGL4;
 int CRendererCVars::CV_r_shadersGLES3;
 #endif
 AllocateConstIntCVar(CRendererCVars, CV_r_shadersignoreincludeschanging);
-int CRendererCVars::CV_r_shaderspreactivate;
 int CRendererCVars::CV_r_shadersAllowCompilation;
 AllocateConstIntCVar(CRendererCVars, CV_r_shadersediting);
 AllocateConstIntCVar(CRendererCVars, CV_r_shaderscompileautoactivate);
@@ -315,6 +317,7 @@ int CRendererCVars::CV_r_usezpass;
 
 AllocateConstIntCVar(CRendererCVars, CV_r_TransparentPasses);
 AllocateConstIntCVar(CRendererCVars, CV_r_TranspDepthFixup);
+AllocateConstIntCVar(CRendererCVars, CV_r_SkipAlphaTested);
 AllocateConstIntCVar(CRendererCVars, CV_r_SoftAlphaTest);
 AllocateConstIntCVar(CRendererCVars, CV_r_usehwskinning);
 AllocateConstIntCVar(CRendererCVars, CV_r_usemateriallayers);
@@ -333,6 +336,9 @@ int CRendererCVars::CV_r_AntialiasingTAAPattern;
 float CRendererCVars::CV_r_AntialiasingTAASharpening;
 float CRendererCVars::CV_r_AntialiasingTAAFalloffHiFreq;
 float CRendererCVars::CV_r_AntialiasingTAAFalloffLowFreq;
+float CRendererCVars::CV_r_AntialiasingTSAAMipBias;
+float CRendererCVars::CV_r_AntialiasingTSAASubpixelDetection;
+float CRendererCVars::CV_r_AntialiasingTSAASmoothness;
 AllocateConstIntCVar(CRendererCVars, CV_r_AntialiasingModeDebug);
 AllocateConstIntCVar(CRendererCVars, CV_r_AntialiasingModeEditor);
 
@@ -370,6 +376,9 @@ float CRendererCVars::CV_r_maxSuitPulseSpeedMultiplier;
 
 AllocateConstIntCVar(CRendererCVars, CV_r_customvisions);
 AllocateConstIntCVar(CRendererCVars, CV_r_DebugLayerEffect);
+AllocateConstIntCVar(CRendererCVars, CV_r_VrProjectionType);
+AllocateConstIntCVar(CRendererCVars, CV_r_VrProjectionPreset);
+AllocateConstIntCVar(CRendererCVars, CV_r_stereoMirrorProjection);
 
 AllocateConstIntCVar(CRendererCVars, CV_r_snow);
 AllocateConstIntCVar(CRendererCVars, CV_r_snow_halfres);
@@ -398,7 +407,7 @@ AllocateConstIntCVar(CRendererCVars, CV_r_dof);
 int CRendererCVars::CV_r_DofMode;
 int CRendererCVars::CV_r_DofBokehQuality;
 
-AllocateConstIntCVar(CRendererCVars, CV_r_measureoverdraw);
+//AllocateConstIntCVar(CRendererCVars, CV_r_measureoverdraw);
 AllocateConstIntCVar(CRendererCVars, CV_r_printmemoryleaks);
 AllocateConstIntCVar(CRendererCVars, CV_r_releaseallresourcesonexit);
 
@@ -439,9 +448,6 @@ AllocateConstIntCVar(CRendererCVars, CV_r_colorgrading_filters);
 int CRendererCVars::CV_r_colorgrading_charts;
 int CRendererCVars::CV_r_ColorgradingChartsCache;
 
-AllocateConstIntCVar(CRendererCVars, CV_r_cloudsupdatealways);
-AllocateConstIntCVar(CRendererCVars, CV_r_cloudsdebug);
-
 AllocateConstIntCVar(CRendererCVars, CV_r_showdyntextures);
 int CRendererCVars::CV_r_ShowDynTexturesMaxCount;
 
@@ -457,6 +463,7 @@ AllocateConstIntCVar(CRendererCVars, CV_r_graphstyle);
 AllocateConstIntCVar(CRendererCVars, CV_r_showbufferusage);
 
 ICVar* CRendererCVars::CV_r_ShaderCompilerServer;
+ICVar* CRendererCVars::CV_r_ShaderCompilerFolderName;
 ICVar* CRendererCVars::CV_r_ShaderCompilerFolderSuffix;
 ICVar* CRendererCVars::CV_r_ShaderEmailTags;
 ICVar* CRendererCVars::CV_r_ShaderEmailCCs;
@@ -632,8 +639,7 @@ Vec2 CRendererCVars::s_overscanBorders(0, 0);
 int CRendererCVars::CV_d3d11_CBUpdateStats;
 ICVar* CRendererCVars::CV_d3d11_forcedFeatureLevel;
 
-#if defined(SUPPORT_D3D_DEBUG_RUNTIME)
-int CRendererCVars::CV_d3d11_debugruntime;
+#if defined(DX11_ALLOW_D3D_DEBUG_RUNTIME)
 ICVar* CRendererCVars::CV_d3d11_debugMuteSeverity;
 ICVar* CRendererCVars::CV_d3d11_debugMuteMsgID;
 ICVar* CRendererCVars::CV_d3d11_debugBreakOnMsgID;
@@ -658,7 +664,25 @@ char* resourceName[] = {
 	"Index Buffers"
 };
 
-#if defined(SUPPORT_D3D_DEBUG_RUNTIME)
+#if (CRY_RENDERER_DIRECT3D >= 120)
+static void OnChange_CV_D3D12HardwareComputeQueue(ICVar* /*pCVar*/)
+{
+	gcpRendD3D->FlushRTCommands(true, true, true);
+
+	reinterpret_cast<CCryDX12Device*>(gcpRendD3D->GetDevice().GetRealDevice())->FlushAndWaitForGPU();
+	reinterpret_cast<CCryDX12DeviceContext*>(gcpRendD3D->GetDeviceContext().GetRealDeviceContext())->RecreateCommandListPool(CMDQUEUE_COMPUTE);
+}
+
+static void OnChange_CV_D3D12HardwareCopyQueue(ICVar* /*pCVar*/)
+{
+	gcpRendD3D->FlushRTCommands(true, true, true);
+
+	reinterpret_cast<CCryDX12Device*>(gcpRendD3D->GetDevice().GetRealDevice())->FlushAndWaitForGPU();
+	reinterpret_cast<CCryDX12DeviceContext*>(gcpRendD3D->GetDeviceContext().GetRealDeviceContext())->RecreateCommandListPool(CMDQUEUE_COPY);
+}
+#endif
+
+#if defined(DX11_ALLOW_D3D_DEBUG_RUNTIME)
 static void OnChange_CV_d3d11_debugMuteMsgID(ICVar* /*pCVar*/)
 {
 	gcpRendD3D->m_bUpdateD3DDebug = true;
@@ -687,29 +711,8 @@ static void OnChange_CV_r_AntialiasingMode(ICVar* pCVar)
 
 	gRenDev->CV_r_AntialiasingMode = pCVar->GetIVal();
 
-	ICVar* pMSAA = gEnv->pConsole->GetCVar("r_MSAA");
-	ICVar* pMSAASamples = gEnv->pConsole->GetCVar("r_MSAA_samples");
-
 	int32 nVal = gRenDev->CV_r_AntialiasingMode;
 	nVal = min(eAT_AAMODES_COUNT - 1, nVal);
-
-	if (nVal >= eAT_MSAA_2X)
-	{
-		int32 nNumSamples = 2;
-		if (nVal == eAT_MSAA_4X)
-			nNumSamples = 4;
-		if (nVal == eAT_MSAA_8X)
-			nNumSamples = 8;
-
-		pMSAA->Set(1);
-		pMSAASamples->Set(nNumSamples);
-	}
-	else
-	{
-		pMSAA->Set(0);
-		pMSAASamples->Set(0);
-	}
-
 	pCVar->Set(nVal);
 	gRenDev->CV_r_AntialiasingMode = nVal;
 }
@@ -730,13 +733,6 @@ static void OnChange_CV_r_HDRRendering(ICVar* pCVar)
 		if (pMSAA->GetIVal())
 			pMSAA->Set(0);      // switch off MSAA
 	}
-}
-
-static void OnChange_CV_r_TexelsPerMeter(ICVar* /*pCVar*/)
-{
-	ICVar* pCV_e_sketch_mode = gEnv->pConsole->GetCVar("e_sketch_mode");
-	if (pCV_e_sketch_mode)
-		pCV_e_sketch_mode->Set(CRenderer::CV_r_TexelsPerMeter > 0.0f ? 4 : 0);
 }
 
 static void OnChange_CV_r_ShadersAllowCompiliation(ICVar* pCVar)
@@ -764,9 +760,12 @@ static void OnChangeShadowJitteringCVar(ICVar* pCVar)
 
 void CRendererCVars::OnChange_CachedShadows(ICVar* pCVar)
 {
-	CTexture::GenerateCachedShadowMaps();
-	gEnv->p3DEngine->SetShadowsGSMCache(true);
-	gEnv->p3DEngine->SetRecomputeCachedShadows(ShadowMapFrustum::ShadowCacheData::eFullUpdate);
+	if (gEnv->p3DEngine)  // 3DEngine not initialized during ShaderCacheGen
+	{
+		CTexture::GenerateCachedShadowMaps();
+		gEnv->p3DEngine->SetShadowsGSMCache(true);
+		gEnv->p3DEngine->SetRecomputeCachedShadows(ShadowMapFrustum::ShadowCacheData::eFullUpdate);
+	}
 }
 
 void CRendererCVars::OnChange_GeomInstancingThreshold(ICVar* pVar)
@@ -1119,18 +1118,31 @@ static void ShadersMerge(IConsoleCmdArgs* Cmd)
 //////////////////////////////////////////////////////////////////////////
 void CRendererCVars::InitCVars()
 {
-	REGISTER_CVAR3("r_GraphicsPipeline", CV_r_GraphicsPipeline, 2, VF_NULL,
+	REGISTER_CVAR3("r_GraphicsPipeline", CV_r_GraphicsPipeline, 3, VF_NULL,
 	               "Toggles new optimized graphics pipeline\n"
 	               "  0: Use legacy graphics pipeline\n"
 	               "  1: Use new graphics pipeline with objects compiled on the fly\n"
 	               "  2: Use new graphics pipeline with permanent render objects");
 
-	REGISTER_CVAR3("r_DeferredShadingTiled", CV_r_DeferredShadingTiled, 0, VF_DUMPTODISK,
-	               "Toggles tiled shading using a compute shader\n"
+	REGISTER_CVAR3("r_GraphicsPipelineMobile", CV_r_GraphicsPipelineMobile, 0, VF_NULL,
+	               "Run limited pipeline specifically optimized for mobile devices.\n"
+								 "  1: Using compressed micro GBuffer\n"
+								 "  2: Using standard GBuffer");
+
+	REGISTER_CVAR3("r_GraphicsPipelinePassScheduler", CV_r_GraphicsPipelinePassScheduler, 0, VF_NULL,
+	               "Toggles render pass scheduler that submits passes in a deferred way, allowing improved multithreading and barrier scheduling.");
+
+	REGISTER_CVAR3("r_DeferredShadingTiled", CV_r_DeferredShadingTiled, 3, VF_DUMPTODISK,
+	               "Toggles tile based shading.\n"
+	               "0 - Off"
 	               "1 - Tiled forward shading for transparent objects\n"
 	               "2 - Tiled deferred and forward shading\n"
-	               "3 - Tiled deferred and forward shading with debug info\n"
-	               "4 - Light coverage visualization\n");
+	               "3 - Tiled deferred and forward shading using volume rasterization for light list generation\n"
+	               "4 - Tiled forward shading for opaque and transparent objects (using volume rasterization)\n");
+
+	REGISTER_CVAR3("r_DeferredShadingTiledDebug", CV_r_DeferredShadingTiledDebug, 0, VF_DUMPTODISK,
+	               "1 - Display debug info\n"
+	               "2 - Light coverage visualization\n");
 
 	REGISTER_CVAR3("r_DeferredShadingTiledHairQuality", CV_r_DeferredShadingTiledHairQuality, 2, VF_DUMPTODISK,
 	               "Tiled shading hair quality\n"
@@ -1251,11 +1263,6 @@ void CRendererCVars::InitCVars()
 	REGISTER_CVAR3("r_DeferredShadingAmbientSClear", CV_r_DeferredShadingAmbientSClear, 1, VF_NULL,
 	               "Clear stencil buffer after ambient pass (prevents artifacts on Nvidia hw)\n");
 
-	DefineConstIntCVar3("r_LightPropagationVolumes", CV_r_LightPropagationVolumes, 1, VF_CHEAT,
-	                    "Toggles Light Propagation Volumes.\n"
-	                    "Usage: r_LightPropagationVolumes [0/1]\n"
-	                    "Default is 1 (on)");
-
 	REGISTER_CVAR3_CB("r_HDRRendering", CV_r_HDRRendering, 1, VF_DUMPTODISK,
 	                  "Toggles HDR rendering.\n"
 	                  "Usage: r_HDRRendering [0/1]\n"
@@ -1310,10 +1317,11 @@ void CRendererCVars::InitCVars()
 	               "Usage: r_HDRRangeAdaptLBufferMaxRange [Value]\n"
 	               "Default is 2.0f");
 
-	DefineConstIntCVar3("r_HDRTexFormat", CV_r_HDRTexFormat, 0, VF_DUMPTODISK,
-	                    "HDR texture format. \n"
-	                    "Usage: r_HDRTexFormat [Value] 0:(low precision - cheaper/faster), 1:(high precision)\n"
-	                    "Default is 0");
+	DefineConstIntCVar3("r_HDRTexFormat", CV_r_HDRTexFormat, 1, VF_DUMPTODISK,
+	                    "Sets HDR render target precision. Default is 1.\n"
+	                    "Usage: r_HDRTexFormat [Value]\n"
+											"  0: (lower precision)\n"
+											"  1: (standard precision)\n");
 
 	// Eye Adaptation
 	REGISTER_CVAR3("r_HDREyeAdaptationSpeed", CV_r_HDREyeAdaptationSpeed, 1.0f, VF_NULL,
@@ -1341,10 +1349,6 @@ void CRendererCVars::InitCVars()
 	               "Image sharpening amount\n"
 	               "Usage: r_Sharpening [Value]");
 
-	REGISTER_CVAR3("r_Beams", CV_r_beams, 1, VF_NULL,
-	               "Toggles volumetric light beams.\n"
-	               "Usage: r_Beams [0/1]\n");
-
 	REGISTER_CVAR3_CB("r_GeomInstancingThreshold", CV_r_geominstancingthreshold, -1, VF_NULL,
 	                  "If the instance count gets bigger than the specified value the instancing feature is used.\n"
 	                  "Usage: r_GeomInstancingThreshold [Num]\n"
@@ -1356,7 +1360,7 @@ void CRendererCVars::InitCVars()
 	               "1 - GPU friendly.\n"
 	               "2 - Automatic.\n");
 
-#if CRY_PLATFORM_WINDOWS || CRY_PLATFORM_APPLE || CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID
+#if CRY_PLATFORM_WINDOWS || CRY_PLATFORM_APPLE || CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_RENDERER_GNM
 	REGISTER_CVAR3("r_SilhouettePOM", CV_r_SilhouettePOM, 0, VF_NULL,
 	               "Enables use of silhouette parallax occlusion mapping.\n"
 	               "Usage: r_SilhouettePOM [0/1]");
@@ -1392,20 +1396,6 @@ void CRendererCVars::InitCVars()
 	                    "Usage: r_MaterialsBatching [0/1]\n"
 	                    "Default is 1 (on). Set to 0 to disable.");
 
-	DefineConstIntCVar3("r_ImpostersDraw", CV_r_impostersdraw, 1, VF_NULL,
-	                    "Toggles imposters drawing.\n"
-	                    "Usage: r_ImpostersDraw [0/1]\n"
-	                    "Default is 1 (on). Set to 0 to disable imposters.");
-	REGISTER_CVAR3("r_ImposterRatio", CV_r_imposterratio, 1, VF_NULL,
-	               "Allows to scale the texture resolution of imposters (clouds)\n"
-	               "Usage: r_ImposterRatio [1..]\n"
-	               "Default is 1 (1:1 normal). Bigger values can help to save texture space\n"
-	               "(e.g. value 2 results in 1/4 texture memory usage)");
-	REGISTER_CVAR3("r_ImpostersUpdatePerFrame", CV_r_impostersupdateperframe, 6000, VF_NULL,
-	               "How many kilobytes to update per-frame.\n"
-	               "Usage: r_ImpostersUpdatePerFrame [1000-30000]\n"
-	               "Default is 6000 (6 megabytes)");
-
 	DefineConstIntCVar3("r_ZPassDepthSorting", CV_r_ZPassDepthSorting, ZPASS_DEPTH_SORT_DEFAULT_VAL, VF_NULL,
 	                    "Toggles Z pass depth sorting.\n"
 	                    "Usage: r_ZPassDepthSorting [0/1/2]\n"
@@ -1431,6 +1421,9 @@ void CRendererCVars::InitCVars()
 	                    "Write approximate depth for certain transparent objects before post effects\n"
 	                    "Usage: r_TranspDepthFixup [0/1]\n"
 	                    "Default is 1 (enabled)\n");
+
+	DefineConstIntCVar3("r_SkipAlphaTested", CV_r_SkipAlphaTested, 0, VF_CHEAT,
+	                    "Disables rendering of alpha-tested objects.\n");
 
 	DefineConstIntCVar3("r_SoftAlphaTest", CV_r_SoftAlphaTest, 1, VF_NULL,
 	                    "Toggles post processed soft alpha test for shaders supporting this\n"
@@ -1516,7 +1509,10 @@ void CRendererCVars::InitCVars()
 
 	REGISTER_CVAR3("r_AntialiasingTAAPattern", CV_r_AntialiasingTAAPattern, 1, VF_NULL,
 	               "Selects TAA sampling pattern.\n"
-	               "  0: no subsamples\n  1: 2x\n  2: 3x\n  3: 4x\n  4: 8x\n  5: sparse grid 8x8\n  6: random\n  7: Halton 8x\n  8: Halton random");
+	               "  0: no subsamples\n"
+	               "  1: optimal pattern for selected aa mode\n"
+	               "  2: 2x\n  3: 3x\n  4: regular 4x\n  5: rotated 4x\n  6: 8x\n  7: sparse grid 8x8\n  8: random\n  9: Halton 8x\n  10: Halton 16x\n  11: Halton random");
+
 
 	REGISTER_CVAR3("r_AntialiasingModeSCull", CV_r_AntialiasingModeSCull, 1, VF_NULL,
 	               "Enables post processed based aa modes stencil culling optimization\n");
@@ -1542,9 +1538,18 @@ void CRendererCVars::InitCVars()
 	               "Bigger value increases temporal stability but also overall image blurriness\n"
 	               "Smaller value decreases temporal stability but gives overall sharper image");
 
-	DefineConstIntCVar3("CV_r_AntialiasingModeEditor", CV_r_AntialiasingModeEditor, 1, VF_NULL,
+	REGISTER_CVAR3("r_AntialiasingTSAAMipBias", CV_r_AntialiasingTSAAMipBias, -0.25f, VF_NULL,
+	               "Sets mimap lod bias for TSAA (negative values for sharpening).\n");
+
+	REGISTER_CVAR3("r_AntialiasingTSAASubpixelDetection", CV_r_AntialiasingTSAASubpixelDetection, 0.02f, VF_NULL,
+	               "Adjusts metric for detecting subpixel changes (higher: less flickering but more ghosting)\n");
+
+	REGISTER_CVAR3("r_AntialiasingTSAASmoothness", CV_r_AntialiasingTSAASmoothness, 40.0f, VF_NULL,
+	               "Adjusts smoothness of image under motion.\n");
+
+	DefineConstIntCVar3("r_AntialiasingModeEditor", CV_r_AntialiasingModeEditor, 1, VF_NULL,
 	                    "Sets antialiasing modes to editing mode (disables jitter on modes using camera jitter which can cause flickering of helper objects)\n"
-	                    "Usage: CV_r_AntialiasingModeEditor [0/1]");
+	                    "Usage: r_AntialiasingModeEditor [0/1]");
 
 	DefineConstIntCVar3("r_MotionVectors", CV_r_MotionVectors, 1, VF_NULL,
 	                    "Enables generation of motion vectors for dynamic objects\n");
@@ -1602,6 +1607,26 @@ void CRendererCVars::InitCVars()
 	                    "Enables debug mode (independent from game code) for layer effects\n"
 	                    "Usage: r_DebugLayerEffect [0/1/2/3/etc]\n"
 	                    "Default is 0 (disabled). 1: 1st layer mode, etc");
+
+	DefineConstIntCVar3("r_VrProjectionType", CV_r_VrProjectionType, 0, VF_REQUIRE_APP_RESTART,
+	                    "Selects which modified projection to use for rendering\n"
+	                    "Usage: r_VrProjectionType [0/1/2]\n"
+	                    "0: none/planar (default)\n"
+	                    "1: Nvidia Multi-Res Shading\n"
+	                    "2: NVidia Lens-Matched Shading");
+	
+	DefineConstIntCVar3("r_VrProjectionPreset", CV_r_VrProjectionPreset, 0, VF_NULL,
+	                    "Selects the quality preset for the modified projection\n"
+	                    "Usage: r_VrProjectionPreset [0..8]\n"
+	                    "0: full-resolution preset, can be used for quality testing\n"
+	                    "1,2: desktop high and low quality presets\n"
+	                    "3..5: Oculus Rift high..low quality presets\n"
+	                    "6..8: HTC Vive high..low quality presets");
+
+	DefineConstIntCVar3("r_stereoMirrorProjection", CV_r_stereoMirrorProjection, 1, VF_NULL,
+	                    "Enables mirroring of MRS or LMS projection for the right eye\n"
+	                    "Usage: r_LensMatchedRendering [0/1]\n"
+	                    "Default is 1 (enabled).");
 
 	DefineConstIntCVar3("r_Snow", CV_r_snow, 2, VF_NULL,
 	                    "Enables snow rendering\n"
@@ -1757,10 +1782,6 @@ void CRendererCVars::InitCVars()
 	                    ".\n"
 	                    "Usage: r_ShadowsUseClipVolume [0=Disable/1=Enable");
 
-	REGISTER_CVAR3("r_ShadowBlur", CV_r_shadowblur, SHADOWS_BLUR_DEFAULT_VAL, VF_DUMPTODISK,
-	               "Selected shadow map screenspace blurring technique.\n"
-	               "Usage: r_ShadowBlur [0=no blurring(fastest)/1=blur/2=blur/3=blur without leaking(slower)]");
-
 	DefineConstIntCVar3("r_ShadowTexFormat", CV_r_shadowtexformat, 0, VF_NULL,
 	                    "0=use D32 texture format for depth map\n"
 	                    "1=use D16 texture format for depth map\n"
@@ -1783,6 +1804,9 @@ void CRendererCVars::InitCVars()
 	DefineConstIntCVar3("r_ShadowsStencilPrePass", CV_r_ShadowsStencilPrePass, 1, VF_NULL,
 	                    "1=Use Stencil pre-pass for shadows\n"
 	                    "Usage: r_ShadowsStencilPrePass [0/1]");
+	DefineConstIntCVar3("r_ShadowMaskStencilPrepass", CV_r_ShadowMaskStencilPrepass, 0, VF_NULL,
+	                    "1=Run explicit stencil prepass for shadow mask generation (as opposed to merged stencil/sampling passes)");
+
 	REGISTER_CVAR3("r_ShadowsDepthBoundNV", CV_r_ShadowsDepthBoundNV, 0, VF_NULL,
 	               "1=use NV Depth Bound extension\n"
 	               "Usage: r_ShadowsDepthBoundNV [0/1]");
@@ -1819,6 +1843,7 @@ void CRendererCVars::InitCVars()
 	REGISTER_CVAR3("r_ShadowCastingLightsMaxCount", CV_r_ShadowCastingLightsMaxCount, 12, VF_REQUIRE_APP_RESTART,
 	               "Maximum number of simultaneously visible shadow casting lights");
 
+#if !CRY_RENDERER_VULKAN
 	REGISTER_CVAR3_CB("r_HeightMapAO", CV_r_HeightMapAO, 1, VF_NULL,
 	                  "Large Scale Ambient Occlusion based on height map approximation of the scene\n"
 	                  "0=off, 1=quarter resolution, 2=half resolution, 3=full resolution",
@@ -1829,6 +1854,7 @@ void CRendererCVars::InitCVars()
 	                  "Texture resolution of the height map used for HeightMapAO", OnChange_CachedShadows);
 	REGISTER_CVAR3_CB("r_HeightMapAORange", CV_r_HeightMapAORange, 1000.f, VF_NULL,
 	                  "Range of height map AO around viewer in meters", OnChange_CachedShadows);
+#endif
 
 	REGISTER_CVAR3("r_RenderMeshHashGridUnitSize", CV_r_RenderMeshHashGridUnitSize, .5f, VF_NULL, "Controls density of render mesh triangle indexing structures");
 
@@ -1851,9 +1877,13 @@ void CRendererCVars::InitCVars()
 	                                             "Usage: r_ShowDynTexturesFilter start*\n"
 	                                             "Default is *. Set to 'pattern' to show only specific textures (activate r_ShowDynTextures)");
 
-	CV_r_ShaderCompilerServer = REGISTER_STRING("r_ShaderCompilerServer", "8core5", VF_NULL,
+	CV_r_ShaderCompilerServer = REGISTER_STRING("r_ShaderCompilerServer", "0.0.0.0", VF_NULL,
 	                                            "Usage: r_ShaderCompilerServer localhost \n"
-	                                            "Default is 8core5 ");
+	                                            "Default is 0.0.0.0 ");
+																							
+	CV_r_ShaderCompilerFolderName = REGISTER_STRING("r_ShaderCompilerFolderName", "", VF_NULL,
+	                                             "Usage: r_ShaderCompilerFolderName foldername \n"
+	                                             "Default is empty. This overwrites the default path of using the game directory name when storing shader caches.");
 
 	CV_r_ShaderCompilerFolderSuffix = REGISTER_STRING("r_ShaderCompilerFolderSuffix", "", VF_NULL,
 	                                                  "Usage: r_ShaderCompilerFolderSuffix suffix \n"
@@ -2073,17 +2103,6 @@ void CRendererCVars::InitCVars()
 	               "Usage: r_ColorGradingCharts [0/1/2/etc]\n"
 	               "Default is 4 (update every 4 frames), 0 - always update, 1- update every other frame");
 
-	DefineConstIntCVar3("r_CloudsUpdateAlways", CV_r_cloudsupdatealways, 0, VF_NULL,
-	                    "Toggles updating of clouds each frame.\n"
-	                    "Usage: r_CloudsUpdateAlways [0/1]\n"
-	                    "Default is 0 (off)");
-	DefineConstIntCVar3("r_CloudsDebug", CV_r_cloudsdebug, 0, VF_NULL,
-	                    "Toggles debugging mode for clouds."
-	                    "Usage: r_CloudsDebug [0/1/2]\n"
-	                    "Usage: r_CloudsDebug = 1: render just screen imposters\n"
-	                    "Usage: r_CloudsDebug = 2: render just non-screen imposters\n"
-	                    "Default is 0 (off)");
-
 	REGISTER_CVAR3("r_DynTexMaxSize", CV_r_dyntexmaxsize, 48, VF_NULL, ""); // 48 Mb
 	DefineConstIntCVar3("r_TexPreallocateAtlases", CV_r_texpreallocateatlases, TEXPREALLOCATLAS_DEFAULT_VAL, VF_NULL, "");
 	REGISTER_CVAR3("r_TexAtlasSize", CV_r_texatlassize, 1024, VF_NULL, ""); // 1024x1024
@@ -2139,17 +2158,10 @@ void CRendererCVars::InitCVars()
 
 	int nDefaultDefragState = 0;
 
-	REGISTER_CVAR3("r_texturesstreampooldefragmentation", CV_r_texturesstreampooldefragmentation, nDefaultDefragState, VF_NULL,
-	               "Enabled CPU (1), GPU(2) and disable (0) textures stream pool defragmentation.\n");
-	REGISTER_CVAR3("r_texturesstreampooldefragmentationmaxmoves", CV_r_texturesstreampooldefragmentationmaxmoves, 8, VF_NULL,
-	               "Specify the maximum number of blocks to move per defragmentation update");
-	REGISTER_CVAR3("r_texturesstreampooldefragmentationmaxamount", CV_r_texturesstreampooldefragmentationmaxamount, 512 * 1024, VF_NULL,
-	               "Specify the limit (in bytes) that defrag update will stop");
-
 	REGISTER_CVAR3("r_texturesskiplowermips", CV_r_texturesskiplowermips, 0, VF_NULL,
 	               "Enabled skipping lower mips for X360.\n");
 
-	int nDefaultTexPoolSize = 512;
+	int nDefaultTexPoolSize = 1024;
 
 	REGISTER_CVAR3("r_TexturesStreamPoolSize", CV_r_TexturesStreamPoolSize, nDefaultTexPoolSize, VF_NULL,
 	               "Size of texture streaming pool in MB.\n");
@@ -2157,28 +2169,19 @@ void CRendererCVars::InitCVars()
 	REGISTER_CVAR3("r_TexturesStreamPoolSecondarySize", CV_r_TexturesStreamPoolSecondarySize, 0, VF_NULL,
 	               "Size of secondary pool for textures in MB.");
 
+	REGISTER_CVAR3("r_texturesstreampooldefragmentation", CV_r_texturesstreampooldefragmentation, nDefaultDefragState, VF_NULL,
+	              "Enabled CPU (1), GPU(2) and disable (0) textures stream pool defragmentation.\n");
+	REGISTER_CVAR3("r_texturesstreampooldefragmentationmaxmoves", CV_r_texturesstreampooldefragmentationmaxmoves, 8, VF_NULL,
+	               "Specify the maximum number of blocks to move per defragmentation update");
+	REGISTER_CVAR3("r_texturesstreampooldefragmentationmaxamount", CV_r_texturesstreampooldefragmentationmaxamount, 512 * 1024, VF_NULL,
+	               "Specify the limit (in bytes) that defrag update will stop");
+
 	REGISTER_CVAR3("r_TexturesStreamingSync", CV_r_texturesstreamingsync, 0, VF_RENDERER_CVAR,
 	               "Force only synchronous texture streaming.\n"
 	               "All textures will be streamed in the main thread. Useful for debug purposes.\n"
 	               "Usage: r_TexturesStreamingSync [0/1]\n"
 	               "Default is 0 (off).");
-	DefineConstIntCVar3("r_TexturesStreamingResidencyEnabled", CV_r_texturesstreamingResidencyEnabled, 1, VF_NULL,
-	                    "Toggle for resident textures streaming support.\n"
-	                    "Usage: r_TexturesStreamingResidencyEnabled [toggle]"
-	                    "Default is 0, 1 for enabled");
-	REGISTER_CVAR3("r_TexturesStreamingResidencyTimeTestLimit", CV_r_texturesstreamingResidencyTimeTestLimit, 5.0f, VF_NULL,
-	               "Time limit to use for mip thrashing calculation in seconds.\n"
-	               "Usage: r_TexturesStreamingResidencyTimeTestLimit [time]"
-	               "Default is 5 seconds");
-	REGISTER_CVAR3("r_TexturesStreamingResidencyTime", CV_r_texturesstreamingResidencyTime, 10.0f, VF_NULL,
-	               "Time to keep textures resident for before allowing them to be removed from memory.\n"
-	               "Usage: r_TexturesStreamingResidencyTime [Time]\n"
-	               "Default is 10 seconds");
-	REGISTER_CVAR3("r_TexturesStreamingResidencyThrottle", CV_r_texturesstreamingResidencyThrottle, 0.5f, VF_NULL,
-	               "Ratio for textures to become resident.\n"
-	               "Usage: r_TexturesStreamingResidencyThrottle [ratio]"
-	               "Default is 0.5"
-	               "Max is 1.0 means textures will become resident sooner, Min 0.0 means textures will not become resident");
+
 	REGISTER_CVAR3("r_TexturesStreamingMaxRequestedMB", CV_r_TexturesStreamingMaxRequestedMB, 2.f, VF_NULL,
 	               "Maximum amount of texture data requested from streaming system in MB.\n"
 	               "Usage: r_TexturesStreamingMaxRequestedMB [size]\n"
@@ -2303,11 +2306,6 @@ void CRendererCVars::InitCVars()
 	                    "  0: disabled\n"
 	                    "  N: use specified number of concurrent draw recording jobs\n"
 	                    " -1: automatically choose optimal number of recording jobs");
-	DefineConstIntCVar3("r_multithreadedDrawingCoalesceMode", CV_r_multithreadedDrawingCoalesceMode, 1, VF_NULL,
-	                    "Selects how render items are distributed across jobs.\n"
-	                    "  0: no special handling\n"
-	                    "  1: coalesce lists\n"
-	                    "  2: record and coalesce objects");
 	DefineConstIntCVar3("r_MultiThreadedDrawingMinJobSize", CV_r_multithreadedDrawingMinJobSize, 100, VF_NULL,
 	                    "Specifies threshold for creation of recording jobs.\n"
 	                    "  0: no threshold\n"
@@ -2400,20 +2398,20 @@ void CRendererCVars::InitCVars()
 
 	DefineConstIntCVar3("r_ShadersIgnoreIncludesChanging", CV_r_shadersignoreincludeschanging, 0, VF_NULL, "");
 	DefineConstIntCVar3("r_ShadersLazyUnload", CV_r_shaderslazyunload, 0, VF_NULL, "");
-
-	REGISTER_CVAR3("r_ShadersPreactivate", CV_r_shaderspreactivate, SHADERS_PREACTIVATE_DEFAULT_VAL, VF_DUMPTODISK, "");
+	DefineConstIntCVar3("r_ShadersCompileStrict", CV_r_shadersCompileStrict, 0, VF_NULL, "");
+	DefineConstIntCVar3("r_ShadersCompileCompatible", CV_r_shadersCompileCompatible, 1, VF_NULL, "");
 
 	REGISTER_CVAR3_CB("r_ShadersAllowCompilation", CV_r_shadersAllowCompilation, SHADERS_ALLOW_COMPILATION_DEFAULT_VAL, VF_NULL, "", OnChange_CV_r_ShadersAllowCompiliation);
 
 	REGISTER_CVAR3("r_ShadersRemoteCompiler", CV_r_shadersremotecompiler, 0, VF_DUMPTODISK, "Enables remote shader compilation on dedicated machine");
-	REGISTER_CVAR3("r_ShadersAsyncCompiling", CV_r_shadersasynccompiling, 1, VF_NULL,
+	REGISTER_CVAR3("r_ShadersAsyncCompiling", CV_r_shadersasynccompiling, 3, VF_NULL,
 	               "Enable asynchronous shader compiling\n"
 	               "Usage: r_ShadersAsyncCompiling [0/1/2/3]\n"
 	               " 0 = off, (stalling) shaders compiling\n"
 	               " 1 = on, shaders are compiled in parallel, missing shaders are rendered in yellow\n"
 	               " 2 = on, shaders are compiled in parallel, missing shaders are not rendered\n"
 	               " 3 = on, shaders are compiled in parallel in precache mode");
-	REGISTER_CVAR3("r_ShadersAsyncActivation", CV_r_shadersasyncactivation, 1, VF_NULL,
+	REGISTER_CVAR3("r_ShadersAsyncActivation", CV_r_shadersasyncactivation, 0, VF_NULL,
 	               "Enable asynchronous shader activation\n"
 	               "Usage: r_ShadersAsyncActivation [0/1]\n"
 	               " 0 = off, (stalling) synchronous shaders activation\n"
@@ -2804,14 +2802,14 @@ void CRendererCVars::InitCVars()
 	DefineConstIntCVar3("r_UseESRAM", CV_r_useESRAM, 1, VF_REQUIRE_APP_RESTART,
 	                    "Toggles using ESRAM for render targets (Durango only)\n"
 	                    "Usage: r_UseESRAM [0/1]");
-	DefineConstIntCVar3("r_MeasureOverdraw", CV_r_measureoverdraw, 0, VF_CHEAT,
-	                    "Activate a special rendering mode that visualize the rendering cost of each pixel by color.\n"
-	                    "0=off,\n"
-	                    "1=pixel shader instructions,\n"
-	                    "2=pass count,\n"
-	                    "3=vertex shader instructions,\n"
-	                    "4=overdraw estimation with 360 Hi-Z,\n"
-	                    "Usage: r_MeasureOverdraw [0/1/2/3/4]");
+	//DefineConstIntCVar3("r_MeasureOverdraw", CV_r_measureoverdraw, 0, VF_CHEAT,
+	//                    "Activate a special rendering mode that visualize the rendering cost of each pixel by color.\n"
+	//                    "0=off,\n"
+	//                    "1=pixel shader instructions,\n"
+	//                    "2=pass count,\n"
+	//                    "3=vertex shader instructions,\n"
+	//                    "4=overdraw estimation with 360 Hi-Z,\n"
+	//                    "Usage: r_MeasureOverdraw [0/1/2/3/4]");
 	REGISTER_CVAR3("r_MeasureOverdrawScale", CV_r_measureoverdrawscale, 1.5f, VF_CHEAT, "");
 
 	DefineConstIntCVar3("r_PrintMemoryLeaks", CV_r_printmemoryleaks, 0, VF_NULL, "");
@@ -2830,9 +2828,49 @@ void CRendererCVars::InitCVars()
 	REGISTER_CVAR3("r_BreakOnError", CV_r_BreakOnError, 0, VF_NULL, "calls debugbreak on illegal behaviour");
 	REGISTER_CVAR3("r_durango_async_dips", CV_r_durango_async_dips, 0, VF_NULL, "enables async dip submission on durango");
 	REGISTER_CVAR3("r_durango_async_dips_sync", CV_r_durango_async_dips_sync, 9999, VF_CHEAT, "enables async dip submission sync on durango");
-	REGISTER_CVAR3("r_D3D12SubmissionThread", CV_r_D3D12SubmissionThread, 1, VF_NULL, "run DX12 command queue submission tasks from a dedicated thread");
+	REGISTER_CVAR3("r_D3D12SubmissionThread", CV_r_D3D12SubmissionThread, 15, VF_NULL,
+	               "Run DX12 command queue submission tasks from dedicated thread(s).\n"
+	               "0=Off,\n"
+	               "+1=Direct (default off),\n"
+	               "+2=Bundle (default off),\n"
+	               "+4=Compute (default off),\n"
+	               "+8=Copy (default on)\n"
+	               "Usage: r_D3D12SubmissionThread [0-15]");
 	REGISTER_CVAR3("r_D3D12WaitableSwapChain", CV_r_D3D12WaitableSwapChain, 0, VF_REQUIRE_APP_RESTART | VF_CHEAT,
 	               "Enables highest performance in windowed mode (does not allow switching to fullscreen).");
+	REGISTER_CVAR3("r_D3D12BatchResourceBarriers", CV_r_D3D12BatchResourceBarriers, 1, VF_NULL,
+	               "Enables batching of resource barriers.\n"
+	               "0=Off,\n"
+	               "1=On,\n"
+	               "2=On + actively rewrite redundant barriers\n"
+	               "Usage: r_D3D12BatchResourceBarriers [0-2]");
+	REGISTER_CVAR3("r_D3D12EarlyResourceBarriers", CV_r_D3D12EarlyResourceBarriers, 0, VF_NULL,
+	               "Enables explicitly scheduled split barriers.");
+	REGISTER_CVAR3("r_D3D12AsynchronousCompute", CV_r_D3D12AsynchronousCompute, 0, VF_NULL,
+	               "Enables asynchronous compute for different sub-systems.\n"
+	               "Setting this to a non-zero value also enables concurrent UAV access.\n"
+	               "0=Off,\n"
+	               "+1=GPU-Skinning (default off),\n"
+	               "+2=GPU-Particles (default off),\n"
+	               "+4=Tiled-Shading (default off),\n"
+	               "+8=Volumetric-Clouds (default off)\n"
+	               "Usage: r_D3D12SubmissionThread [0-15]");
+	REGISTER_CVAR3("r_D3D12HardwareComputeQueue", CV_r_D3D12HardwareComputeQueue, 0 /*1*/, VF_NULL,
+	               "Selects the hardware queue on which compute tasks run.\n"
+	               "0=Direct Queue,\n"
+	               "1=Compute Queue\n"
+	               "Usage: r_D3D12HardwareComputeQueue [0-1]");
+	REGISTER_CVAR3("r_D3D12HardwareCopyQueue", CV_r_D3D12HardwareCopyQueue, 0 /*2*/, VF_NULL,
+	               "Selects the hardware queue on which copy tasks run.\n"
+	               "0=Direct Queue,\n"
+	               "1=Compute Queue,\n"
+	               "2=Copy Queue\n"
+	               "Usage: r_D3D12HardwareCopyQueue [0-2]");
+
+#if (CRY_RENDERER_DIRECT3D >= 120)
+	gEnv->pConsole->GetCVar("r_D3D12HardwareComputeQueue")->SetOnChangeCallback(OnChange_CV_D3D12HardwareComputeQueue);
+	gEnv->pConsole->GetCVar("r_D3D12HardwareCopyQueue")->SetOnChangeCallback(OnChange_CV_D3D12HardwareCopyQueue);
+#endif
 
 	REGISTER_CVAR3("r_ReprojectOnlyStaticObjects", CV_r_ReprojectOnlyStaticObjects, 1, VF_NULL, "Forces a split in the zpass, to prevent moving object from beeing reprojected");
 	REGISTER_CVAR3("r_ReadZBufferDirectlyFromVMEM", CV_r_ReadZBufferDirectlyFromVMEM, 0, VF_NULL, "Uses direct VMEM reads instead of a staging buffer on durango for the reprojection ZBuffer");
@@ -2856,12 +2894,11 @@ void CRendererCVars::InitCVars()
 	REGISTER_CVAR3("r_ZFightingDepthScale", CV_r_ZFightingDepthScale, 0.995f, VF_CHEAT, "Controls anti z-fighting measures in shaders (scaling homogeneous z).");
 	REGISTER_CVAR3("r_ZFightingExtrude", CV_r_ZFightingExtrude, 0.001f, VF_CHEAT, "Controls anti z-fighting measures in shaders (extrusion along normal in world units).");
 
-	REGISTER_CVAR3_CB("r_TexelsPerMeter", CV_r_TexelsPerMeter, 0, 0,
+	REGISTER_CVAR3("r_TexelsPerMeter", CV_r_TexelsPerMeter, 0, 0,
 	                  "Enables visualization of the color coded \"texels per meter\" ratio for objects in view.\n"
 	                  "The checkerboard pattern displayed represents the mapping of the assigned diffuse\n"
 	                  "texture onto the object's uv space. One block in the pattern represents 8x8 texels.\n"
-	                  "Usage: r_TexelsPerMeter [n] (where n is the desired number of texels per meter; 0 = off)",
-	                  OnChange_CV_r_TexelsPerMeter);
+	                  "Usage: r_TexelsPerMeter [n] (where n is the desired number of texels per meter; 0 = off)");
 
 	REGISTER_CVAR3("r_enableAltTab", CV_r_enableAltTab, 1, VF_NULL,
 	               "Toggles alt tabbing in and out of fullscreen when the game is not in devmode.\n"
@@ -2886,13 +2923,8 @@ void CRendererCVars::InitCVars()
 	               "Sets support for multi GPU stereo rendering.\n"
 	               "Usage: r_StereoEnableMgpu [0=disabled/else=enabled]\n"
 	               "0: Disable multi-GPU for dual rendering\n"
-	               "1: Enable multi-GPU for dual rendering\n");
-
-#if defined(INCLUDE_OCULUS_SDK) || defined(INCLUDE_OPENVR_SDK) || defined(INCLUDE_OSVR_SDK)
-	#define VRDEVICE_STEREO_OUTPUT_INFO "7: VR Device (Oculus/Vive/HDK/Playstation VR)\n"
-#else
-	#define VRDEVICE_STEREO_OUTPUT_INFO
-#endif
+	               " 1: Enable multi-GPU for dual rendering\n"
+	               "-1: Enable multi-GPU for dual rendering, but run on only one GPU (simulation)\n");
 
 	REGISTER_CVAR3("r_StereoOutput", CV_r_StereoOutput, 0, VF_DUMPTODISK,
 	               "Sets stereo output. Output depends on the stereo monitor\n"
@@ -2904,7 +2936,7 @@ void CRendererCVars::InitCVars()
 	               "4: Side by Side\n"
 	               "5: Line by Line (Interlaced)\n"
 	               "6: Anaglyph\n"
-	               VRDEVICE_STEREO_OUTPUT_INFO
+		           "7: VR Device\n"
 	               );
 
 #undef VRDEVICE_STEREO_OUTPUT_INFO
@@ -2938,19 +2970,6 @@ void CRendererCVars::InitCVars()
 	               "Additional adjustment to the graphics card gamma correction when Stereo is enabled.\n"
 	               "Usage: r_StereoGammaAdjustment [offset]"
 	               "0: off");
-
-#if CRY_PLATFORM_ORBIS
-	const int DEVICE_WIDTH = 1920;
-	const int DEVICE_HEIGHT = 1080;
-#else
-	const int DEVICE_WIDTH = 1152;
-	const int DEVICE_HEIGHT = 720;
-#endif
-
-	REGISTER_CVAR3("r_ConsoleBackbufferWidth", CV_r_ConsoleBackbufferWidth, DEVICE_WIDTH, VF_DUMPTODISK,
-	               "console specific backbuffer resolution - width");
-	REGISTER_CVAR3("r_ConsoleBackbufferHeight", CV_r_ConsoleBackbufferHeight, DEVICE_HEIGHT, VF_DUMPTODISK,
-	               "console specific backbuffer resolution - height");
 
 	REGISTER_CVAR3("r_ConditionalRendering", CV_r_ConditionalRendering, 0, VF_NULL, "Enables conditional rendering .");
 
@@ -3162,10 +3181,10 @@ void CRendererCVars::InitCVars()
 	               "Set the step number of ray-marching for procedural volumetric clouds.\n"
 	               "Acceptable number is from 16 to 256, and it should be multiple of 16."
 	               );
-	REGISTER_CVAR3("r_VolumetricCloudsPipeline", CV_r_VolumetricCloudsPipeline, 1, VF_NULL,
+	REGISTER_CVAR3("r_VolumetricCloudsPipeline", CV_r_VolumetricCloudsPipeline, 0, VF_NULL,
 	               "Set the pipeline mode of procedural volumetric clouds.\n"
 	               "0 - Monolithic shader pipeline, using less memory.\n"
-	               "1 - Multiple shaders pipeline, using more memory, mostly faster."
+	               "1 - Multiple shaders pipeline, using more memory, faster when using Cloud Blocker."
 	               );
 	REGISTER_CVAR3("r_VolumetricCloudsStereoReprojection", CV_r_VolumetricCloudsStereoReprojection, 1, VF_NULL,
 	               "Enables stereoscopic reprojection for procedural volumetric clouds to accelerate the rendering.\n"
@@ -3202,12 +3221,12 @@ void CRendererCVars::InitCVars()
 	REGISTER_CVAR2("d3d11_CBUpdateStats", &CV_d3d11_CBUpdateStats, 0, 0, "Logs constant buffer updates statistics.");
 	CV_d3d11_forcedFeatureLevel = REGISTER_STRING("d3d11_forcedFeatureLevel", NULL, VF_DEV_ONLY | VF_REQUIRE_APP_RESTART,
 	                                              "Forces the Direct3D device to target a specific feature level - supported values are:\n"
-	                                              " 10.0\n"
-	                                              " 10.1\n"
-	                                              " 11.0");
+	                                              " 10_0\n"
+	                                              " 10_1\n"
+	                                              " 11_0\n"
+	                                              " 11_1");
 
-#if defined(SUPPORT_D3D_DEBUG_RUNTIME)
-	REGISTER_CVAR2("d3d11_debugruntime", &CV_d3d11_debugruntime, 0, 0, "Avoid D3D debug runtime errors for certain cases");
+#if defined(DX11_ALLOW_D3D_DEBUG_RUNTIME)
 	CV_d3d11_debugMuteSeverity = REGISTER_INT("d3d11_debugMuteSeverity", 2, VF_NULL,
 	                                          "Mute whole group of messages of certain severity when D3D debug runtime enabled:\n"
 	                                          " 0 - no severity based mute\n"
@@ -3244,6 +3263,12 @@ void CRendererCVars::InitCVars()
 	CV_r_reloadshaders = 0;
 #endif
 
+	// compute skinning cvars
+	DefineConstIntCVar(r_ComputeSkinning, 1, VF_NULL, "Activate skinning via compute shaders");
+	DefineConstIntCVar(r_ComputeSkinningMorphs, 1, VF_NULL, "Apply morphs before skinning");
+	DefineConstIntCVar(r_ComputeSkinningTangents, 1, VF_NULL, "Calculate new tangents after skinning is computed");
+	DefineConstIntCVar(r_ComputeSkinningDebugDraw, 0, VF_NULL, "Enable debug draw mode for geometry deformation");
+
 	//////////////////////////////////////////////////////////////////////////
 	InitExternalCVars();
 }
@@ -3278,4 +3303,66 @@ void CRendererCVars::CacheCaptureCVars()
 		CV_capture_file_name = !CV_capture_file_name ? pConsole->GetCVar("capture_file_name") : CV_capture_file_name;
 		CV_capture_file_prefix = !CV_capture_file_prefix ? pConsole->GetCVar("capture_file_prefix") : CV_capture_file_prefix;
 	}
+}
+
+
+CCVarUpdateRecorder::SUpdateRecord::SUpdateRecord(ICVar* pCVar)
+{
+	type = pCVar->GetType();
+	name = pCVar->GetName();
+
+	switch (type)
+	{
+		case CVAR_INT:    intValue = pCVar->GetIVal();                 break;
+		case CVAR_FLOAT:  floatValue = pCVar->GetFVal();               break;
+		case CVAR_STRING: cry_strcpy(stringValue, pCVar->GetString()); break;
+		default: assert(false);
+	};
+}
+
+CCVarUpdateRecorder::CCVarUpdateRecorder(IConsole* pConsole)
+{
+	m_pConsole = pConsole;
+	m_pConsole->AddConsoleVarSink(this);
+}
+
+CCVarUpdateRecorder::~CCVarUpdateRecorder()
+{
+	m_pConsole->RemoveConsoleVarSink(this);
+}
+
+void CCVarUpdateRecorder::OnAfterVarChange(ICVar* pVar) 
+{ 
+	m_updatedCVars[gcpRendD3D->m_RP.m_nFillThreadID].emplace_back(pVar);
+}
+
+void CCVarUpdateRecorder::OnVarUnregister(ICVar* pVar)
+{
+	SUpdateRecord tempRecord(pVar);
+	for (CVarList& cvarList : m_updatedCVars)
+	{
+		const auto it = std::remove(std::begin(cvarList), std::end(cvarList), tempRecord);
+		cvarList.erase(it, std::end(cvarList));
+	}
+}
+
+void CCVarUpdateRecorder::Reset() 
+{ 
+	m_updatedCVars[gcpRendD3D->m_RP.m_nProcessThreadID].clear(); 
+}
+
+const CCVarUpdateRecorder::CVarList& CCVarUpdateRecorder::GetCVars() const
+{ 
+	return m_updatedCVars[gcpRendD3D->m_RP.m_nProcessThreadID];
+}
+
+const CCVarUpdateRecorder::SUpdateRecord* CCVarUpdateRecorder::GetCVar(const char* cvarName) const
+{
+	for (auto& cvar : m_updatedCVars[gcpRendD3D->m_RP.m_nProcessThreadID])
+	{
+		if (cry_strcmp(cvar.name, cvarName) == 0)
+			return &cvar;
+	}
+
+	return nullptr;
 }

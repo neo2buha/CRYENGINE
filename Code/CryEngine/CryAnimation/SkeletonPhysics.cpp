@@ -49,6 +49,7 @@ CSkeletonPhysics::CSkeletonPhysics()
 	, m_bLimpRagdoll(false)
 	, m_bSetDefaultPoseExecute(false)
 	, m_bFullSkeletonUpdate(false)
+	, m_bForcePostSynchronization(false)
 	, m_arrCGAJoints(nullptr)
 {
 	ZeroArray(m_iSpineBone);
@@ -117,6 +118,7 @@ bool CSkeletonPhysics::Initialize(CSkeletonPose& skeletonPose)
 	m_bSetDefaultPoseExecute = false;
 
 	m_bFullSkeletonUpdate = true;
+	m_bForcePostSynchronization = false;
 
 	m_arrCGAJoints = NULL;
 
@@ -332,7 +334,7 @@ void CSkeletonPhysics::BuildPhysicalEntity(
 {
 	const Skeleton::CPoseData& poseData = GetPoseData();
 	CDefaultSkeleton& rDefaultSkeleton = *m_pInstance->m_pDefaultSkeleton;
-	partid0 = partid0 < 0 ? 0 : AllocPartIdRange(partid0, PARTID_MAX_SLOTS);
+	partid0 = partid0 < 0 ? 0 : EntityPhysicsUtils::AllocPartIdRange(partid0, EntityPhysicsUtils::PARTID_MAX_SLOTS);
 
 	float scaleOrg = mtxloc.GetColumn(0).GetLength();
 	float scale = scaleOrg / m_pInstance->m_location.s;
@@ -1616,8 +1618,13 @@ void CSkeletonPhysics::SynchronizeWithPhysicalEntity(IPhysicalEntity* pent, cons
 	Skeleton::CPoseData& poseDataWriteable = GetPoseDataForceWriteable();
 
 	SetLocation(IDENTITY);
+	uint mode = m_pInstance->m_CharEditMode;
+	m_pInstance->m_CharEditMode |= CA_CharacterTool; // force synchronization
 	Job_SynchronizeWithPhysicsPrepare(*CharacterInstanceProcessing::GetMemoryPool());
-	SynchronizeWithPhysicalEntity(poseDataWriteable, pent, posMaster, qMaster, QuatT(IDENTITY));
+	if (pent)
+		SynchronizeWithPhysicalEntity(poseDataWriteable, pent, posMaster, qMaster, QuatT(IDENTITY));
+	Job_Physics_SynchronizeFromAux(poseDataWriteable);
+	m_pInstance->m_CharEditMode = mode;
 	//	UpdateBBox(1);
 }
 
@@ -1987,8 +1994,12 @@ bool CSkeletonPhysics::AddImpact(const int partid, Vec3 point, Vec3 impact)
 // Forces skinning on the next frame
 void CSkeletonPhysics::ForceReskin()
 {
-	//m_uFlags |= nFlagsNeedReskinAllLODs;
 	m_bPhysicsWasAwake = true;
+}
+
+void CSkeletonPhysics::RequestForcedPostSynchronization()
+{
+	m_bForcePostSynchronization = true;
 }
 
 // Process
@@ -2345,9 +2356,15 @@ void CSkeletonPhysics::SynchronizeWithPhysicsPost()
 	if (objectType == CGA || pCharPhys && pCharPhys->GetType() == PE_ARTICULATED && pCharPhys->GetParams(&pf1) && pf1.flags & aef_recorded_physics)
 	{
 
-		if (m_bFullSkeletonUpdate && m_pSkeletonAnim->m_IsAnimPlaying || m_ppBonePhysics)
-			//	if (m_InstanceVisible)
+		if (
+			(m_bFullSkeletonUpdate && m_bForcePostSynchronization) ||
+			(m_bFullSkeletonUpdate && m_pSkeletonAnim->m_IsAnimPlaying) ||
+			(m_ppBonePhysics)
+			)
+		{
 			m_pInstance->UpdatePhysicsCGA(GetPoseDataExplicitWriteable(), 1, m_location);
+			m_bForcePostSynchronization = false;
+		}
 
 		if (m_bFullSkeletonUpdate)
 		{
@@ -2430,7 +2447,6 @@ void CSkeletonPhysics::Physics_SynchronizeToEntity(IPhysicalEntity& physicalEnti
 			abpu.pIds = &m_physJointsIdx[0];
 			if (!m_pPhysUpdateValidator)
 			{
-				ScopedSwitchToGlobalHeap globalHeap;
 				m_pPhysUpdateValidator = new SBatchUpdateValidator;
 			}
 			m_pPhysUpdateValidator->AddRef();

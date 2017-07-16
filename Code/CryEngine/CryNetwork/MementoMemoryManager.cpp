@@ -4,8 +4,9 @@
 #include "MementoMemoryManager.h"
 #include "Network.h"
 #include <CrySystem/ITextModeConsole.h>
+#include <CryRenderer/IRenderAuxGeom.h>
 
-#define PREVENT_ZERO_ALLOCS(x) x = MAX(x, 1)
+#define PREVENT_ZERO_ALLOCS(x) x = std::max((size_t)x, (size_t)1)
 
 #if MMM_USE_BUCKET_ALLOCATOR
 	#include <CryMemory/BucketAllocatorImpl.h>
@@ -217,7 +218,7 @@ static void DrawDebugLine(int x, int y, const char* fmt, ...)
 
 	float white[] = { 1, 1, 1, 1 };
 
-	gEnv->pRenderer->Draw2dLabel((float)(x * 12 + 12), (float)(y * 12 + 12), 1.2f, white, false, "%s", buffer);
+	IRenderAuxText::Draw2dLabel((float)(x * 12 + 12), (float)(y * 12 + 12), 1.2f, white, false, "%s", buffer);
 
 	if (ITextModeConsole* pC = gEnv->pSystem->GetITextModeConsole())
 	{
@@ -780,7 +781,7 @@ void CMementoMemoryManager::CMementoMemoryManagerAllocator::DebugDraw(int x, int
 
 	#if MMM_USE_BUCKET_ALLOCATOR
 	DrawDebugLine(x, y++, "Memento allocator memory");
-	DrawDebugLine(x, y++, "Bucket Allocator Requested %8 " PRISIZE_T " Allocated %8 " PRISIZE_T " Storage Size %8 " PRISIZE_T " Storage Capacity %8" PRISIZE_T " pages", m_bucketTotalRequested, m_bucketTotalAllocated, m_bucketAllocator.GetBucketStorageSize(), m_bucketAllocator.GetBucketStoragePages());
+	DrawDebugLine(x, y++, "Bucket Allocator Requested %8" PRISIZE_T " Allocated %8" PRISIZE_T " Storage Size %8" PRISIZE_T " Storage Capacity %8" PRISIZE_T " pages", m_bucketTotalRequested, m_bucketTotalAllocated, m_bucketAllocator.GetBucketStorageSize(), m_bucketAllocator.GetBucketStoragePages());
 	totalAllocated += m_bucketTotalAllocated;
 	#else
 	DrawDebugLine(x, y++, "Memento allocator memory");
@@ -850,8 +851,6 @@ CMementoMemoryManager::~CMementoMemoryManager()
 
 CMementoMemoryManager::Hdl CMementoMemoryManager::AllocHdl(size_t sz, void* callerOverride)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	MMM_ASSERT_GLOBAL_LOCK();
 
 	PREVENT_ZERO_ALLOCS(sz);
@@ -871,8 +870,6 @@ CMementoMemoryManager::Hdl CMementoMemoryManager::AllocHdl(size_t sz, void* call
 
 CMementoMemoryManager::Hdl CMementoMemoryManager::CloneHdl(Hdl hdl)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	MMM_ASSERT_GLOBAL_LOCK();
 
 	Hdl out = AllocHdl(GetHdlSize(hdl), UP_STACK_PTR);
@@ -884,8 +881,6 @@ CMementoMemoryManager::Hdl CMementoMemoryManager::CloneHdl(Hdl hdl)
 
 void CMementoMemoryManager::ResizeHdl(Hdl hdl, size_t sz)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	MMM_ASSERT_GLOBAL_LOCK();
 
 	PREVENT_ZERO_ALLOCS(sz);
@@ -907,8 +902,6 @@ void CMementoMemoryManager::ResizeHdl(Hdl hdl, size_t sz)
 
 void CMementoMemoryManager::FreeHdl(Hdl hdl)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	MMM_ASSERT_GLOBAL_LOCK();
 
 	size_t size = GetHdlSize(hdl);
@@ -931,8 +924,6 @@ void CMementoMemoryManager::FreeHdl(Hdl hdl)
 
 void* CMementoMemoryManager::AllocPtr(size_t sz, void* callerOverride)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	MMM_ASSERT_GLOBAL_LOCK();
 
 	PREVENT_ZERO_ALLOCS(sz);
@@ -952,8 +943,6 @@ void* CMementoMemoryManager::AllocPtr(size_t sz, void* callerOverride)
 
 void CMementoMemoryManager::FreePtr(void* p, size_t sz)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	MMM_ASSERT_GLOBAL_LOCK();
 
 	PREVENT_ZERO_ALLOCS(sz);

@@ -8,7 +8,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 2:8:2004   10:53 : Created by Márcio Martins
+   - 2:8:2004   10:53 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 
@@ -19,19 +19,17 @@
 
 #include <CrySystem/ICmdLine.h>
 #include <CryNetwork/INetwork.h>
-#include <CrySystem/ITestSystem.h> // <> required for Interfuscator
 
 struct IAIActorProxy;
 struct IGameFramework;
 struct IGameStateRecorder;
 struct IGameAudio;
 struct IGameWarningsListener;
-//struct ITestManager;
 struct SGameStartParams;
 struct SRenderingPassInfo;
-struct IGamePhysicsSettings;
 struct IGameToEditorInterface;
 struct IGameWebDebugService;
+struct IGameplayListener;
 
 //! Main interface used for the game central object.
 //! The IGame interface should be implemented in the GameDLL.
@@ -39,6 +37,14 @@ struct IGameWebDebugService;
 //! \see IEditorGame.
 struct IGame
 {
+	//! Interface used to communicate what entities/entity archetypes need to be precached.
+	//! Game code can further do some data mining to figure out the resources needed for the entities
+	struct IResourcesPreCache
+	{
+		virtual void QueueEntityClass(const char* szEntityClass) = 0;
+		virtual void QueueEntityArchetype(const char* szEntityArchetype) = 0;
+	};
+
 	struct ExportFilesInfo
 	{
 		ExportFilesInfo(const char* _baseFileName, const uint32 _fileCount)
@@ -61,14 +67,6 @@ struct IGame
 		const uint32 m_fileCount;
 	};
 
-	//! Entry function used to initialize a new IGame of a GameMod.
-	//! \param pGameFramework Pointer to the game framework, from which a pointer of ISystem can be retrieved.
-	//! \return Pointer to the newly created IGame implementation.
-	typedef IGame*(* TEntryFunction)(IGameFramework* pGameFramework);
-
-	//! Type to represent saved game names, keeping the string on the stack if possible.
-	typedef CryStackStringT<char, 256> TSaveGameName;
-
 	// <interfuscator:shuffle>
 	virtual ~IGame(){}
 
@@ -77,7 +75,7 @@ struct IGame
 	//! \param pCmdLine Pointer to the command line interface.
 	//! \param pFramework Pointer to the IGameFramework interface.
 	//! \return 0 if something went wrong with initialization, non-zero otherwise.
-	virtual bool Init(IGameFramework* pFramework) = 0;
+	virtual bool Init(/*IGameFramework* pFramework*/) = 0;
 
 	//! Init editor related things.
 	virtual void InitEditor(IGameToEditorInterface* pGameToEditor) = 0;
@@ -104,10 +102,6 @@ struct IGame
 	//! \param bStart true if we enter game mode, false if we exit it.
 	virtual void EditorResetGame(bool bStart) = 0;
 
-	//! Called on the game when the local player id is set.
-	//! \param playerId Entity Id of the local player.
-	virtual void PlayerIdSet(EntityId playerId) = 0;
-
 	//! \return Name of the mode. (e.g. "Capture The Flag").
 	virtual const char* GetLongName() = 0;
 
@@ -117,22 +111,12 @@ struct IGame
 	//! Loads a specified action map, used mainly for loading the default action map
 	virtual void LoadActionMaps(const char* filename) = 0;
 
-	//! Called when playerID is reset in GameChannel
-	virtual void OnClearPlayerIds() = 0;
-
-	//! Auto-Savegame name creation.
-	//! \return c_str or NULL.
-	virtual IGame::TSaveGameName CreateSaveGameName() = 0;
-
 	//! \return Pointer to the game framework being used.
 	virtual IGameFramework* GetIGameFramework() = 0;
 
 	//! Mapping level filename to "official" name.
 	//! \return c_str or NULL.
 	virtual const char* GetMappedLevelName(const char* levelName) const = 0;
-
-	//! \return true if an initial levelstart savegame should be created, otherwise false.
-	virtual const bool DoInitialSavegame() const = 0;
 
 	//! Add a game warning that is shown to the player
 	//! \return A unique handle to the warning or 0 for any error.
@@ -152,9 +136,7 @@ struct IGame
 	//! \retval true, if the game handles the end level action and calls ScheduleEndLevel directly.
 	virtual bool GameEndLevel(const char* stringId) = 0;
 
-	virtual void SetUserProfileChanged(bool yesNo) {}
-
-	//! Creates a GameStateRecorder instance in GameDll and passes its ownership to the caller (CryAction/GamePlayRecorder).
+	//! Creates a GameStateRecorder instance in GameDll and returns the non-owning pointer to the caller (CryAction/GamePlayRecorder).
 	virtual IGameStateRecorder* CreateGameStateRecorder(IGameplayListener* pL) = 0;
 
 	virtual void                FullSerialize(TSerialize ser) = 0;
@@ -167,14 +149,11 @@ struct IGame
 	//! Interface hook to load all game exported data when the level is loaded.
 	virtual void LoadExportedLevelData(const char* levelName, const char* missionName) = 0;
 
-	//! Called by FlowSystem to register all game specific flow nodes.
-	virtual void RegisterGameFlowNodes() = 0;
-
-	//! Retrieve interface for the IGamePhysicsSettings.
-	virtual IGamePhysicsSettings* GetIGamePhysicsSettings() = 0;
-
 	//! Access to game interface.
 	virtual void* GetGameInterface() = 0;
+
+	//! Access game specific resource precache interface
+	virtual IResourcesPreCache* GetResourceCache() { return nullptr; }
 
 	//! Retrieves IGameWebDebugService for web-socket based remote debugging.
 	virtual IGameWebDebugService* GetIWebDebugService() { return nullptr; };

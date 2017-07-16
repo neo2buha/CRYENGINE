@@ -22,7 +22,7 @@ typedef std::unique_ptr<IResponseActionInstance> IResponseActionInstanceUniquePt
 
 struct IResponseAction : public IEditorObject
 {
-	virtual ~IResponseAction() {}
+	virtual ~IResponseAction() = default;
 
 	/**
 	 * Will execute the action. If the action is not an instantaneous action, it can return an ActionInstance, which is then updated as long as needed by the DRS to finish the execution of the action
@@ -46,22 +46,24 @@ struct IResponseAction : public IEditorObject
 //! One concrete running instance of the actions. (There might be actions that dont need instances, because their action is instantaneously.
 struct IResponseActionInstance
 {
+	//these states are returned by the update method and will influence the further execution of the corresponding response instance
 	enum eCurrentState
 	{
-		CS_RUNNING,
-		CS_FINISHED,
-		CS_CANCELED,
-		CS_ERROR
+		CS_RUNNING, //the action is not finished and will be updated furthermore. The response instance will NOT continue with the next follow-up response. Therefore processing is blocked, until all currently RUNNING action instances are done.
+		CS_FINISHED, //tells the response-instance that the action has finished successfully. The response instance is allowed to continue with the next follow-up response.
+		CS_CANCELED,  //tells the response-instance that the action was canceled. The response instance is allowed to continue with the next follow-up response.
+		CS_ERROR, //tells the response-instance that the action could not finish. The response instance is allowed to continue with the next follow-up response.
+		CS_RUNNING_NON_BLOCKING,  //the action is not done, but the response-instance should not wait for it to finish. The response instance is allowed to continue with the next follow-up response. Can be useful for actions that should be updated the whole time while the response instance is running, remark: that the actionInstance will still be canceled when the response instance is done.
 	};
 
-	virtual ~IResponseActionInstance() {}
+	virtual ~IResponseActionInstance() = default;
 
 	/**
 	 * This method continues the execution of an started action that takes some time to finish. Its called from the DRS System until it stops returning CS_RUNNING.
 	 *
 	 * Note: its called by the DRS system, as long as the action instance is running
 	 * @return returns the current state of the execution of the action. CS_RUNNING means still needs time to finish, CS_FINISHED means finished successful,
-	 * @return CS_CANCELED means the action was canceled from the outside before it was finished, CS_ERROR means an error happened during execution
+	 * @return CS_CANCELED means the action was canceled from the outside before it was finished, CS_ERROR means an error happened during execution, CS_RUNNING_NON_BLOCKING means not finished, but the response instance is nevertheless allowed to continue with the next follow-up response
 	 */
 	virtual eCurrentState Update() = 0;
 

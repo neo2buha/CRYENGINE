@@ -1,23 +1,18 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
-// -------------------------------------------------------------------------
-//  File name:   EntityCVars.h
-//  Version:     v1.00
-//  Created:     18/5/2004 by Timur.
-//  Compilers:   Visual Studio.NET 2003
-//  Description:
-// -------------------------------------------------------------------------
-//  History:
-//
-////////////////////////////////////////////////////////////////////////////
-
-#ifndef __EntityCVars_h__
-#define __EntityCVars_h__
 #pragma once
 
 //////////////////////////////////////////////////////////////////////////
 // Console variables local to EntitySystem.
 //////////////////////////////////////////////////////////////////////////
+struct SEntityWithCharacterInstanceAutoComplete : public IConsoleArgumentAutoComplete
+{
+	SEntityWithCharacterInstanceAutoComplete();
+
+	virtual int         GetCount() const override;
+	virtual const char* GetValue(int index) const override;
+};
+
 struct CVar
 {
 	static ICVar* pDebug;
@@ -53,6 +48,7 @@ struct CVar
 	static ICVar*   pDebugNotSeenTimeout;
 	static ICVar*   pDrawAreas;
 	static ICVar*   pDrawAreaGrid;
+	static ICVar*   pDrawAreaGridCells;
 	static ICVar*   pDrawAreaDebug;
 	static ICVar*   pDrawAudioProxyZRay;
 	static ICVar*   pMotionBlur;
@@ -79,29 +75,21 @@ struct CVar
 
 	static int         es_DebugEntityUsage;
 	static const char* es_DebugEntityUsageFilter;
+	static int         es_DebugEntityUsageSortMode;
 
 	// Entity pool usage
-	static int         es_EnablePoolUse;
-	static int         es_DebugPool;
-	static int         es_TestPoolSignatures;
+	static int    es_LayerSaveLoadSerialization;
+	static int    es_SaveLoadUseLUANoSaveFlag;
+	static int    es_LayerDebugInfo;
 
-	static const char* es_DebugPoolFilter;
+	static float  es_EntityUpdatePosDelta;
 
-	static int         es_LayerSaveLoadSerialization;
-	static int         es_SaveLoadUseLUANoSaveFlag;
-	static int         es_ClearPoolBookmarksOnLayerUnload;
-	static int         es_LayerDebugInfo;
+	static int    es_debugDrawEntityIDs;
 
-	static ICVar*      pUpdateType;
-
-	static float       es_EntityUpdatePosDelta;
-
-	static int         es_debugDrawEntityIDs;
-
-	static int         es_MaxJointFx;
+	static int    es_MaxJointFx;
 
 	// Initialize console variables.
-	static void Init(struct IConsole* pConsole);
+	static void Init();
 
 	// Dump Entities
 	static void DumpEntities(IConsoleCmdArgs*);
@@ -110,11 +98,11 @@ struct CVar
 	// Recompile area grid
 	static void CompileAreaGrid(IConsoleCmdArgs*);
 
-	static void DumpEntityBookmarks(IConsoleCmdArgs*);
-
 	static void EnableDebugAnimText(IConsoleCmdArgs* args);
+	static void SetDebugAnimText(IEntity* entity, const bool enable);
 
 	static void SetAudioListenerOffsets(IConsoleCmdArgs* pArgs);
-};
 
-#endif // __EntityCVars_h__
+	// Console commands to enable/disable layers
+	static void ConsoleCommandToggleLayer(IConsoleCmdArgs* pArgs);
+};

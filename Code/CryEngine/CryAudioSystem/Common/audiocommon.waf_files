@@ -5,10 +5,10 @@
 		[
 			"ATLEntityData.h",
 			"AudioLogger.h",
-			"IAudioSystemImplementation.h",
+			"IAudioImpl.h",
 			"SharedAudioData.h",
-			"SoundAllocator.h",
-			"STLSoundAllocator.h"
+			"PoolObject.h",
+			"PoolObject_impl.h"
 		]
 	}
 }

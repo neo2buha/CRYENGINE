@@ -13,10 +13,10 @@
 
 #include "StdAfx.h"
 #include <CryAnimation/ICryAnimation.h>
+#include <Cry3DEngine/IStatObj.h>
 
 #include "DecalManager.h"
 #include "3dEngine.h"
-#include <Cry3DEngine/IStatObj.h>
 #include "ObjMan.h"
 #include "MatMan.h"
 #include "terrain.h"
@@ -174,89 +174,86 @@ bool CDecalManager::SpawnHierarchical(const CryEngineDecalInfo& rootDecalInfo, C
 	decalBoxWS.max = rootDecalInfo.vPos + Vec3(fSize, fSize, fSize);
 	decalBoxWS.min = rootDecalInfo.vPos - Vec3(fSize, fSize, fSize);
 
-	for (int nEntitySlotId = 0; nEntitySlotId < 16; nEntitySlotId++)
+	CStatObj* _pStatObj = NULL;
+	Matrix34A entSlotMatrix;
+	entSlotMatrix.SetIdentity();
+	if (_pStatObj = (CStatObj*)rootDecalInfo.ownerInfo.pRenderNode->GetEntityStatObj(~0, &entSlotMatrix, true))
 	{
-		CStatObj* _pStatObj = NULL;
-		Matrix34A entSlotMatrix;
-		entSlotMatrix.SetIdentity();
-		if (_pStatObj = (CStatObj*)rootDecalInfo.ownerInfo.pRenderNode->GetEntityStatObj(nEntitySlotId, ~0, &entSlotMatrix, true))
+		if (_pStatObj->m_nFlags & STATIC_OBJECT_COMPOUND)
 		{
-			if (_pStatObj->m_nFlags & STATIC_OBJECT_COMPOUND)
+			if (int nSubCount = _pStatObj->GetSubObjectCount())
 			{
-				if (int nSubCount = _pStatObj->GetSubObjectCount())
+				// spawn decals on stat obj sub objects
+				CryEngineDecalInfo decalInfo = rootDecalInfo;
+				decalInfo.ownerInfo.nRenderNodeSlotId = 0;
+				if (rootDecalInfo.ownerInfo.nRenderNodeSlotSubObjectId >= 0)
 				{
-					// spawn decals on stat obj sub objects
-					CryEngineDecalInfo decalInfo = rootDecalInfo;
-					decalInfo.ownerInfo.nRenderNodeSlotId = nEntitySlotId;
-					if (rootDecalInfo.ownerInfo.nRenderNodeSlotSubObjectId >= 0)
-					{
-						decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = rootDecalInfo.ownerInfo.nRenderNodeSlotSubObjectId;
-						bSuccess |= Spawn(decalInfo, pCallerManagedDecal);
-					}
-					else
-						for (int nSubId = 0; nSubId < nSubCount; nSubId++)
-						{
-							IStatObj::SSubObject& subObj = _pStatObj->SubObject(nSubId);
-							if (subObj.pStatObj && !subObj.bHidden && subObj.nType == STATIC_SUB_OBJECT_MESH)
-							{
-								Matrix34 subObjMatrix = entSlotMatrix * subObj.tm;
-								AABB subObjAABB = AABB::CreateTransformedAABB(subObjMatrix, subObj.pStatObj->GetAABB());
-								if (Overlap::AABB_AABB(subObjAABB, decalBoxWS))
-								{
-									decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = nSubId;
-									bSuccess |= Spawn(decalInfo, pCallerManagedDecal);
-								}
-							}
-						}
-				}
-			}
-			else
-			{
-				AABB subObjAABB = AABB::CreateTransformedAABB(entSlotMatrix, _pStatObj->GetAABB());
-				if (Overlap::AABB_AABB(subObjAABB, decalBoxWS))
-				{
-					CryEngineDecalInfo decalInfo = rootDecalInfo;
-					decalInfo.ownerInfo.nRenderNodeSlotId = nEntitySlotId;
-					decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = -1; // no childs
+					decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = rootDecalInfo.ownerInfo.nRenderNodeSlotSubObjectId;
 					bSuccess |= Spawn(decalInfo, pCallerManagedDecal);
 				}
-			}
-		}
-		else if (ICharacterInstance* pChar = rootDecalInfo.ownerInfo.pRenderNode->GetEntityCharacter(nEntitySlotId, &entSlotMatrix))
-		{
-			// spawn decals on CGA components
-			ISkeletonPose* pSkeletonPose = pChar->GetISkeletonPose();
-			uint32 numJoints = pChar->GetIDefaultSkeleton().GetJointCount();
-			CryEngineDecalInfo decalInfo = rootDecalInfo;
-			decalInfo.ownerInfo.nRenderNodeSlotId = nEntitySlotId;
-
-			if (rootDecalInfo.ownerInfo.nRenderNodeSlotSubObjectId >= 0)
-			{
-				decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = rootDecalInfo.ownerInfo.nRenderNodeSlotSubObjectId;
-				bSuccess |= Spawn(decalInfo, pCallerManagedDecal);
-			}
-			else
-				// spawn decal on every sub-object intersecting decal bbox
-				for (uint32 nJointId = 0; nJointId < numJoints; nJointId++)
-				{
-					IStatObj* pStatObj = pSkeletonPose->GetStatObjOnJoint(nJointId);
-
-					if (pStatObj && !(pStatObj->GetFlags() & STATIC_OBJECT_HIDDEN) && pStatObj->GetRenderMesh())
+				else
+					for (int nSubId = 0; nSubId < nSubCount; nSubId++)
 					{
-						assert(!pStatObj->GetSubObjectCount());
-
-						Matrix34 tm34 = entSlotMatrix * Matrix34(pSkeletonPose->GetAbsJointByID(nJointId));
-						AABB objBoxWS = AABB::CreateTransformedAABB(tm34, pStatObj->GetAABB());
-						//				DrawBBox(objBoxWS);
-						//			DrawBBox(decalBoxWS);
-						if (Overlap::AABB_AABB(objBoxWS, decalBoxWS))
+						IStatObj::SSubObject& subObj = _pStatObj->SubObject(nSubId);
+						if (subObj.pStatObj && !subObj.bHidden && subObj.nType == STATIC_SUB_OBJECT_MESH)
 						{
-							decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = nJointId;
-							bSuccess |= Spawn(decalInfo, pCallerManagedDecal);
+							Matrix34 subObjMatrix = entSlotMatrix * subObj.tm;
+							AABB subObjAABB = AABB::CreateTransformedAABB(subObjMatrix, subObj.pStatObj->GetAABB());
+							if (Overlap::AABB_AABB(subObjAABB, decalBoxWS))
+							{
+								decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = nSubId;
+								bSuccess |= Spawn(decalInfo, pCallerManagedDecal);
+							}
 						}
 					}
-				}
+			}
 		}
+		else
+		{
+			AABB subObjAABB = AABB::CreateTransformedAABB(entSlotMatrix, _pStatObj->GetAABB());
+			if (Overlap::AABB_AABB(subObjAABB, decalBoxWS))
+			{
+				CryEngineDecalInfo decalInfo = rootDecalInfo;
+				decalInfo.ownerInfo.nRenderNodeSlotId = 0;
+				decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = -1; // no childs
+				bSuccess |= Spawn(decalInfo, pCallerManagedDecal);
+			}
+		}
+	}
+	else if (ICharacterInstance* pChar = rootDecalInfo.ownerInfo.pRenderNode->GetEntityCharacter(&entSlotMatrix))
+	{
+		// spawn decals on CGA components
+		ISkeletonPose* pSkeletonPose = pChar->GetISkeletonPose();
+		uint32 numJoints = pChar->GetIDefaultSkeleton().GetJointCount();
+		CryEngineDecalInfo decalInfo = rootDecalInfo;
+		decalInfo.ownerInfo.nRenderNodeSlotId = 0;
+
+		if (rootDecalInfo.ownerInfo.nRenderNodeSlotSubObjectId >= 0)
+		{
+			decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = rootDecalInfo.ownerInfo.nRenderNodeSlotSubObjectId;
+			bSuccess |= Spawn(decalInfo, pCallerManagedDecal);
+		}
+		else
+			// spawn decal on every sub-object intersecting decal bbox
+			for (uint32 nJointId = 0; nJointId < numJoints; nJointId++)
+			{
+				IStatObj* pStatObj = pSkeletonPose->GetStatObjOnJoint(nJointId);
+
+				if (pStatObj && !(pStatObj->GetFlags() & STATIC_OBJECT_HIDDEN) && pStatObj->GetRenderMesh())
+				{
+					assert(!pStatObj->GetSubObjectCount());
+
+					Matrix34 tm34 = entSlotMatrix * Matrix34(pSkeletonPose->GetAbsJointByID(nJointId));
+					AABB objBoxWS = AABB::CreateTransformedAABB(tm34, pStatObj->GetAABB());
+					//				DrawBBox(objBoxWS);
+					//			DrawBBox(decalBoxWS);
+					if (Overlap::AABB_AABB(objBoxWS, decalBoxWS))
+					{
+						decalInfo.ownerInfo.nRenderNodeSlotSubObjectId = nJointId;
+						bSuccess |= Spawn(decalInfo, pCallerManagedDecal);
+					}
+				}
+			}
 	}
 
 	return bSuccess;
@@ -452,8 +449,10 @@ bool CDecalManager::Spawn(CryEngineDecalInfo DecalInfo, CDecal* pCallerManagedDe
 
 	float fWrapMinSize = GetFloatCVar(e_DecalsDeferredDynamicMinSize);
 
+	EERType ownerRenderNodeType = (DecalInfo.ownerInfo.pRenderNode) ? DecalInfo.ownerInfo.pRenderNode->GetRenderNodeType() : eERType_NotRenderNode;
+
 	bool bSpawnOnVegetationWithBending = false;
-	if (DecalInfo.ownerInfo.pRenderNode && DecalInfo.ownerInfo.pRenderNode->GetRenderNodeType() == eERType_Vegetation && DecalInfo.fSize > fWrapMinSize && !DecalInfo.bDeferred)
+	if (ownerRenderNodeType == eERType_Vegetation && DecalInfo.fSize > fWrapMinSize && !DecalInfo.bDeferred)
 	{
 		//    CVegetation * pVeg = (CVegetation*)DecalInfo.ownerInfo.pRenderNode;
 		//    StatInstGroup & rGroup = GetObjManager()->m_lstStaticTypes[pVeg->m_nObjectTypeID];
@@ -565,7 +564,7 @@ bool CDecalManager::Spawn(CryEngineDecalInfo DecalInfo, CDecal* pCallerManagedDe
 		{
 			IRenderNode* pDecalOwner = DecalInfo.ownerInfo.pDecalReceivers->Get(nObj)->pNode;
 			Matrix34A objMat;
-			if (IStatObj* pEntObject = pDecalOwner->GetEntityStatObj(DecalInfo.ownerInfo.nRenderNodeSlotId, 0, &objMat))
+			if (IStatObj* pEntObject = pDecalOwner->GetEntityStatObj(0, &objMat))
 			{
 				SRenderMeshInfoInput rmi;
 				rmi.pMesh = pEntObject->GetRenderMesh();
@@ -623,9 +622,7 @@ bool CDecalManager::Spawn(CryEngineDecalInfo DecalInfo, CDecal* pCallerManagedDe
 
 		assert(newDecal.m_pRenderMesh->GetChunks().size() == 1);
 	}
-	else if (DecalInfo.ownerInfo.pRenderNode &&
-	         DecalInfo.ownerInfo.pRenderNode->GetRenderNodeType() == eERType_RenderProxy &&
-	         DecalInfo.ownerInfo.nRenderNodeSlotId >= 0)
+	else if (ownerRenderNodeType == eERType_MovableBrush || ownerRenderNodeType == eERType_Vegetation)
 	{
 		newDecal.m_eDecalType = eDecalType_OS_SimpleQuad;
 
@@ -851,19 +848,8 @@ void CDecalManager::Render(const SRenderingPassInfo& passInfo)
 						Vec3 vSize(pDecal->m_fWSSize, pDecal->m_fWSSize, pDecal->m_fWSSize);
 						AABB aabb(pDecal->m_vWSPos - vSize, pDecal->m_vWSPos + vSize);
 
-						uint32 nDLMask = 0;
-
-						if (!pDecal->m_bDeferred)
-						{
-							IRenderNode* pRN = pDecal->m_ownerInfo.pRenderNode;
-							if (COctreeNode* pNode = (COctreeNode*)(pRN ? pRN->m_pOcNode : NULL))
-								nDLMask = Get3DEngine()->BuildLightMask(aabb, pNode->GetAffectingLights(passInfo), (CVisArea*)pRN->GetEntityVisArea(), (pRN->GetRndFlags() & ERF_OUTDOORONLY) != 0, passInfo);
-							else
-								nDLMask = Get3DEngine()->BuildLightMask(aabb, passInfo);
-						}
-
 						float fDistFading = SATURATE((1.f - fDist / fMaxViewDist) * DIST_FADING_FACTOR);
-						pDecal->Render(fCurrTime, bAfterWater, nDLMask, fDistFading, fDist, passInfo);
+						pDecal->Render(fCurrTime, bAfterWater, fDistFading, fDist, passInfo);
 
 						if (GetCVars()->e_Decals > 1)
 						{
@@ -965,8 +951,8 @@ void CDecalManager::MoveToEdge(IRenderMesh* pRM, const float fRadius, Vec3& vOut
 
 	AABB boxRM;
 	pRM->GetBBox(boxRM.min, boxRM.max);
-	Sphere sp(vOutPos, fRadius);
-	if (!Overlap::Sphere_AABB(sp, boxRM))
+	Sphere sphere(vOutPos, fRadius);
+	if (!Overlap::Sphere_AABB(sphere, boxRM))
 		return;
 
 	// get position offset and stride
@@ -1067,12 +1053,11 @@ void CDecalManager::FillBigDecalIndices(IRenderMesh* pRM, Vec3 vPos, float fRadi
 	AABB boxRM;
 	pRM->GetBBox(boxRM.min, boxRM.max);
 
-	Sphere sp(vPos, fRadius);
-	if (!Overlap::Sphere_AABB(sp, boxRM))
+	Sphere sphere(vPos, fRadius);
+	if (!Overlap::Sphere_AABB(sphere, boxRM))
 		return;
 
 	IRenderMesh::ThreadAccessLock lockrm(pRM);
-	HWVSphere hwSphere(sp);
 
 	// get position offset and stride
 	int nInds = pRM->GetIndicesCount();
@@ -1104,24 +1089,22 @@ void CDecalManager::FillBigDecalIndices(IRenderMesh* pRM, Vec3 vPos, float fRadi
 
 	plstIndices->PreAllocate(16);
 
-	hwvec3 vProjDir = HWVLoadVecUnaligned(&vProjDirIn);
+	Vec3 vProjDir = vProjDirIn;
 
 	int usedTrianglesTotal = 0;
 
 	TRenderChunkArray& Chunks = pRM->GetChunks();
 
 	{
-		hwvec3 meshBBoxMin = HWVLoadVecUnaligned(&meshBBox.min);
-		hwvec3 meshBBoxMax = HWVLoadVecUnaligned(&meshBBox.max);
+		Vec3 meshBBoxMin = meshBBox.min;
+		Vec3 meshBBoxMax = meshBBox.max;
 
-		SIMDFConstant(fEpsilon, 0.001f);
+		const float fEpsilon = 0.001f;
 
 		const int kNumChunks = Chunks.size();
 
 		if (bPointProj)
 		{
-			hwvec3 hwvPos = HWVLoadVecUnaligned(&vPos);
-
 			for (int nChunkId = 0; nChunkId < kNumChunks; nChunkId++)
 			{
 				CRenderChunk* pChunk = &Chunks[nChunkId];
@@ -1178,33 +1161,33 @@ void CDecalManager::FillBigDecalIndices(IRenderMesh* pRM, Vec3 vPos, float fRadi
 					}
 
 					// get tri vertices
-					const hwvec3 v0 = HWVLoadVecUnaligned(reinterpret_cast<Vec3*>(&pPos[iPosIndex0]));
-					const hwvec3 v1 = HWVLoadVecUnaligned(reinterpret_cast<Vec3*>(&pPos[iPosIndex1]));
-					const hwvec3 v2 = HWVLoadVecUnaligned(reinterpret_cast<Vec3*>(&pPos[iPosIndex2]));
+					const Vec3 v0 = *reinterpret_cast<Vec3*>(&pPos[iPosIndex0]);
+					const Vec3 v1 = *reinterpret_cast<Vec3*>(&pPos[iPosIndex1]);
+					const Vec3 v2 = *reinterpret_cast<Vec3*>(&pPos[iPosIndex2]);
 
 					// test the face
-					hwvec3 v0v1Diff = HWVSub(v0, v1);
-					hwvec3 v2v1Diff = HWVSub(v2, v1);
-					hwvec3 vPosv0Diff = HWVSub(hwvPos, v0);
+					Vec3 v0v1Diff = v0 - v1;
+					Vec3 v2v1Diff = v2 - v1;
+					Vec3 vPosv0Diff = vPos - v0;
 
-					hwvec3 vCrossResult = HWVCross(v0v1Diff, v2v1Diff);
+					Vec3 vCrossResult = v0v1Diff ^ v2v1Diff;
 
-					simdf fDot = HWV3Dot(vPosv0Diff, vCrossResult);
+					float fDot = vPosv0Diff | vCrossResult;
 
-					if (SIMDFGreaterThan(fDot, fEpsilon))
+					if (fDot > fEpsilon)
 					{
-						if (Overlap::HWVSphere_TriangleFromPoints(hwSphere, v0, v1, v2))
+						if (Overlap::Sphere_Triangle(sphere, Triangle(v0, v1, v2)))
 						{
 							plstIndices->AddList(&pInds[i], 3);
 
-							hwvec3 triBBoxMax1 = HWVMax(v1, v0);
-							hwvec3 triBBoxMax2 = HWVMax(meshBBoxMax, v2);
+							Vec3 triBBoxMax1 = max(v1, v0);
+							Vec3 triBBoxMax2 = max(meshBBoxMax, v2);
 
-							hwvec3 triBBoxMin1 = HWVMin(v1, v0);
-							hwvec3 triBBoxMin2 = HWVMin(meshBBoxMin, v2);
+							Vec3 triBBoxMin1 = min(v1, v0);
+							Vec3 triBBoxMin2 = min(meshBBoxMin, v2);
 
-							meshBBoxMax = HWVMax(triBBoxMax1, triBBoxMax2);
-							meshBBoxMin = HWVMin(triBBoxMin1, triBBoxMin2);
+							meshBBoxMax = max(triBBoxMax1, triBBoxMax2);
+							meshBBoxMin = min(triBBoxMin1, triBBoxMin2);
 
 							usedTriangles++;
 						}
@@ -1266,9 +1249,9 @@ void CDecalManager::FillBigDecalIndices(IRenderMesh* pRM, Vec3 vPos, float fRadi
 					PrefetchLine(&pPos[iNextPosIndex2], 0);
 				}
 
-				hwvec3 v0Next = HWVLoadVecUnaligned(reinterpret_cast<Vec3*>(&pPos[nPosStride * pInds[i + 0]]));
-				hwvec3 v1Next = HWVLoadVecUnaligned(reinterpret_cast<Vec3*>(&pPos[nPosStride * pInds[i + 1]]));
-				hwvec3 v2Next = HWVLoadVecUnaligned(reinterpret_cast<Vec3*>(&pPos[nPosStride * pInds[i + 2]]));
+				Vec3 v0Next = *reinterpret_cast<Vec3*>(&pPos[nPosStride * pInds[i + 0]]);
+				Vec3 v1Next = *reinterpret_cast<Vec3*>(&pPos[nPosStride * pInds[i + 1]]);
+				Vec3 v2Next = *reinterpret_cast<Vec3*>(&pPos[nPosStride * pInds[i + 2]]);
 
 				const int nLastIndexToUse = nLastIndexId - 3;
 
@@ -1285,42 +1268,42 @@ void CDecalManager::FillBigDecalIndices(IRenderMesh* pRM, Vec3 vPos, float fRadi
 					const int iPrefetchIndex2 = nPosStride * pInds[iLookaheadIdx];
 
 					// get tri vertices
-					const hwvec3 v0 = v0Next;
-					const hwvec3 v1 = v1Next;
-					const hwvec3 v2 = v2Next;
+					const Vec3 v0 = v0Next;
+					const Vec3 v1 = v1Next;
+					const Vec3 v2 = v2Next;
 
 					//Need to prefetch further ahead
 					byte* pPrefetch = &pPos[iPrefetchIndex2];
 					PrefetchLine(pPrefetch, 0);
 
-					v0Next = HWVLoadVecUnaligned(reinterpret_cast<Vec3*>(&pPos[iNextPosIndex0]));
+					v0Next = *reinterpret_cast<Vec3*>(&pPos[iNextPosIndex0]);
 
 					// get triangle normal
-					hwvec3 v1v0Diff = HWVSub(v1, v0);
-					hwvec3 v2v0Diff = HWVSub(v2, v0);
+					Vec3 v1v0Diff = v1 - v0;
+					Vec3 v2v0Diff = v2 - v0;
 
-					v1Next = HWVLoadVecUnaligned(reinterpret_cast<Vec3*>(&pPos[iNextPosIndex1]));
+					v1Next = *reinterpret_cast<Vec3*>(&pPos[iNextPosIndex1]);
 
-					hwvec3 vNormal = HWVCross(v1v0Diff, v2v0Diff);
-					simdf fDot = HWV3Dot(vNormal, vProjDir);
+					Vec3 vNormal = v1v0Diff ^ v2v0Diff;
+					float fDot = vNormal | vProjDir;
 
-					v2Next = HWVLoadVecUnaligned(reinterpret_cast<Vec3*>(&pPos[iNextPosIndex2]));
+					v2Next = *reinterpret_cast<Vec3*>(&pPos[iNextPosIndex2]);
 
 					// test the face
-					if (SIMDFGreaterThan(fDot, fEpsilon))
+					if (fDot > fEpsilon)
 					{
-						if (Overlap::HWVSphere_TriangleFromPoints(hwSphere, v0, v1, v2))
+						if (Overlap::Sphere_Triangle(sphere, Triangle(v0, v1, v2)))
 						{
 							plstIndices->AddList(&pInds[i], 3);
 
-							hwvec3 triBBoxMax1 = HWVMax(v1, v0);
-							hwvec3 triBBoxMax2 = HWVMax(meshBBoxMax, v2);
+							Vec3 triBBoxMax1 = max(v1, v0);
+							Vec3 triBBoxMax2 = max(meshBBoxMax, v2);
 
-							hwvec3 triBBoxMin1 = HWVMin(v1, v0);
-							hwvec3 triBBoxMin2 = HWVMin(meshBBoxMin, v2);
+							Vec3 triBBoxMin1 = min(v1, v0);
+							Vec3 triBBoxMin2 = min(meshBBoxMin, v2);
 
-							meshBBoxMax = HWVMax(triBBoxMax1, triBBoxMax2);
-							meshBBoxMin = HWVMin(triBBoxMin1, triBBoxMin2);
+							meshBBoxMax = max(triBBoxMax1, triBBoxMax2);
+							meshBBoxMin = min(triBBoxMin1, triBBoxMin2);
 
 							usedTriangles++;
 						}
@@ -1331,37 +1314,31 @@ void CDecalManager::FillBigDecalIndices(IRenderMesh* pRM, Vec3 vPos, float fRadi
 					iNextPosIndex2 = iPrefetchIndex2;
 				}
 
-				const hwvec3 v0 = v0Next;
-				const hwvec3 v1 = v1Next;
-				const hwvec3 v2 = v2Next;
+				const Vec3 v0 = v0Next;
+				const Vec3 v1 = v1Next;
+				const Vec3 v2 = v2Next;
 
 				// get triangle normal
-				hwvec3 v1v0Diff = HWVSub(v1, v0);
-				hwvec3 v2v0Diff = HWVSub(v2, v0);
-				hwvec3 vNormal = HWVCross(v1v0Diff, v2v0Diff);
-				simdf fDot = HWV3Dot(vNormal, vProjDir);
+				Vec3 v1v0Diff = v1 - v0;
+				Vec3 v2v0Diff = v2 - v0;
+				Vec3 vNormal = v1v0Diff ^ v2v0Diff;
+				float fDot = vNormal | vProjDir;
 
 				// test the face
-				if (SIMDFGreaterThan(fDot, fEpsilon))
+				if (fDot > fEpsilon)
 				{
-					if (Overlap::HWVSphere_TriangleFromPoints(hwSphere, v0, v1, v2))
+					if (Overlap::Sphere_Triangle(sphere, Triangle(v0, v1, v2)))
 					{
 						plstIndices->AddList(&pInds[i], 3);
 
-						hwvec3 triBBoxMax1 = HWVMax(v1, v0);
-						hwvec3 triBBoxMax2 = HWVMax(meshBBoxMax, v2);
+						Vec3 triBBoxMax1 = max(v1, v0);
+						Vec3 triBBoxMax2 = max(meshBBoxMax, v2);
 
-						hwvec3 triBBoxMin1 = HWVMin(v1, v0);
-						hwvec3 triBBoxMin2 = HWVMin(meshBBoxMin, v2);
+						Vec3 triBBoxMin1 = min(v1, v0);
+						Vec3 triBBoxMin2 = min(meshBBoxMin, v2);
 
-						meshBBoxMax = HWVMax(triBBoxMax1, triBBoxMax2);
-						meshBBoxMin = HWVMin(triBBoxMin1, triBBoxMin2);
-
-						//            triBBoxMax = HWVMax(triBBoxMax, v2);
-						//            triBBoxMin = HWVMin(triBBoxMin, v2);
-						//
-						//            meshBBoxMax = HWVMax(triBBoxMax, meshBBoxMax);
-						//            meshBBoxMin = HWVMin(triBBoxMin, meshBBoxMin);
+						meshBBoxMax = max(triBBoxMax1, triBBoxMax2);
+						meshBBoxMin = min(triBBoxMin1, triBBoxMin2);
 
 						usedTriangles++;
 					}
@@ -1375,8 +1352,8 @@ void CDecalManager::FillBigDecalIndices(IRenderMesh* pRM, Vec3 vPos, float fRadi
 			}
 		}
 
-		HWVSaveVecUnaligned(&meshBBox.max, meshBBoxMax);
-		HWVSaveVecUnaligned(&meshBBox.min, meshBBoxMin);
+		meshBBox.max = meshBBoxMax;
+		meshBBox.min = meshBBoxMin;
 	}
 
 	if (usedTrianglesTotal != 0)
@@ -1407,7 +1384,7 @@ _smart_ptr<IRenderMesh> CDecalManager::MakeBigDecalRenderMesh(IRenderMesh* pSour
 	EmptyVertBuffer.Add(SVF_P3S_C4B_T2S());
 
 	_smart_ptr<IRenderMesh> pRenderMesh = 0;
-	pRenderMesh = GetRenderer()->CreateRenderMeshInitialized(EmptyVertBuffer.GetElements(), EmptyVertBuffer.Count(), eVF_P3S_C4B_T2S,
+	pRenderMesh = GetRenderer()->CreateRenderMeshInitialized(EmptyVertBuffer.GetElements(), EmptyVertBuffer.Count(), EDefaultInputLayouts::P3S_C4B_T2S,
 	                                                         lstIndices.GetElements(), lstIndices.Count(), prtTriangleList, "BigDecalOnStatObj", "BigDecal", eRMT_Static, 1, 0, 0, 0, false, false, 0);
 	pRenderMesh->SetVertexContainer(pSourceRenderMesh);
 	pRenderMesh->SetChunk(pDecalMat, 0, pSourceRenderMesh->GetVerticesCount(), 0, lstIndices.Count(), texelAreaDensity);
@@ -1641,7 +1618,7 @@ IStatObj* SDecalOwnerInfo::GetOwner(Matrix34A& objMat)
 		return NULL;
 
 	IStatObj* pStatObj = NULL;
-	if (pStatObj = pRenderNode->GetEntityStatObj(nRenderNodeSlotId, nRenderNodeSlotSubObjectId, &objMat, true))
+	if (pStatObj = pRenderNode->GetEntityStatObj(nRenderNodeSlotSubObjectId, &objMat, true))
 	{
 		if (nRenderNodeSlotSubObjectId >= 0 && nRenderNodeSlotSubObjectId < pStatObj->GetSubObjectCount())
 		{
@@ -1650,7 +1627,7 @@ IStatObj* SDecalOwnerInfo::GetOwner(Matrix34A& objMat)
 			objMat = objMat * pSubObj->tm;
 		}
 	}
-	else if (ICharacterInstance* pChar = pRenderNode->GetEntityCharacter(nRenderNodeSlotId, &objMat))
+	else if (ICharacterInstance* pChar = pRenderNode->GetEntityCharacter(&objMat))
 	{
 		if (nRenderNodeSlotSubObjectId >= 0)
 		{

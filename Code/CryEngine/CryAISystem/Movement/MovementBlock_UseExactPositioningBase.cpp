@@ -5,7 +5,7 @@
 #include "MovementActor.h"
 #include <CryAISystem/MovementUpdateContext.h>
 #include "PipeUser.h"
-#include "AIBubblesSystem/IAIBubblesSystem.h"
+#include "AIBubblesSystem/AIBubblesSystem.h"
 
 namespace Movement
 {
@@ -108,10 +108,19 @@ Movement::Block::Status UseExactPositioningBase::UpdatePrepare(const MovementUpd
 			return Running;
 		case RequestFailed_FinishImmediately:
 			return Finished;
+		case RequestFailed_CancelImmediately:
+			// Reset movement to prevent actor moving on spot
+			context.actor.GetAdapter().ClearMovementState();
+			return CantBeFinished;
 		}
 	}
+	else if (targetPhase == eATP_Playing || targetPhase == eATP_StartedAndFinished || targetPhase == eATP_Finished)
+	{
+		// Wait for previous traversing to be finished
+		return Movement::Block::Running;
+	}
 
-	assert((targetPhase == eATP_None) || (targetPhase == eATP_Waiting));
+	CRY_ASSERT((targetPhase == eATP_None) || (targetPhase == eATP_Waiting));
 
 	PathFollowResult result;
 	const bool targetReachable = Movement::Helpers::UpdatePathFollowing(result, context, m_style);

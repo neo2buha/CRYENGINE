@@ -33,15 +33,14 @@
 
 #include "AIActions.h"
 
-#include <CryEntitySystem/IEntityProxy.h>
+#include <CryEntitySystem/IEntityComponent.h>
 #include <CryFlowGraph/IFlowSystem.h>
 #include <CryAISystem/IInterestSystem.h>
 #include "TacticalPointSystem/TacticalPointSystem.h"
 #include "Communication/CommunicationManager.h"
-#include "SelectionTree/SelectionTreeManager.h"
 #include "Group/GroupManager.h"
 #include "TargetSelection/TargetTrackManager.h"
-#include "AIBubblesSystem/IAIBubblesSystem.h"
+#include "AIBubblesSystem/AIBubblesSystem.h"
 #include "Sequence/SequenceManager.h"
 #include <CryAISystem/IBlackBoard.h>
 #include <CryAISystem/IFactionMap.h>
@@ -391,14 +390,6 @@ void InitLookUp()
 }
 
 //====================================================================
-// ReloadLookUpXML
-//====================================================================
-void ReloadLookUpXML(IConsoleCmdArgs* /* pArgs */)
-{
-	InitLookUp();
-}
-
-//====================================================================
 // CScriptBind_AI
 //====================================================================
 CScriptBind_AI::CScriptBind_AI() :
@@ -685,7 +676,6 @@ CScriptBind_AI::CScriptBind_AI() :
 	SCRIPT_REG_TEMPLFUNC(CheckForFriendlyAgentsAroundPoint, "entityID, point, radius");
 
 	SCRIPT_REG_TEMPLFUNC(EnableUpdateLookTarget, "entityID, bEnable");
-	SCRIPT_REG_TEMPLFUNC(SetBehaviorTreeEvaluationEnabled, "entityID, enabled");
 
 	SCRIPT_REG_TEMPLFUNC(UpdateGlobalPerceptionScale, "visualScale, audioScale, [filterType], [faction]");
 	SCRIPT_REG_TEMPLFUNC(QueueBubbleMessage, "entityID, message");
@@ -712,19 +702,19 @@ CScriptBind_AI::CScriptBind_AI() :
 	SCRIPT_REG_TEMPLFUNC(GetPotentialTargetCountFromFaction, "entityID, factionName");
 	SCRIPT_REG_TEMPLFUNC(GetPotentialTargetCount, "entityID");
 
-	RegisterGlobal("BEHAVIOR_STARTED", BehaviorStarted);
-	RegisterGlobal("BEHAVIOR_FINISHED", BehaviorFinished);
-	RegisterGlobal("BEHAVIOR_INTERRUPTED", BehaviorInterrupted);
-	RegisterGlobal("BEHAVIOR_FAILED", BehaviorFailed);
+	gEnv->pScriptSystem->SetGlobalValue("BEHAVIOR_STARTED", BehaviorStarted);
+	gEnv->pScriptSystem->SetGlobalValue("BEHAVIOR_FINISHED", BehaviorFinished);
+	gEnv->pScriptSystem->SetGlobalValue("BEHAVIOR_INTERRUPTED", BehaviorInterrupted);
+	gEnv->pScriptSystem->SetGlobalValue("BEHAVIOR_FAILED", BehaviorFailed);
 
-	RegisterGlobal("Hostile", IFactionMap::Hostile);
-	RegisterGlobal("Neutral", IFactionMap::Neutral);
-	RegisterGlobal("Friendly", IFactionMap::Friendly);
+	gEnv->pScriptSystem->SetGlobalValue("Hostile", IFactionMap::Hostile);
+	gEnv->pScriptSystem->SetGlobalValue("Neutral", IFactionMap::Neutral);
+	gEnv->pScriptSystem->SetGlobalValue("Friendly", IFactionMap::Friendly);
 
-	RegisterGlobal("POSTURE_NULL", PostureManager::InvalidPosture);
-	RegisterGlobal("POSTURE_PEEK", PostureManager::PeekPosture);
-	RegisterGlobal("POSTURE_AIM", PostureManager::AimPosture);
-	RegisterGlobal("POSTURE_HIDE", PostureManager::HidePosture);
+	gEnv->pScriptSystem->SetGlobalValue("POSTURE_NULL", PostureManager::InvalidPosture);
+	gEnv->pScriptSystem->SetGlobalValue("POSTURE_PEEK", PostureManager::PeekPosture);
+	gEnv->pScriptSystem->SetGlobalValue("POSTURE_AIM", PostureManager::AimPosture);
+	gEnv->pScriptSystem->SetGlobalValue("POSTURE_HIDE", PostureManager::HidePosture);
 
 	SCRIPT_REG_GLOBAL(AIWEPA_LASER);
 	SCRIPT_REG_GLOBAL(AIWEPA_COMBAT_LIGHT);
@@ -898,8 +888,6 @@ CScriptBind_AI::CScriptBind_AI() :
 	SCRIPT_REG_GLOBAL(AI_LOOKAT_CONTINUOUS);
 	SCRIPT_REG_GLOBAL(AI_LOOKAT_USE_BODYDIR);
 
-	SCRIPT_REG_GLOBAL(AISYSEVENT_DISABLEMODIFIER);
-
 	SCRIPT_REG_GLOBAL(AILASTOPRES_LOOKAT);
 	SCRIPT_REG_GLOBAL(AILASTOPRES_USE);
 	SCRIPT_REG_GLOBAL(AI_LOOK_FORWARD);
@@ -961,8 +949,8 @@ CScriptBind_AI::CScriptBind_AI() :
 	SCRIPT_REG_GLOBAL(AIGOALPIPE_KEEP_LAST_SUBPIPE);
 	SCRIPT_REG_GLOBAL(AIGOALPIPE_KEEP_ON_TOP);
 
-	RegisterGlobal("ORDERED", SCommunicationRequest::Ordered);
-	RegisterGlobal("UNORDERED", SCommunicationRequest::Unordered);
+	gEnv->pScriptSystem->SetGlobalValue("ORDERED", SCommunicationRequest::Ordered);
+	gEnv->pScriptSystem->SetGlobalValue("UNORDERED", SCommunicationRequest::Unordered);
 
 	SCRIPT_REG_GLOBAL(AI_REG_NONE);
 	SCRIPT_REG_GLOBAL(AI_REG_REFPOINT);
@@ -971,31 +959,31 @@ CScriptBind_AI::CScriptBind_AI() :
 	SCRIPT_REG_GLOBAL(AI_REG_COVER);
 	SCRIPT_REG_GLOBAL(AI_REG_PATH);
 
-	RegisterGlobal("AI_RGT_ANY", eRGT_ANY);
-	RegisterGlobal("AI_RGT_SMOKE_GRENADE", eRGT_SMOKE_GRENADE);
-	RegisterGlobal("AI_RGT_FLASHBANG_GRENADE", eRGT_FLASHBANG_GRENADE);
-	RegisterGlobal("AI_RGT_FRAG_GRENADE", eRGT_FRAG_GRENADE);
-	RegisterGlobal("AI_RGT_EMP_GRENADE", eRGT_EMP_GRENADE);
-	RegisterGlobal("AI_RGT_GRUNT_GRENADE", eRGT_GRUNT_GRENADE);
+	gEnv->pScriptSystem->SetGlobalValue("AI_RGT_ANY", eRGT_ANY);
+	gEnv->pScriptSystem->SetGlobalValue("AI_RGT_SMOKE_GRENADE", eRGT_SMOKE_GRENADE);
+	gEnv->pScriptSystem->SetGlobalValue("AI_RGT_FLASHBANG_GRENADE", eRGT_FLASHBANG_GRENADE);
+	gEnv->pScriptSystem->SetGlobalValue("AI_RGT_FRAG_GRENADE", eRGT_FRAG_GRENADE);
+	gEnv->pScriptSystem->SetGlobalValue("AI_RGT_EMP_GRENADE", eRGT_EMP_GRENADE);
+	gEnv->pScriptSystem->SetGlobalValue("AI_RGT_GRUNT_GRENADE", eRGT_GRUNT_GRENADE);
 
-	RegisterGlobal("TTP_Last", eTTP_Last);
-	RegisterGlobal("TTP_OverSounds", eTTP_OverSounds);
-	RegisterGlobal("TTP_Always", eTTP_Always);
+	gEnv->pScriptSystem->SetGlobalValue("TTP_Last", eTTP_Last);
+	gEnv->pScriptSystem->SetGlobalValue("TTP_OverSounds", eTTP_OverSounds);
+	gEnv->pScriptSystem->SetGlobalValue("TTP_Always", eTTP_Always);
 
-	RegisterGlobal("NAV_TRIANGULAR", IAISystem::NAV_TRIANGULAR);
-	RegisterGlobal("NAV_ROAD", IAISystem::NAV_ROAD);
-	RegisterGlobal("NAV_WAYPOINT_HUMAN", IAISystem::NAV_WAYPOINT_HUMAN);
-	RegisterGlobal("NAV_VOLUME", IAISystem::NAV_VOLUME);
-	RegisterGlobal("NAV_UNSET", IAISystem::NAV_UNSET);
-	RegisterGlobal("NAV_FLIGHT", IAISystem::NAV_FLIGHT);
-	RegisterGlobal("NAV_WAYPOINT_3DSURFACE", IAISystem::NAV_WAYPOINT_3DSURFACE);
-	RegisterGlobal("NAV_SMARTOBJECT", IAISystem::NAV_SMARTOBJECT);
-	RegisterGlobal("NAV_FREE_2D", IAISystem::NAV_FREE_2D);
-	RegisterGlobal("NAVMASK_SURFACE", IAISystem::NAVMASK_SURFACE);
+	gEnv->pScriptSystem->SetGlobalValue("NAV_TRIANGULAR", IAISystem::NAV_TRIANGULAR);
+	gEnv->pScriptSystem->SetGlobalValue("NAV_ROAD", IAISystem::NAV_ROAD);
+	gEnv->pScriptSystem->SetGlobalValue("NAV_WAYPOINT_HUMAN", IAISystem::NAV_WAYPOINT_HUMAN);
+	gEnv->pScriptSystem->SetGlobalValue("NAV_VOLUME", IAISystem::NAV_VOLUME);
+	gEnv->pScriptSystem->SetGlobalValue("NAV_UNSET", IAISystem::NAV_UNSET);
+	gEnv->pScriptSystem->SetGlobalValue("NAV_FLIGHT", IAISystem::NAV_FLIGHT);
+	gEnv->pScriptSystem->SetGlobalValue("NAV_WAYPOINT_3DSURFACE", IAISystem::NAV_WAYPOINT_3DSURFACE);
+	gEnv->pScriptSystem->SetGlobalValue("NAV_SMARTOBJECT", IAISystem::NAV_SMARTOBJECT);
+	gEnv->pScriptSystem->SetGlobalValue("NAV_FREE_2D", IAISystem::NAV_FREE_2D);
+	gEnv->pScriptSystem->SetGlobalValue("NAVMASK_SURFACE", IAISystem::NAVMASK_SURFACE);
 
-	RegisterGlobal("GROUP_ALL", IAISystem::GROUP_ALL);
-	RegisterGlobal("GROUP_ENABLED", IAISystem::GROUP_ENABLED);
-	RegisterGlobal("GROUP_MAX", IAISystem::GROUP_MAX);
+	gEnv->pScriptSystem->SetGlobalValue("GROUP_ALL", IAISystem::GROUP_ALL);
+	gEnv->pScriptSystem->SetGlobalValue("GROUP_ENABLED", IAISystem::GROUP_ENABLED);
+	gEnv->pScriptSystem->SetGlobalValue("GROUP_MAX", IAISystem::GROUP_MAX);
 
 	SCRIPT_REG_GLOBAL(LA_NONE);
 	SCRIPT_REG_GLOBAL(LA_HIDE);
@@ -1055,9 +1043,9 @@ CScriptBind_AI::CScriptBind_AI() :
 	SCRIPT_REG_GLOBAL(AIREADIBILITY_LOST);
 	SCRIPT_REG_GLOBAL(AIREADIBILITY_INTERESTING);
 
-	//RegisterGlobal("SIGNALID_THROWGRENADE", -10);
-	RegisterGlobal("SIGNALID_READIBILITY", SIGNALFILTER_READABILITY);
-	RegisterGlobal("SIGNALID_READIBILITYAT", SIGNALFILTER_READABILITYAT);
+	//SCRIPT_REG_GLOBAL("SIGNALID_THROWGRENADE", -10);
+	gEnv->pScriptSystem->SetGlobalValue("SIGNALID_READIBILITY", SIGNALFILTER_READABILITY);
+	gEnv->pScriptSystem->SetGlobalValue("SIGNALID_READIBILITYAT", SIGNALFILTER_READABILITYAT);
 	SCRIPT_REG_GLOBAL(SIGNALFILTER_LASTOP);
 	SCRIPT_REG_GLOBAL(SIGNALFILTER_GROUPONLY);
 	SCRIPT_REG_GLOBAL(SIGNALFILTER_GROUPONLY_EXCEPT);
@@ -1221,45 +1209,44 @@ CScriptBind_AI::CScriptBind_AI() :
 	SCRIPT_REG_GLOBAL(STANCE_STEALTH);
 	SCRIPT_REG_GLOBAL(STANCE_SWIM);
 
-	RegisterGlobal("SPEED_ZERO", AISPEED_ZERO);
-	RegisterGlobal("SPEED_SLOW", AISPEED_SLOW);
-	RegisterGlobal("SPEED_WALK", AISPEED_WALK);
-	RegisterGlobal("SPEED_RUN", AISPEED_RUN);
-	RegisterGlobal("SPEED_SPRINT", AISPEED_SPRINT);
+	gEnv->pScriptSystem->SetGlobalValue("SPEED_ZERO", AISPEED_ZERO);
+	gEnv->pScriptSystem->SetGlobalValue("SPEED_SLOW", AISPEED_SLOW);
+	gEnv->pScriptSystem->SetGlobalValue("SPEED_WALK", AISPEED_WALK);
+	gEnv->pScriptSystem->SetGlobalValue("SPEED_RUN", AISPEED_RUN);
+	gEnv->pScriptSystem->SetGlobalValue("SPEED_SPRINT", AISPEED_SPRINT);
 
 	// Marcio: Kept here for retro-compatibility
-	RegisterGlobal("BODYPOS_PRONE", STANCE_PRONE);
-	RegisterGlobal("BODYPOS_CROUCH", STANCE_CROUCH);
-	RegisterGlobal("BODYPOS_STAND", STANCE_STAND);
-	RegisterGlobal("BODYPOS_RELAX", STANCE_RELAXED);
-	RegisterGlobal("BODYPOS_STEALTH", STANCE_STEALTH);
+	gEnv->pScriptSystem->SetGlobalValue("BODYPOS_PRONE", STANCE_PRONE);
+	gEnv->pScriptSystem->SetGlobalValue("BODYPOS_CROUCH", STANCE_CROUCH);
+	gEnv->pScriptSystem->SetGlobalValue("BODYPOS_STAND", STANCE_STAND);
+	gEnv->pScriptSystem->SetGlobalValue("BODYPOS_RELAX", STANCE_RELAXED);
+	gEnv->pScriptSystem->SetGlobalValue("BODYPOS_STEALTH", STANCE_STEALTH);
 
-	RegisterGlobal("MFT_Disabled", eMFT_Disabled);
-	RegisterGlobal("MFT_UseCoverFireTime", eMFT_UseCoverFireTime);
-	RegisterGlobal("MFT_Always", eMFT_Always);
+	gEnv->pScriptSystem->SetGlobalValue("MFT_Disabled", eMFT_Disabled);
+	gEnv->pScriptSystem->SetGlobalValue("MFT_UseCoverFireTime", eMFT_UseCoverFireTime);
+	gEnv->pScriptSystem->SetGlobalValue("MFT_Always", eMFT_Always);
 
 	SCRIPT_REG_FUNC(GoTo);
 	SCRIPT_REG_FUNC(SetSpeed);
 	SCRIPT_REG_FUNC(SetEntitySpeedRange);
 
-	RegisterGlobal("AVOIDANCE_NONE", eAvoidance_NONE);
-	RegisterGlobal("AVOIDANCE_VEHICLES", eAvoidance_Vehicles);
-	RegisterGlobal("AVOIDANCE_PUPPETS", eAvoidance_Actors);
-	RegisterGlobal("AVOIDANCE_PLAYERS", eAvoidance_Players);
-	RegisterGlobal("AVOIDANCE_STATIC_OBSTACLES", eAvoidance_StaticObstacle);
-	RegisterGlobal("AVOIDANCE_PUSHABLE_OBSTACLES", eAvoidance_PushableObstacle);
-	RegisterGlobal("AVOIDANCE_DAMAGE_REGION", eAvoidance_DamageRegion);
-	RegisterGlobal("AVOIDANCE_ALL", eAvoidance_ALL);
-	RegisterGlobal("AVOIDANCE_DEFAULT", eAvoidance_DEFAULT);
+	gEnv->pScriptSystem->SetGlobalValue("AVOIDANCE_NONE", eAvoidance_NONE);
+	gEnv->pScriptSystem->SetGlobalValue("AVOIDANCE_VEHICLES", eAvoidance_Vehicles);
+	gEnv->pScriptSystem->SetGlobalValue("AVOIDANCE_PUPPETS", eAvoidance_Actors);
+	gEnv->pScriptSystem->SetGlobalValue("AVOIDANCE_PLAYERS", eAvoidance_Players);
+	gEnv->pScriptSystem->SetGlobalValue("AVOIDANCE_STATIC_OBSTACLES", eAvoidance_StaticObstacle);
+	gEnv->pScriptSystem->SetGlobalValue("AVOIDANCE_PUSHABLE_OBSTACLES", eAvoidance_PushableObstacle);
+	gEnv->pScriptSystem->SetGlobalValue("AVOIDANCE_DAMAGE_REGION", eAvoidance_DamageRegion);
+	gEnv->pScriptSystem->SetGlobalValue("AVOIDANCE_ALL", eAvoidance_ALL);
+	gEnv->pScriptSystem->SetGlobalValue("AVOIDANCE_DEFAULT", eAvoidance_DEFAULT);
 
-	RegisterGlobal("EST_Generic", TargetTrackHelpers::eEST_Generic);
-	RegisterGlobal("EST_Visual", TargetTrackHelpers::eEST_Visual);
-	RegisterGlobal("EST_Sound", TargetTrackHelpers::eEST_Sound);
-	RegisterGlobal("EST_BulletRain", TargetTrackHelpers::eEST_BulletRain);
+	gEnv->pScriptSystem->SetGlobalValue("EST_Generic", TargetTrackHelpers::eEST_Generic);
+	gEnv->pScriptSystem->SetGlobalValue("EST_Visual", TargetTrackHelpers::eEST_Visual);
+	gEnv->pScriptSystem->SetGlobalValue("EST_Sound", TargetTrackHelpers::eEST_Sound);
+	gEnv->pScriptSystem->SetGlobalValue("EST_BulletRain", TargetTrackHelpers::eEST_BulletRain);
 
 	SCRIPT_REG_TEMPLFUNC(SetLastOpResult, "entityID, targetEntityId");
 
-	RunStartupScript();
 	InitLookUp();
 }
 
@@ -1273,9 +1260,9 @@ CScriptBind_AI::~CScriptBind_AI(void)
 //====================================================================
 // RunStartupScript
 //====================================================================
-void CScriptBind_AI::RunStartupScript()
+bool CScriptBind_AI::RunStartupScript(bool reload)
 {
-	m_pSS->ExecuteFile("scripts/ai/aiconfig.lua", true);
+	return m_pSS->ExecuteFile("scripts/ai/aiconfig.lua", true, reload);
 }
 
 //====================================================================
@@ -3146,19 +3133,7 @@ int CScriptBind_AI::RemoveCoverEntity(IFunctionHandler* pH, ScriptHandle entityI
 //-----------------------------------------------------------------------------------------------------------
 int CScriptBind_AI::SetAssesmentMultiplier(IFunctionHandler* pH)
 {
-	int type;
-	float fMultiplier;
-
-	pH->GetParams(type, fMultiplier);
-
-	if (type < 0)
-	{
-		AIWarningID("<CScriptBind_AI> ", "Tried to set assesment multiplier to a negative type. Not allowed.");
-		return pH->EndFunction();
-	}
-
-	GetAISystem()->SetAssesmentMultiplier((unsigned short)type, fMultiplier);
-
+	pH->GetIScriptSystem()->RaiseError("AI.SetAssesmentMultiplier is deprecated.");
 	return pH->EndFunction();
 }
 
@@ -3664,14 +3639,33 @@ int CScriptBind_AI::SoundEvent(IFunctionHandler* pH)
 	float radius = 0;
 	Vec3 pos(0, 0, 0);
 	ScriptHandle hdl(0);
-	pH->GetParams(pos, radius, type);
-	// can be called from scripts without owner
-	if (pH->GetParamCount() > 3)
-		pH->GetParam(4, hdl);
+	
+	IEntity* pEntity = GetEntityFromParam(pH, 1);
+	IAIObject* pAI = pEntity ? pEntity->GetAI() : nullptr;
+	if (!pAI)
+	{
+		AIWarningID("<CScriptBind_AI> ", "AI.SoundEvent(): wrong type of parameter 1");
+		return pH->EndFunction(0);
+	}
 
-	// cerate AI sound for AI objects and for non-entities (explosions, etc)
-	SAIStimulus stim(AISTIM_SOUND, type, (EntityId)hdl.n, 0, pos, ZERO, radius);
-	gEnv->pAISystem->RegisterStimulus(stim);
+	if (!pH->GetParam(2, pos) || !pH->GetParam(3, radius) || !pH->GetParam(4, type))
+	{
+		AIWarningID("<CScriptBind_AI> ", "AI.SoundEvent(): wrong type of parameter 2, 3 or 4");
+		return pH->EndFunction(0);
+	}
+
+	// can be called from scripts without owner
+	if (pH->GetParamCount() > 4)
+		pH->GetParam(5, hdl);
+
+	// Send event.
+	SAIEVENT event;
+	event.vPosition = pos;
+	event.fThreat = radius;
+	event.nType = type;
+	event.nFlags = 0;
+	event.sourceId = (EntityId)hdl.n;
+	pAI->Event(AIEVENT_ONSOUNDEVENT, &event);
 
 	return pH->EndFunction();
 }
@@ -5958,14 +5952,7 @@ int CScriptBind_AI::GetUnitCount(IFunctionHandler* pH)
 
 int CScriptBind_AI::SetFactionThreatMultiplier(IFunctionHandler* pH)
 {
-	SCRIPT_CHECK_PARAMETERS(2);
-	int factionID;
-	float fMultiplier;
-	if (pH->GetParams(factionID, fMultiplier))
-	{
-		GetAISystem()->SetFactionThreatMultiplier(factionID, fMultiplier);
-	}
-
+	pH->GetIScriptSystem()->RaiseError("AI.SetFactionThreatMultiplier function is deprecated");
 	return pH->EndFunction();
 }
 
@@ -9227,8 +9214,8 @@ int CScriptBind_AI::MeleePunchableObject(IFunctionHandler* pH)
 		return pH->EndFunction(0);
 	}
 
-	IEntity* pObject = GetEntityFromParam(pH, 2);
-	if (!pObject)
+	IEntity* pEntity = GetEntityFromParam(pH, 2);
+	if (!pEntity)
 	{
 		gEnv->pAISystem->LogComment("<CScriptBind_AI::MeleePunchableObject> ", "ERROR: Specified entity id (param 2) not found!");
 		return pH->EndFunction(0);
@@ -9258,14 +9245,13 @@ int CScriptBind_AI::MeleePunchableObject(IFunctionHandler* pH)
 	if (!pH->GetParam(3, origPos))
 		return pH->EndFunction(0);
 
-	if (Distance::Point_PointSq(pObject->GetWorldPos(), origPos) < 0.5f)
+	if (Distance::Point_PointSq(pEntity->GetWorldPos(), origPos) < 0.5f)
 	{
-		IEntityPhysicalProxy* pPhysicsProxy = (IEntityPhysicalProxy*)pObject->GetProxy(ENTITY_PROXY_PHYSICS);
-		if (pPhysicsProxy && pObject->GetPhysics())
+		if (pEntity && pEntity->GetPhysics())
 		{
 			pe_status_dynamics dyn;
 
-			pObject->GetPhysics()->GetStatus(&dyn);
+			pEntity->GetPhysics()->GetStatus(&dyn);
 			float mass = dyn.mass;
 
 			Vec3 vel = pAttTarget->GetPos() - pAI->GetPos(); // standDir;
@@ -9279,7 +9265,7 @@ int CScriptBind_AI::MeleePunchableObject(IFunctionHandler* pH)
 			pt.x += cry_random(-0.3f, 0.3f);
 			pt.y += cry_random(-0.3f, 0.3f);
 			pt.z += 0.6f;
-			pPhysicsProxy->AddImpulse(-1, pt, vel * mass, true, 1);
+			pEntity->AddImpulse(-1, pt, vel * mass, true, 1);
 
 			return pH->EndFunction(1);
 		}
@@ -10238,7 +10224,7 @@ int CScriptBind_AI::CheckMeleeDamage(IFunctionHandler* pH)
 		Vec3 targetdirN(targetdir.GetNormalizedSafe());
 
 		float dot = mydirN.Dot(targetdirN);
-		float myangle = acos_tpl(clamp_tpl(dot, -1.0f, 1.0f));
+		float myangle = acos_tpl(dot);
 		if (myangle > angle / 2)
 			return pH->EndFunction();
 
@@ -11354,29 +11340,6 @@ int CScriptBind_AI::EnableUpdateLookTarget(IFunctionHandler* pH, ScriptHandle en
 			}
 		}
 	}
-
-	return pH->EndFunction();
-}
-
-int CScriptBind_AI::SetBehaviorTreeEvaluationEnabled(IFunctionHandler* pH, ScriptHandle entityID, bool enabled)
-{
-	if (IEntity* pEntity = gEnv->pEntitySystem->GetEntity(static_cast<EntityId>(entityID.n)))
-	{
-		if (IAIObject* pAIObject = pEntity->GetAI())
-		{
-			if (CAIActor* pAIActor = pAIObject->CastToCAIActor())
-			{
-				if (enabled)
-					pAIActor->SetBehaviorTreeEvaluationMode(CAIActor::EvaluateWhenVariablesChange);
-				else
-					pAIActor->SetBehaviorTreeEvaluationMode(CAIActor::EvaluationBlockedUntilBehaviorUnlocks);
-
-				return pH->EndFunction();
-			}
-		}
-	}
-
-	gEnv->pLog->LogError("SetBehaviorTreeEvaluationEnabled was called with either an unhealthy entity or a non-AI entity.");
 
 	return pH->EndFunction();
 }

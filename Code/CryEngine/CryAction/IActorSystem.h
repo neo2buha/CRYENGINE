@@ -8,7 +8,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 26:8:2004   14:55 : Created by Márcio Martins
+   - 26:8:2004   14:55 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #ifndef __IACTORSYSTEM_H__
@@ -142,7 +142,6 @@ struct IActor : public IGameObjectExtension
 
 	virtual const char*               GetEntityClassName() const = 0;
 
-	virtual void                      SerializeXML(XmlNodeRef& node, bool bLoading) = 0;
 	virtual void                      SerializeLevelToLevel(TSerialize& ser) = 0;
 	virtual void                      ProcessEvent(SEntityEvent& event) = 0;
 
@@ -214,6 +213,8 @@ struct IActor : public IGameObjectExtension
 	virtual int  GetPhysicalSkipEntities(IPhysicalEntity** pSkipList, const int maxSkipSize) const { return 0; }
 
 	virtual void OnReused(IEntity* pEntity, SEntitySpawnParams& params) = 0;
+
+	virtual bool IsInteracting() const = 0;
 };
 
 struct IActorIterator

@@ -28,7 +28,7 @@ History:
 CSpawningVisTable::CSpawningVisTable()
 {
 	//Ensure that we have enough bits in the variable type that we are using to store the spawn visibility in
-	COMPILE_TIME_ASSERT(CSpawningVisTable::kMaxNumPlayers <= CSpawningVisTable::kNumBits);
+	static_assert(CSpawningVisTable::kMaxNumPlayers <= CSpawningVisTable::kNumBits, "Too many players!");
 
 	m_spawnVisData.reserve(kInitialNumSpawns);
 	m_spawnTeamList.reserve(kInitialNumSpawns);
@@ -166,7 +166,7 @@ void CSpawningVisTable::PerformAreaTestForSpawn(SSpawnVisibilityInfo& rSpawnVisI
 	for (IEntityLink *pLink = pEntityLink; pLink; pLink = pLink->next)
 	{
 		IEntity* pLinkedEntity = pEntitySystem->GetEntity(pLink->entityId);
-		IEntityAreaProxy *pArea = (IEntityAreaProxy*)pLinkedEntity->GetProxy(ENTITY_PROXY_AREA);
+		IEntityAreaComponent *pArea = (IEntityAreaComponent*)pLinkedEntity->GetProxy(ENTITY_PROXY_AREA);
 		if (pArea->CalcPointWithin(INVALID_ENTITYID, playerPos, false))
 		{
 			rSpawnVisInfo.visBits |= playerBit;
@@ -273,7 +273,8 @@ void CSpawningVisTable::RemoveSpawnLocation(EntityId location)
 	}
 
 	int spawnIdx			= spawnIdxIter->second;
-	int finalSpawnIdx = m_spawnVisData.size() - 1;
+	TSpawnIndexMap::reverse_iterator finalSpawnIdxIter = m_spawnIndexMap.rbegin();
+	int finalSpawnIdx = finalSpawnIdxIter->second;
 	
 	if(m_spawnVisData[spawnIdx].rayId)
 	{
@@ -285,11 +286,7 @@ void CSpawningVisTable::RemoveSpawnLocation(EntityId location)
 		m_spawnVisData[finalSpawnIdx].CancelRaycastRequest();
 	}
 
-	const EntityId finalSpawnEntityId = m_spawnVisData[finalSpawnIdx].entityId;
-
 	//Update the map of entity Ids to spawn indices for the moved spawn data
-	TSpawnIndexMap::iterator finalSpawnIdxIter = m_spawnIndexMap.find(finalSpawnEntityId);
-	assert(m_spawnIndexMap.end() != finalSpawnIdxIter);
 	finalSpawnIdxIter->second = spawnIdx;
 
 	m_spawnVisData[spawnIdx]	= m_spawnVisData[finalSpawnIdx];
@@ -345,7 +342,7 @@ void CSpawningVisTable::Initialise()
 			if ( pEntityClass == pAreaBoxClass || pEntityClass == pAreaSphereClass )
 			{
 				rSpawnVisInfo.spawnTestType = eSTT_AreaTest;
-				IEntityAreaProxy *pArea = (IEntityAreaProxy*)pLinkedEntity->GetProxy(ENTITY_PROXY_AREA);
+				IEntityAreaComponent *pArea = (IEntityAreaComponent*)pLinkedEntity->GetProxy(ENTITY_PROXY_AREA);
 				if(!pArea)
 					CryFatalError("No ENTITY_PROXY_AREA for entity that is of AreaBox or AreaSphere class!");
 			}

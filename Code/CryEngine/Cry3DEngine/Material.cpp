@@ -92,6 +92,7 @@ size_t CMaterialLayer::GetResourceMemoryUsage(ICrySizer* pSizer)
 //////////////////////////////////////////////////////////////////////////
 CMatInfo::CMatInfo()
 	: m_bDeleted(false)
+	, m_bDeletePending(false)
 {
 	m_nRefCount = 0;
 	m_Flags = 0;
@@ -103,11 +104,6 @@ CMatInfo::CMatInfo()
 
 	m_ucDefautMappingAxis = 0;
 	m_fDefautMappingScale = 1.f;
-
-#ifdef SUPPORT_MATERIAL_SKETCH
-	m_pPreSketchShader = 0;
-	m_nPreSketchTechnique = 0;
-#endif
 
 #ifdef SUPPORT_MATERIAL_EDITING
 	m_pUserData = NULL;
@@ -134,6 +130,7 @@ CMatInfo::~CMatInfo()
 
 void CMatInfo::AddRef()
 {
+	CRY_ASSERT(!m_bDeletePending);
 	CryInterlockedIncrement(&m_nRefCount);
 }
 
@@ -142,10 +139,8 @@ void CMatInfo::Release()
 {
 	if (CryInterlockedDecrement(&m_nRefCount) == 0)
 	{
-		if (!(m_Flags & MTL_FLAG_DELETE_PENDING) && GetMatMan())
+		if (GetMatMan())
 		{
-			m_Flags |= MTL_FLAG_DELETE_PENDING;
-			((CMatMan*)GetMatMan())->Unregister(this);
 			((CMatMan*)GetMatMan())->DelayedDelete(this);
 		}
 		else
@@ -170,9 +165,6 @@ void CMatInfo::ShutDown()
 		}
 		SAFE_RELEASE(m_shaderItem.m_pShader);
 		SAFE_RELEASE(m_shaderItem.m_pShaderResources);
-
-		if (GetMatMan() && !(m_Flags & MTL_FLAG_DELETE_PENDING))
-			((CMatMan*)GetMatMan())->Unregister(this);
 
 		m_subMtls.clear();
 	}
@@ -293,10 +285,6 @@ void CMatInfo::SetShaderItem(const SShaderItem& _ShaderItem)
 	IncrementModificationId();
 
 	UpdateMaterialFlags();
-
-	int sketchMode = m_pMatMan->GetSketchMode();
-	if (sketchMode)
-		SetSketchMode(sketchMode);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -394,6 +382,24 @@ bool CMatInfo::IsStreamedIn(const int nMinPrecacheRoundIds[MAX_STREAM_PREDICTION
 	}
 
 	return true;
+}
+
+bool CMatInfo::IsStreamedIn(const int nMinPrecacheRoundIds[MAX_STREAM_PREDICTION_ZONES]) const
+{
+	if (m_Flags & MTL_FLAG_MULTI_SUBMTL)
+	{
+		for (int i = 0, num = m_subMtls.size(); i < num; i++)
+		{
+			if (!m_subMtls[i]->AreTexturesStreamedIn(nMinPrecacheRoundIds))
+			{
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	return AreTexturesStreamedIn(nMinPrecacheRoundIds);
 }
 
 bool CMatInfo::AreChunkTexturesStreamedIn(CRenderChunk* pRenderChunk, const int nMinPrecacheRoundIds[MAX_STREAM_PREDICTION_ZONES]) const
@@ -592,12 +598,12 @@ void CMatInfo::Copy(IMaterial* pMtlDest, EMaterialCopyFlags flags)
 
 	if (GetShaderItem().m_pShaderResources)
 	{
-		//
-		SShaderItem& siSrc(GetShaderItem());
+		const SShaderItem& siSrc(GetShaderItem());
 		SInputShaderResourcesPtr pIsr = GetRenderer()->EF_CreateInputShaderResource(siSrc.m_pShaderResources);
-		//
-		SShaderItem& siDstTex(pMatInfo->GetShaderItem());
+		
+		const SShaderItem& siDstTex(pMatInfo->GetShaderItem());
 		SInputShaderResourcesPtr idsTex = GetRenderer()->EF_CreateInputShaderResource(siDstTex.m_pShaderResources);
+
 		if (!(flags & MTL_COPY_TEXTURES))
 		{
 			for (int n = 0; n < EFTT_MAX; n++)
@@ -605,9 +611,10 @@ void CMatInfo::Copy(IMaterial* pMtlDest, EMaterialCopyFlags flags)
 				pIsr->m_Textures[n] = idsTex->m_Textures[n];
 			}
 		}
+
 		SShaderItem siDst(GetRenderer()->EF_LoadShaderItem(siSrc.m_pShader->GetName(), false, 0, pIsr, siSrc.m_pShader->GetGenerationMask()));
+		siDst.m_pShaderResources->CloneConstants(siSrc.m_pShaderResources); // Lazy "Copy", stays a reference until changed, after which it becomes unlinked
 		pMatInfo->AssignShaderItem(siDst);
-		siDst.m_pShaderResources->CloneConstants(siSrc.m_pShaderResources);
 	}
 }
 
@@ -627,11 +634,12 @@ CMatInfo* CMatInfo::Clone(CMatInfo* pParentOfClonedMtl)
 	pMatInfo->m_pConsoleMtl = m_pConsoleMtl;
 #endif
 
-	if (m_shaderItem.m_pShaderResources)
+	if (GetShaderItem().m_pShaderResources)
 	{
 		const SShaderItem& siSrc(GetShaderItem());
+
 		SShaderItem siDst(siSrc.Clone());
-		pMatInfo->m_shaderItem = siDst;
+		pMatInfo->AssignShaderItem(siDst);
 	}
 
 	return pMatInfo;
@@ -773,165 +781,6 @@ void CMatInfo::SetCamera(CCamera& cam)
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CMatInfo::SetSketchMode(int mode)
-{
-#ifdef SUPPORT_MATERIAL_SKETCH
-	if (mode == 0)
-	{
-		if (m_pPreSketchShader)
-		{
-			m_shaderItem.m_pShader = m_pPreSketchShader;
-			m_shaderItem.m_nTechnique = m_nPreSketchTechnique;
-			m_pPreSketchShader = 0;
-			m_nPreSketchTechnique = 0;
-		}
-	}
-	else
-	{
-		if (m_shaderItem.m_pShader && m_shaderItem.m_pShader != m_pPreSketchShader)
-		{
-			EShaderType shaderType = m_shaderItem.m_pShader->GetShaderType();
-
-			//      nGenerationMask = (uint32)m_shaderItem.m_pShader->GetGenerationMask();
-
-			// Do not replace this shader types.
-			switch (shaderType)
-			{
-			case eST_Terrain:
-			case eST_Shadow:
-			case eST_Water:
-			case eST_FX:
-			case eST_PostProcess:
-			case eST_HDR:
-			case eST_Sky:
-			case eST_Particle:
-				// For this shaders do not replace them.
-				return;
-			case eST_Vegetation:
-				{
-					// in low spec mode also skip vegetation - we have low spec vegetation shader
-					if (mode == 3)
-						return;
-				}
-			}
-		}
-
-		if (!m_pPreSketchShader)
-		{
-			m_pPreSketchShader = m_shaderItem.m_pShader;
-			m_nPreSketchTechnique = m_shaderItem.m_nTechnique;
-		}
-
-		//m_shaderItem.m_pShader = ((CMatMan*)GetMatMan())->GetDefaultHelperMaterial()->GetShaderItem().m_pShader;
-		if (mode == 1)
-		{
-			m_shaderItem.m_pShader = gEnv->pRenderer->EF_LoadShader("Sketch");
-			m_shaderItem.m_nTechnique = 0;
-		}
-		else if (mode == 2)
-		{
-			m_shaderItem.m_pShader = gEnv->pRenderer->EF_LoadShader("Sketch.Fast");
-			m_shaderItem.m_nTechnique = 0;
-		}
-		else if (mode == 4)
-		{
-			SShaderItem tmp = gEnv->pRenderer->EF_LoadShaderItem("Sketch.TexelsPerMeter", false);
-			m_shaderItem.m_pShader = tmp.m_pShader;
-			m_shaderItem.m_nTechnique = tmp.m_nTechnique;
-		}
-
-		if (m_shaderItem.m_pShader)
-			m_shaderItem.m_pShader->AddRef();
-	}
-	for (int i = 0; i < (int)m_subMtls.size(); i++)
-	{
-		if (m_subMtls[i])
-		{
-			m_subMtls[i]->SetSketchMode(mode);
-		}
-	}
-#endif
-}
-
-void CMatInfo::SetTexelDensityDebug(int mode)
-{
-#ifdef SUPPORT_MATERIAL_SKETCH
-	if (m_shaderItem.m_pShader)
-	{
-		EShaderType shaderType = m_pPreSketchShader ? m_pPreSketchShader->GetShaderType() : m_shaderItem.m_pShader->GetShaderType();
-
-		switch (shaderType)
-		{
-		case eST_Terrain:
-			if (mode == 3 || mode == 4)
-			{
-				if (m_nSurfaceTypeId == 0)
-				{
-					mode = 0;
-				}
-
-				break;
-			}
-		case eST_Shadow:
-		case eST_Water:
-		case eST_FX:
-		case eST_PostProcess:
-		case eST_HDR:
-		case eST_Sky:
-		case eST_Particle:
-			// For this shaders do not replace them.
-			mode = 0;
-			break;
-		default:
-			if (mode == 1 || mode == 2)
-			{
-				break;
-			}
-			mode = 0;
-			break;
-		}
-
-		if (mode == 0)
-		{
-			if (m_pPreSketchShader)
-			{
-				m_shaderItem.m_pShader = m_pPreSketchShader;
-				m_shaderItem.m_nTechnique = m_nPreSketchTechnique;
-				m_pPreSketchShader = 0;
-				m_nPreSketchTechnique = 0;
-			}
-		}
-		else
-		{
-			if (!m_pPreSketchShader)
-			{
-				m_pPreSketchShader = m_shaderItem.m_pShader;
-				m_nPreSketchTechnique = m_shaderItem.m_nTechnique;
-			}
-
-			SShaderItem tmp;
-			if (mode == 3 || mode == 4)
-			{
-				tmp = gEnv->pRenderer->EF_LoadShaderItem("SketchTerrain.TexelDensityTerrainLayer", false);
-			}
-			else
-			{
-				tmp = gEnv->pRenderer->EF_LoadShaderItem("Sketch.TexelDensity", false);
-			}
-			m_shaderItem.m_pShader = tmp.m_pShader;
-			m_shaderItem.m_nTechnique = tmp.m_nTechnique;
-		}
-	}
-
-	for (int i = 0; i < (int)m_subMtls.size(); i++)
-	{
-		if (m_subMtls[i])
-		{
-			m_subMtls[i]->SetTexelDensityDebug(mode);
-		}
-	}
-#endif
-}
 
 const char* CMatInfo::GetLoadingCallstack()
 {
@@ -989,6 +838,16 @@ void CMatInfo::RequestTexturesLoading(const float fMipFactor)
 	PrecacheTextures(fMipFactor, FPR_STARTLOADING, false);
 }
 
+void CMatInfo::ForceTexturesLoading(const float fMipFactor)
+{
+	PrecacheTextures(fMipFactor, FPR_STARTLOADING + FPR_HIGHPRIORITY, true);
+}
+
+void CMatInfo::ForceTexturesLoading(const int iScreenTexels)
+{
+	PrecacheTextures(iScreenTexels, FPR_STARTLOADING + FPR_HIGHPRIORITY, true);
+}
+
 void CMatInfo::PrecacheTextures(const float fMipFactor, const int nFlags, bool bFullUpdate)
 {
 	SStreamingPredictionZone& rZone = m_streamZoneInfo[bFullUpdate ? 1 : 0];
@@ -1023,6 +882,27 @@ void CMatInfo::PrecacheTextures(const float fMipFactor, const int nFlags, bool b
 		rZone.nRoundId = nRoundId;
 		rZone.fMinMipFactor = fMipFactor;
 		rZone.bHighPriority = bHighPriority;
+	}
+}
+
+void CMatInfo::PrecacheTextures(const int iScreenTexels, const int nFlags, bool bFullUpdate)
+{
+	int nRoundId = bFullUpdate ? GetObjManager()->m_nUpdateStreamingPrioriryRoundIdFast : GetObjManager()->m_nUpdateStreamingPrioriryRoundId;
+
+	// TODO: fix fast update
+	if (true)
+	{
+		int nCurrentFlags = Get3DEngine()->IsShadersSyncLoad() ? FPR_SYNCRONOUS : 0;
+		nCurrentFlags |= bFullUpdate ? FPR_SINGLE_FRAME_PRIORITY_UPDATE : 0;
+
+		SShaderItem& rSI = m_shaderItem;
+		if (rSI.m_pShader && rSI.m_pShaderResources && !(rSI.m_pShader->GetFlags() & EF_NODRAW))
+		{
+			{
+				nCurrentFlags |= (nFlags & FPR_HIGHPRIORITY);
+				GetRenderer()->EF_PrecacheResource(&rSI, iScreenTexels, 0, nCurrentFlags, nRoundId, 1); // accumulated value is not valid, pass current value
+			}
+		}
 	}
 }
 
@@ -1146,6 +1026,12 @@ void CMatInfo::SetKeepLowResSysCopyForDiffTex()
 		if (!pRes)
 			continue;
 
+#ifndef FEATURE_SVO_GI_ALLOW_HQ
+		// For non HQ mode (consoles) keep the texture only if material is going to use alpha value from it
+		if ((pRes->GetAlphaRef() == 0.f) && (pRes->GetStrengthValue(EFTT_OPACITY) == 1.f))
+			continue;
+#endif
+		
 		int j = EFTT_DIFFUSE;
 		{
 			SEfResTexture* pResTexure = pRes->GetTexture(j);
@@ -1279,3 +1165,151 @@ void CMatInfo::RegisterConsoleMatCVar()
 	               " 1 = enabled and renders console materials where available");
 }
 #endif
+
+///////////////////////////////////////////////////////////////////////////////
+IMaterial* CMatMan::GetDefaultMaterial()
+{
+	return m_pDefaultMtl;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+IMaterial* CMatInfo::GetSafeSubMtl(int nSubMtlSlot)
+{
+	if (m_subMtls.empty() || !(m_Flags & MTL_FLAG_MULTI_SUBMTL))
+	{
+		return this; // Not Multi material.
+	}
+	if (nSubMtlSlot >= 0 && nSubMtlSlot < (int)m_subMtls.size() && m_subMtls[nSubMtlSlot] != NULL)
+		return m_subMtls[nSubMtlSlot];
+	else
+		return GetMatMan()->GetDefaultMaterial();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+SShaderItem& CMatInfo::GetShaderItem()
+{
+#if defined(ENABLE_CONSOLE_MTL_VIZ)
+	if (ms_useConsoleMat == 1 && m_pConsoleMtl)
+	{
+		IMaterial* pConsoleMaterial = m_pConsoleMtl.get();
+		return static_cast<CMatInfo*>(pConsoleMaterial)->CMatInfo::GetShaderItem();
+	}
+#endif
+
+	return m_shaderItem;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+const SShaderItem& CMatInfo::GetShaderItem() const
+{
+#if defined(ENABLE_CONSOLE_MTL_VIZ)
+	if (ms_useConsoleMat == 1 && m_pConsoleMtl)
+	{
+		IMaterial* pConsoleMaterial = m_pConsoleMtl.get();
+		return static_cast<CMatInfo*>(pConsoleMaterial)->CMatInfo::GetShaderItem();
+	}
+#endif
+
+	return m_shaderItem;
+}
+
+//////////////////////////////////////////////////////////////////////////
+SShaderItem& CMatInfo::GetShaderItem(int nSubMtlSlot)
+{
+#if defined(ENABLE_CONSOLE_MTL_VIZ)
+	if (ms_useConsoleMat == 1 && m_pConsoleMtl)
+	{
+		IMaterial* pConsoleMaterial = m_pConsoleMtl.get();
+		return static_cast<CMatInfo*>(pConsoleMaterial)->CMatInfo::GetShaderItem(nSubMtlSlot);
+	}
+#endif
+
+	SShaderItem* pShaderItem = NULL;
+	if (m_subMtls.empty() || !(m_Flags & MTL_FLAG_MULTI_SUBMTL))
+	{
+		pShaderItem = &m_shaderItem; // Not Multi material.
+	}
+	else if (nSubMtlSlot >= 0 && nSubMtlSlot < (int)m_subMtls.size() && m_subMtls[nSubMtlSlot] != NULL)
+	{
+		pShaderItem = &(m_subMtls[nSubMtlSlot]->m_shaderItem);
+	}
+	else
+	{
+		IMaterial* pDefaultMaterial = GetMatMan()->GetDefaultMaterial();
+		pShaderItem = &(static_cast<CMatInfo*>(pDefaultMaterial)->m_shaderItem);
+	}
+
+	return *pShaderItem;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+const SShaderItem& CMatInfo::GetShaderItem(int nSubMtlSlot) const
+{
+#if defined(ENABLE_CONSOLE_MTL_VIZ)
+	if (ms_useConsoleMat == 1 && m_pConsoleMtl)
+	{
+		IMaterial* pConsoleMaterial = m_pConsoleMtl.get();
+		return static_cast<CMatInfo*>(pConsoleMaterial)->CMatInfo::GetShaderItem(nSubMtlSlot);
+	}
+#endif
+
+	const SShaderItem* pShaderItem = NULL;
+	if (m_subMtls.empty() || !(m_Flags & MTL_FLAG_MULTI_SUBMTL))
+	{
+		pShaderItem = &m_shaderItem; // Not Multi material.
+	}
+	else if (nSubMtlSlot >= 0 && nSubMtlSlot < (int)m_subMtls.size() && m_subMtls[nSubMtlSlot] != NULL)
+	{
+		pShaderItem = &(m_subMtls[nSubMtlSlot]->m_shaderItem);
+	}
+	else
+	{
+		IMaterial* pDefaultMaterial = GetMatMan()->GetDefaultMaterial();
+		pShaderItem = &(static_cast<CMatInfo*>(pDefaultMaterial)->m_shaderItem);
+	}
+
+	return *pShaderItem;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+bool CMatInfo::IsForwardRenderingRequired()
+{
+	bool bRequireForwardRendering = (m_Flags & MTL_FLAG_REQUIRE_FORWARD_RENDERING) != 0;
+
+	if (!bRequireForwardRendering)
+	{
+		for (int i = 0; i < (int)m_subMtls.size(); ++i)
+		{
+			if (m_subMtls[i] != 0 && m_subMtls[i]->m_Flags & MTL_FLAG_REQUIRE_FORWARD_RENDERING)
+			{
+				bRequireForwardRendering = true;
+				break;
+			}
+		}
+	}
+
+	return bRequireForwardRendering;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+bool CMatInfo::IsNearestCubemapRequired()
+{
+	bool bRequireNearestCubemap = (m_Flags & MTL_FLAG_REQUIRE_NEAREST_CUBEMAP) != 0;
+
+	if (!bRequireNearestCubemap)
+	{
+		for (int i = 0; i < (int)m_subMtls.size(); ++i)
+		{
+			if (m_subMtls[i] != 0 && m_subMtls[i]->m_Flags & MTL_FLAG_REQUIRE_NEAREST_CUBEMAP)
+			{
+				bRequireNearestCubemap = true;
+				break;
+			}
+		}
+	}
+
+	return bRequireNearestCubemap;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////

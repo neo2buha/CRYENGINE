@@ -73,7 +73,7 @@ vtx_idx& CAttachmentMerger::MeshStreams::GetVertexIndex(int i)
 	return pIndices[i];
 }
 
-EVertexFormat CAttachmentMerger::MeshStreams::GetVertexFormat()
+InputLayoutHandle CAttachmentMerger::MeshStreams::GetVertexFormat()
 {
 	return pMesh->GetVertexFormat();
 }
@@ -111,7 +111,8 @@ void CAttachmentMerger::MergeContext::Update(const AttachmentRenderData& renderD
 				IRenderShaderResources* pShaderResources = pSubMtl->GetShaderItem().m_pShaderResources;
 
 				nAccumulatedIndexCount[lod] += chunk.nNumIndices;
-				if (pShaderResources->IsAlphaTested())
+
+				if (pShaderResources && pShaderResources->IsAlphaTested())
 					bAlphaTested = true;
 
 				if ((pSubMtl->GetFlags() & MTL_FLAG_2SIDED) != 0)
@@ -401,20 +402,16 @@ void CopyVertices_tpl(CAttachmentMerger::MeshStreams& dstStreams, uint dstVtxOff
 template<const bool RequiresTransform>
 uint CopyVertices(CAttachmentMerger::MeshStreams& dstStreams, uint dstVtxOffset, CAttachmentMerger::MeshStreams& srcStreams, uint numVertices, const Matrix34& transform)
 {
-	switch (srcStreams.GetVertexFormat())
-	{
-	case eVF_P3S_C4B_T2S:
+	InputLayoutHandle sVF = srcStreams.GetVertexFormat();
+
+	if (sVF == EDefaultInputLayouts::P3S_C4B_T2S)
 		CopyVertices_tpl<SVF_P3S_C4B_T2S, RequiresTransform>(dstStreams, dstVtxOffset, srcStreams, numVertices, transform);
-		break;
-	case eVF_P3F_C4B_T2F:
+	else if (sVF == EDefaultInputLayouts::P3F_C4B_T2F)
 		CopyVertices_tpl<SVF_P3F_C4B_T2F, RequiresTransform>(dstStreams, dstVtxOffset, srcStreams, numVertices, transform);
-		break;
-	case eVF_P3F:
+	else if (sVF == EDefaultInputLayouts::P3F)
 		CopyVertices_tpl<SVF_P3F, RequiresTransform>(dstStreams, dstVtxOffset, srcStreams, numVertices, transform);
-		break;
-	default:
+	else
 		CRY_ASSERT(false);
-	}
 
 	return numVertices;
 }
@@ -701,9 +698,12 @@ void CAttachmentMerger::Merge(CAttachmentMerged* pDstAttachment, const DynArray<
 		chunk.nNumVerts = numVertices;
 		chunk.nNumIndices = numIndices;
 
-		pRenderMesh->SetChunk(-1, chunk);
-		pRenderMesh->GetChunks()[0].pRE->mfUpdateFlags(FCEF_SKINNED);
-		pRenderMesh->SetSkinned();
+		if (chunk.nNumVerts > 0 && chunk.nNumIndices > 0)
+		{
+			pRenderMesh->SetChunk(-1, chunk);
+			pRenderMesh->GetChunks()[0].pRE->mfUpdateFlags(FCEF_SKINNED);
+			pRenderMesh->SetSkinned();
+		}
 	}
 
 	pDstSkin->m_arrModelJoints = arrModelJoints;

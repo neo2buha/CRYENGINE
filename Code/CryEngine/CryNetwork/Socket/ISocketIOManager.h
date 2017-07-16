@@ -5,7 +5,8 @@
 
 #pragma once
 
-#include "NetAddress.h"
+#include <CryNetwork/NetAddress.h>
+#include <CryMemory/STLGlobalAllocator.h>
 #include "Config.h"
 #include "SocketError.h"
 #include "IDatagramSocket.h"
@@ -29,11 +30,12 @@ struct SSocketID
 	{
 		return id == InvalidId;
 	}
-	typedef uint16 (SSocketID::* unknown_bool_type);
-	ILINE operator unknown_bool_type() const
+	typedef uint16 SSocketID::* safe_bool_idiom_type;
+	ILINE operator safe_bool_idiom_type() const
 	{
 		return !!(*this) ? &SSocketID::id : NULL;
 	}
+
 	ILINE bool operator!=(const SSocketID& rhs) const
 	{
 		return !(*this == rhs);
@@ -187,8 +189,8 @@ struct ISocketIOManager
 	virtual void        SetAcceptTarget(SSocketID sockid, IAcceptTarget* pTarget) = 0;
 	virtual void        SetRecvTarget(SSocketID sockid, IRecvTarget* pTarget) = 0;
 	virtual void        SetSendTarget(SSocketID sockid, ISendTarget* pTarget) = 0;
-	virtual void        RegisterBackoffAddressForSocket(TNetAddress addr, SSocketID sockid) = 0;
-	virtual void        UnregisterBackoffAddressForSocket(TNetAddress addr, SSocketID sockid) = 0;
+	virtual void        RegisterBackoffAddressForSocket(const TNetAddress& addr, SSocketID sockid) = 0;
+	virtual void        UnregisterBackoffAddressForSocket(const TNetAddress& addr, SSocketID sockid) = 0;
 	virtual void        UnregisterSocket(SSocketID sockid) = 0;
 
 	virtual bool        RequestRecvFrom(SSocketID sockid) = 0;
@@ -218,8 +220,8 @@ class CSocketIOManager : public ISocketIOManager
 public:
 	CSocketIOManager(uint32 c) : ISocketIOManager(c)  {}
 
-	virtual IDatagramSocketPtr CreateDatagramSocket(const TNetAddress& addr, uint32 flags);
-	virtual void               FreeDatagramSocket(IDatagramSocketPtr pSocket);
+	virtual IDatagramSocketPtr CreateDatagramSocket(const TNetAddress& addr, uint32 flags) override;
+	virtual void               FreeDatagramSocket(IDatagramSocketPtr pSocket) override;
 
 #if NET_MINI_PROFILE || NET_PROFILE_ENABLE
 	void RecordPacketSendStatistics(const uint8* pData, size_t len);

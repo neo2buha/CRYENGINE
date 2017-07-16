@@ -114,7 +114,7 @@ DXGL_API HRESULT WINAPI D3D11CreateDeviceAndSwapChain(
 	return S_OK;
 }
 
-DXGL_API HRESULT WINAPI D3D10CreateBlob(SIZE_T NumBytes, LPD3D10BLOB* ppBuffer)
+DXGL_API HRESULT WINAPI D3DCreateBlob(SIZE_T NumBytes, LPD3D10BLOB* ppBuffer)
 {
 	CCryDXGLBlob::ToInterface(ppBuffer, new CCryDXGLBlob(NumBytes));
 	return (*ppBuffer)->GetBufferPointer() != NULL;
@@ -311,7 +311,7 @@ void DXGLInitialize(uint32 uNumSharedContexts)
 	NCryOpenGL::CDevice::Configure(uNumSharedContexts);
 }
 
-	#if CRY_OPENGL_SINGLE_CONTEXT
+	#if OGL_SINGLE_CONTEXT
 
 void DXGLBindDeviceContext(ID3D11DeviceContext* pDeviceContext)
 {
@@ -362,7 +362,7 @@ HRESULT DXGLMapBufferRange(ID3D11DeviceContext* pDeviceContext, ID3D11Buffer* pB
 {
 	NCryOpenGL::CContext* pGLContext(static_cast<CCryDXGLDeviceContext*>(pDeviceContext)->GetGLContext());
 	NCryOpenGL::SBuffer* pGLBuffer(pBuffer->GetGLBuffer());
-	return (*pGLBuffer->m_pfMapBufferRange)(pGLBuffer, uOffset, uSize, MapType, MapFlags, pMappedResource, pGLContext) ? S_OK : E_FAIL;
+	return (*pGLBuffer->m_pfMapBufferRange)(pGLBuffer, uOffset, uSize ? uSize : pGLBuffer->m_uSize - uOffset, MapType, MapFlags, pMappedResource, pGLContext) ? S_OK : E_FAIL;
 }
 
 void DXGLSetDepthBoundsTest(bool bEnabled, float fMin, float fMax)
@@ -442,7 +442,7 @@ void DXGLIssueFrameFences(ID3D11Device* pDevice)
 
 #endif //!DXGL_FULL_EMULATION
 
-#if defined(DXGL_USE_SDL)
+#if defined(USE_SDL2_VIDEO)
 
 DXGL_API bool DXGLCreateSDLWindow(
   const char* szTitle,
@@ -459,7 +459,7 @@ DXGL_API void DXGLDestroySDLWindow(HWND kHandle)
 	NCryOpenGL::CDevice::DestroySDLWindow(kHandle);
 }
 
-#endif //defined(DXGL_USE_SDL)
+#endif //defined(USE_SDL2_VIDEO)
 
 ////////////////////////////////////////////////////////////////////////////
 //  DxErr Logging and error functions
@@ -503,7 +503,7 @@ DXGL_API HRESULT WINAPI DXTraceW(const char* strFile, DWORD dwLine, HRESULT hr, 
 
 #if !DXGL_FULL_EMULATION
 
-	#if CRY_OPENGL_SINGLE_CONTEXT
+	#if OGL_SINGLE_CONTEXT
 
 SDXGLDeviceContextThreadLocalHandle::SDXGLDeviceContextThreadLocalHandle()
 {

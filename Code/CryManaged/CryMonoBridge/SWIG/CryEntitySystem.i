@@ -6,30 +6,53 @@
 %import "CryScriptSystem.i"
 %import "CryPhysics.i"
 %import "CryRender.i"
+%import "CryAnimation.i"
 
 %{
-#include <CryEntitySystem/IEntityProxy.h>
+#include <CryEntitySystem/IEntityBasicTypes.h>
+
+#include <CryAnimation/ICryAnimation.h>
+#include <CryNetwork/INetwork.h>
+
 #include <CryEntitySystem/IEntity.h>
-#include <CryEntitySystem/IEntityPoolManager.h>
 #include <CryEntitySystem/IEntitySystem.h>
 #include <CryEntitySystem/IBreakableManager.h>
-#include <CryEntitySystem/IComponent.h>
+#include <CryEntitySystem/IEntityComponent.h>
 #include <Cry3DEngine/IStatObj.h>
 #include <CryDynamicResponseSystem/IDynamicResponseSystem.h>
+#include <CryExtension/CryCreateClassInstance.h>
+#include <CryExtension/CryGUID.h>
+#include <CryExtension/CryTypeID.h>
+#include <CryExtension/ICryFactoryRegistry.h>
+#include <CryExtension/ICryFactory.h>
 %}
-%include "../../../../CryEngine/CryCommon/CryEntitySystem/IComponent.h"
+
+%ignore IEntitySystemEngineModule;
+
+%include "../../../CryEngine/CryCommon/CryEntitySystem/IEntityBasicTypes.h"
+%import "../../../../CryEngine/CryCommon/CryNetwork/INetwork.h"
+
+%csconstvalue("0xFFFFFFFF") eEA_All;
+%typemap(csbase) EEntityAspects "uint"
+%ignore GameWarning;
 
 %ignore GetType;
-%import "../../../../CryEngine/CryCommon/CryEntitySystem/IComponent.h"
-%import "../../../../CryEngine/CryCommon/Cry3DEngine/IStatObj.h"
 
-// TEMPORARY
-%ignore IEntityProxy::GetSignature;
-%ignore IEntityPhysicalProxy::SerializeTyped;
-%ignore IEntityPoolListener::OnBookmarkEntitySerialize;
+%feature("director") ICryUnknown;
+
+%include "../../../CryEngine/CryCommon/CryExtension/CryCreateClassInstance.h"
+%include "../../../CryEngine/CryCommon/CryExtension/CryGUID.h"
+%include "../../../CryEngine/CryCommon/CryExtension/CryTypeID.h"
+%include "../../../CryEngine/CryCommon/CryExtension/ICryFactoryRegistry.h"
+
+%feature("director") IEntityComponent;
+%feature("director") IEntityAudioProxy;
+%include "../../../../CryEngine/CryCommon/CryEntitySystem/IEntityComponent.h"
+
+%include <std_shared_ptr.i>
+
 // ~TEMPORARY
 %feature("director") IEntityScriptProxy;
-%include "../../../../CryEngine/CryCommon/CryEntitySystem/IEntityProxy.h"
 //TODO: %include "../../../CryEngine/CryCommon/IEntityAttributesProxy.h"
 %include "../../../../CryEngine/CryCommon/CryEntitySystem/IEntityClass.h"
 %ignore EPartIds;
@@ -40,6 +63,22 @@
 		if($self->nParam[0])
 			return (EventPhysCollision*)$self->nParam[0];
 		return nullptr;
+	}
+
+	INT_PTR GetIntPtrParameter(uint8 index)
+	{
+		if(index >= 4)
+			return 0;
+
+		return $self->nParam[index];
+	}
+
+	float GetFloatParameter(uint8 index)
+	{
+		if(index >= 3)
+			return 0;
+
+		return $self->fParam[index];
 	}
 }
 %extend IEntity {
@@ -57,15 +96,10 @@
 	{
 		return $self->UnmapAttachedChild(partID);
 	}
-	IEntityRenderProxy* GetRenderProxy()
-	{
-		return (IEntityRenderProxy*)$self->GetProxy(ENTITY_PROXY_RENDER);
-	}
 }
 //(maybe) TODO: %include "../../../CryEngine/CryCommon/IEntityRenderState.h"
 //(maybe) TODO: %include "../../../CryEngine/CryCommon/IEntityRenderState_info.h"
 //TODO: %include "../../../CryEngine/CryCommon/IEntitySerialize.h"
-%include "../../../../CryEngine/CryCommon/CryEntitySystem/IEntityPoolManager.h"
 %typemap(csbase) IEntitySystem::SinkEventSubscriptions "uint"
 %ignore CreateEntitySystem;
 %feature("director") IEntityEventListener;
@@ -73,3 +107,10 @@
 %feature("director") IAreaManagerEventListener;
 %include "../../../../CryEngine/CryCommon/CryEntitySystem/IEntitySystem.h"
 %include "../../../../CryEngine/CryCommon/CryEntitySystem/IBreakableManager.h"
+%extend SEntitySpawnParams {
+	bool HasEntityNode()
+	{
+		IXmlNode* ptr = $self->entityNode;
+		return ptr != nullptr;
+	}
+}

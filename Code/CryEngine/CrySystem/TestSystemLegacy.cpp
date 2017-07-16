@@ -7,45 +7,35 @@
 #include <CryEntitySystem/IEntitySystem.h>          // IEntityIt
 #include <CrySystem/IConsole.h>                     // IConsole
 #include <Cry3DEngine/I3DEngine.h>                  // I3DEngine
-#include <CryGame/IGame.h>                          // IGame
 #include <CryGame/IGameFramework.h>                 // IGameFramework
 #include "TestSystemLegacy.h"
 #include "DebugCallStack.h"                 // DebugCallStack
 
+<<<<<<< HEAD
 #include "IGameRulesSystem.h"               // IGameRulesSystem
 #include <ILevelSystem.h>                   // ILevelSystemListener
+=======
+#include <../CryAction/ILevelSystem.h>                   // ILevelSystemListener
+>>>>>>> upstream/stabilisation
 
 extern int CryMemoryGetAllocatedSize();
 
-CTestSystemLegacy::CTestSystemLegacy() : m_iRenderPause(0), m_fQuitInNSeconds(0.0f)
+CTestSystemLegacy::CTestSystemLegacy(ISystem* pSystem)
+	: m_log(pSystem)
+	, m_unitTestManager(m_log)
 {
-	m_bFirstUpdate = true;
-	m_bApplicationTest = false;
-	m_pTimeDemoInfo = 0;
-	m_pLog = 0;
-	m_pUnitTestManager = new CryUnitTest::CUnitTestManager;
-}
-
-CTestSystemLegacy::~CTestSystemLegacy()
-{
-	delete m_pUnitTestManager;
-	if (m_pTimeDemoInfo)
-	{
-		delete[]m_pTimeDemoInfo->pFrames;
-		delete m_pTimeDemoInfo;
-	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CTestSystemLegacy::Init(IConsole* pConsole)
+/*static*/ void CTestSystemLegacy::InitCommands()
 {
 	REGISTER_COMMAND("RunUnitTests", RunUnitTests, VF_INVISIBLE | VF_CHEAT, "Execute a set of unit tests");
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CTestSystemLegacy::RunUnitTests(IConsoleCmdArgs* pArgs)
+/*static*/ void CTestSystemLegacy::RunUnitTests(IConsoleCmdArgs* pArgs)
 {
-	int nExitCode = gEnv->pSystem->GetITestSystem()->GetIUnitTestManager()->RunAllTests(CryUnitTest::ExcelReporter);
+	int nExitCode = gEnv->pSystem->GetITestSystem()->GetIUnitTestManager()->RunAllTests(CryUnitTest::EReporterType::Excel);
 
 	// Check for "noquit" option.
 	for (int a = 1; a < pArgs->GetArgCount(); a++)
@@ -60,9 +50,15 @@ void CTestSystemLegacy::RunUnitTests(IConsoleCmdArgs* pArgs)
 void CTestSystemLegacy::QuitInNSeconds(const float fInNSeconds)
 {
 	if (fInNSeconds > 0)
-		gEnv->pLog->Log("QuitInNSeconds() requests quit in %f sec", fInNSeconds);
+		m_log.Log("QuitInNSeconds() requests quit in %f sec", fInNSeconds);
 
 	m_fQuitInNSeconds = fInNSeconds;
+}
+
+//////////////////////////////////////////////////////////////////////////
+void CTestSystemLegacy::InitLog()
+{
+	m_log.SetFileName("%USER%/TestResults/TestLog.log");
 }
 
 class CLevelListener : public ILevelSystemListener
@@ -118,33 +114,31 @@ void CTestSystemLegacy::ApplicationTest(const char* szParam)
 	m_sParameter = szParam;
 	m_iRenderPause = 0;
 
-	m_pLog = new CLog(GetISystem());
-	m_pLog->SetFileName("%USER%/TestResults/TestLog.log");
 	if (!szParam)
 	{
-		gEnv->pLog->LogError("ApplicationTest() parameter missing");
+		m_log.LogError("ApplicationTest() parameter missing");
 		return;
 	}
 
-	IGame* pGame = gEnv->pGame;
-
-	if (stricmp(m_sParameter.c_str(), "LevelStats") == 0)
-		if (pGame)
+	if (m_sParameter.CompareNoCase("LevelStats") == 0)
+	{
+		if (gEnv->pGameFramework)
 		{
 			static CLevelListener listener(*this);
 
 			if (m_bFirstUpdate)
 			{
 				DeactivateCrashDialog();
-				pGame->GetIGameFramework()->GetILevelSystem()->AddListener(&listener);
+				gEnv->pGameFramework->GetILevelSystem()->AddListener(&listener);
 			}
 		}
+	}
 
 	gEnv->pConsole->ShowConsole(false);
 
 	m_bApplicationTest = true;
 
-	//	GetILog()->Log("ApplicationTest '%s'",szParam);
+	//	m_log.Log("ApplicationTest '%s'",szParam);
 }
 
 void CTestSystemLegacy::LogLevelStats()
@@ -154,7 +148,7 @@ void CTestSystemLegacy::LogLevelStats()
 	char sVersion[128];
 	ver.ToString(sVersion);
 
-	GetILog()->Log("   LevelStats Level='%s'   Ver=%s", gEnv->pGame->GetIGameFramework()->GetLevelName(), sVersion);
+	m_log.Log("   LevelStats Level='%s'   Ver=%s", gEnv->pGameFramework->GetLevelName(), sVersion);
 
 	{
 		// copied from CBudgetingSystem::MonitorSystemMemory
@@ -171,7 +165,7 @@ void CTestSystemLegacy::LogLevelStats()
 		memUsageInMB_SysCopyMeshes = RoundToClosestMB(memUsageInMB_SysCopyMeshes);
 		memUsageInMB_SysCopyTextures = RoundToClosestMB(memUsageInMB_SysCopyTextures);
 
-		GetILog()->Log("   System memory: %d MB [%d MB (engine), %d MB (managed textures), %d MB (managed meshes)]",
+		m_log.Log("   System memory: %d MB [%d MB (engine), %d MB (managed textures), %d MB (managed meshes)]",
 		               memUsageInMB, memUsageInMB_Engine, memUsageInMB_SysCopyTextures, memUsageInMB_SysCopyMeshes);
 	}
 
@@ -187,7 +181,10 @@ void CTestSystemLegacy::Update()
 		m_fQuitInNSeconds -= gEnv->pTimer->GetFrameTime();
 
 		if (m_fQuitInNSeconds <= 0.0f)
+		{
+			gEnv->pConsole->ExecuteString("ExitOnQuit 1");
 			gEnv->pSystem->Quit();
+		}
 		else
 		{
 			if (iSec != (int)m_fQuitInNSeconds)
@@ -201,11 +198,9 @@ void CTestSystemLegacy::Update()
 	if (m_sParameter.empty())
 		return;
 
-	IGame* pGame = gEnv->pGame;
-
 	if (m_bFirstUpdate)
 	{
-		if (stricmp(m_sParameter.c_str(), "TimeDemo") == 0)
+		if (m_sParameter.CompareNoCase("TimeDemo") == 0)
 		{
 			gEnv->pConsole->ExecuteString("exec TimeDemo.exc");
 		}
@@ -230,11 +225,10 @@ void CTestSystemLegacy::BeforeRender()
 	if (m_sParameter.empty())
 		return;
 
-	IGame* pGame = gEnv->pGame;
 	I3DEngine* p3DEngine = gEnv->p3DEngine;
 	IRenderer* pRenderer = gEnv->pRenderer;
 
-	if (stricmp(m_sParameter, "PrecacheCameraScreenshots") == 0)  // -----------------------------------------------------
+	if (m_sParameter.CompareNoCase("PrecacheCameraScreenshots") == 0)
 	{
 		assert(p3DEngine);
 		assert(pRenderer);
@@ -304,28 +298,17 @@ void CTestSystemLegacy::ScreenShot(const char* szDirectory, const char* szFilena
 	// directory is generated automatically
 	gEnv->pRenderer->ScreenShot(string(szDirectory) + "/" + szFilename);
 
-	GetILog()->Log("Generated screen shot '%s/%s'", szDirectory, szFilename);
+	m_log.Log("Generated screen shot '%s/%s'", szDirectory, szFilename);
 }
 
 //////////////////////////////////////////////////////////////////////////
 void CTestSystemLegacy::SetTimeDemoInfo(STimeDemoInfo* pTimeDemoInfo)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
-	if (m_pTimeDemoInfo)
-		delete[]m_pTimeDemoInfo->pFrames;
-	else
-		m_pTimeDemoInfo = new STimeDemoInfo;
-
-	*m_pTimeDemoInfo = *pTimeDemoInfo;
-
-	m_pTimeDemoInfo->pFrames = new STimeDemoFrameInfo[pTimeDemoInfo->nFrameCount];
-	// Copy per frame data.
-	memcpy(m_pTimeDemoInfo->pFrames, pTimeDemoInfo->pFrames, sizeof(STimeDemoFrameInfo) * pTimeDemoInfo->nFrameCount);
+	m_timeDemoInfo = *pTimeDemoInfo;
 }
 
 //////////////////////////////////////////////////////////////////////////
 STimeDemoInfo* CTestSystemLegacy::GetTimeDemoInfo()
 {
-	return m_pTimeDemoInfo;
+	return &m_timeDemoInfo;
 }

@@ -20,9 +20,9 @@ static const int INVALID_SEEK = -1;
 
 int TranslateSeekMode(IPlatformOS::ISaveReader::ESeekMode mode)
 {
-	COMPILE_TIME_ASSERT(INVALID_SEEK != SEEK_SET);
-	COMPILE_TIME_ASSERT(INVALID_SEEK != SEEK_CUR);
-	COMPILE_TIME_ASSERT(INVALID_SEEK != SEEK_END);
+	static_assert(INVALID_SEEK != SEEK_SET, "Invalid SEEK_SET value!");
+	static_assert(INVALID_SEEK != SEEK_CUR, "Invalid SEEK_CUR value!");
+	static_assert(INVALID_SEEK != SEEK_END, "INVALID SEEK_END value!");
 
 	switch (mode)
 	{
@@ -80,28 +80,34 @@ CCryPakFile::CCryPakFile(const char* fileName, const char* szMode)
 	, m_bWriting(!strchr(szMode, 'r'))
 {
 	m_pFile = FOpen(fileName, szMode, ICryPak::FOPEN_ONDISK);
-	if (!m_pFile)
-		m_pFile = FOpen(fileName, szMode);
 
-	if (m_pFile && !m_bWriting)
+	if (m_pFile == nullptr)
+	{
+		m_pFile = FOpen(fileName, szMode);
+	}
+
+	if (m_pFile != nullptr && !m_bWriting)
 	{
 		size_t fileSize = FGetSize(m_pFile);
-		if (fileSize)
+
+		if (fileSize > 0)
 		{
+			m_data.resize(fileSize);
+
 			const std::vector<char>* pMagic;
 			const std::vector<uint8>* pKey;
 			GetISystem()->GetPlatformOS()->GetEncryptionKey(&pMagic, &pKey);
 
-			m_data.resize(fileSize);
-
 			bool isEncrypted = false;
-			if (fileSize >= pMagic->size())
+
+			if (pMagic->size() > 0 && fileSize >= pMagic->size())
 			{
 				std::vector<uint8> magic;
 				magic.resize(pMagic->size());
 				FReadRaw(&magic[0], 1, magic.size(), m_pFile);
 				fileSize -= magic.size();
 				isEncrypted = 0 == memcmp(&magic[0], &pMagic->front(), magic.size());
+
 				if (isEncrypted)
 				{
 					m_data.resize(fileSize);
@@ -113,16 +119,17 @@ CCryPakFile::CCryPakFile(const char* fileName, const char* szMode)
 				}
 			}
 
-			if (fileSize)
+			if (fileSize > 0)
 			{
 				FReadRaw(&m_data[m_filePos], 1, fileSize, m_pFile);
-			}
-			m_filePos = 0;
 
-			if (isEncrypted && fileSize)
-			{
-				gEnv->pNetwork->DecryptBuffer(&m_data[0], &m_data[0], fileSize, &pKey->front(), pKey->size());
+				if (isEncrypted)
+				{
+					gEnv->pNetwork->DecryptBuffer(&m_data[0], &m_data[0], fileSize, &pKey->front(), pKey->size());
+				}
 			}
+
+			m_filePos = 0;
 		}
 	}
 }

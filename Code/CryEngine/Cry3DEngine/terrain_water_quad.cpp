@@ -20,13 +20,205 @@
 #include "MatMan.h"
 #include "VisAreas.h"
 
+namespace
+{
+static const float OCEAN_FOG_DENSITY_MINIMUM = 0.0001f;
+
+std::tuple<uint32, uint32> GenerateOceanSurfaceVertices(
+  SVF_P3F_C4B_T2F* pDestVertices,
+  vtx_idx* pDestIndices,
+  int32 nScrGridSizeY,
+  float fRcpScrGridSizeY,
+  int32 nScrGridSizeX,
+  float fRcpScrGridSizeX,
+  bool bUseTessHW,
+  int32 swathWidth)
+{
+	if (!pDestVertices || !pDestIndices)
+	{
+		return std::make_tuple(0u, 0u);
+	}
+
+	SVF_P3F_C4B_T2F* pVertices = pDestVertices;
+	vtx_idx* pIndices = pDestIndices;
+	uint32 verticesCount = 0;
+	uint32 indicesCount = 0;
+
+	SVF_P3F_C4B_T2F tmp;
+	Vec3 vv;
+	vv.z = 0;
+
+	// Grid vertex generation
+	for (int32 y(0); y < nScrGridSizeY; ++y)
+	{
+		vv.y = (float)y * fRcpScrGridSizeY;// + fRcpScrGridSize;
+
+		for (int32 x(0); x < nScrGridSizeX; ++x)
+		{
+			// vert 1
+			vv.x = (float)x * fRcpScrGridSizeX;// + fRcpScrGridSize;
+
+			// store in z edges information
+			float fx = fabs((vv.x) * 2.0f - 1.0f);
+			float fy = fabs((vv.y) * 2.0f - 1.0f);
+			//float fEdgeDisplace = sqrt_tpl(fx*fx + fy * fy);//max(fx, fy);
+			float fEdgeDisplace = max(fx, fy);
+			//sqrt_tpl(fx*fx + fy * fy);
+			vv.z = fEdgeDisplace; //!((y==0 ||y == nScrGridSize-1) || (x==0 || x == nScrGridSize-1));
+
+			tmp.xyz = vv;
+			*pVertices = tmp;
+			++pVertices;
+			++verticesCount;
+		}
+	}
+
+	auto AddIndex = [&pIndices, &indicesCount](vtx_idx index)
+	{
+		*pIndices = index;
+		++pIndices;
+		++indicesCount;
+	};
+
+	if (bUseTessHW)
+	{
+		// Normal approach
+		int32 nIndex = 0;
+		for (int32 y(0); y < nScrGridSizeY - 1; ++y)
+		{
+			for (int32 x(0); x < nScrGridSizeX - 1; ++x, ++nIndex)
+			{
+				AddIndex(nScrGridSizeX * y + x);
+				AddIndex(nScrGridSizeX * y + x + 1);
+				AddIndex(nScrGridSizeX * (y + 1) + x);
+
+				AddIndex(nScrGridSizeX * (y + 1) + x);
+				AddIndex(nScrGridSizeX * y + x + 1);
+				AddIndex(nScrGridSizeX * (y + 1) + x + 1);
+
+				//m_pMeshIndices.Add( nIndex );
+				//m_pMeshIndices.Add( nIndex + 1);
+				//m_pMeshIndices.Add( nIndex + nScrGridSizeX);
+
+				//m_pMeshIndices.Add( nIndex + nScrGridSizeX);
+				//m_pMeshIndices.Add( nIndex + 1);
+				//m_pMeshIndices.Add( nIndex + nScrGridSizeX + 1);
+			}
+		}
+	}
+	else
+	{
+		// Grid index generation
+
+		if (swathWidth <= 0)
+		{
+			// Normal approach
+			int32 nIndex = 0;
+			for (int32 y(0); y < nScrGridSizeY - 1; ++y)
+			{
+				for (int32 x(0); x < nScrGridSizeX; ++x, ++nIndex)
+				{
+					AddIndex(nIndex);
+					AddIndex(nIndex + nScrGridSizeX);
+				}
+
+				if (nScrGridSizeY - 2 > y)
+				{
+					AddIndex(nIndex + nScrGridSizeY - 1);
+					AddIndex(nIndex);
+				}
+			}
+		}
+		else
+		{
+			// Boustrophedonic walk
+			//
+			//  0  1  2  3  4
+			//  5  6  7  8  9
+			// 10 11 12 13 14
+			// 15 16 17 18 19
+			//
+			// Should generate the following indices
+			// 0 5 1 6 2 7 3 8 4 9 9 14 14 9 13 8 12 7 11 6 10 5 5 10 10 15 11 16 12 17 13 18 14 19
+			//
+
+			int32 startX = 0, endX = swathWidth - 1;
+
+			do
+			{
+
+				for (int32 y(0); y < nScrGridSizeY - 1; y += 2)
+				{
+					// Forward
+					for (int32 x(startX); x <= endX; ++x)
+					{
+						AddIndex(y * nScrGridSizeX + x);
+						AddIndex((y + 1) * nScrGridSizeX + x);
+					}
+
+					// Can we go backwards?
+					if (y + 2 < nScrGridSizeY)
+					{
+						// Restart strip by duplicating last and first of next strip
+						AddIndex((y + 1) * nScrGridSizeX + endX);
+						AddIndex((y + 2) * nScrGridSizeX + endX);
+
+						//Backward
+						for (int32 x(endX); x >= startX; --x)
+						{
+							AddIndex((y + 2) * nScrGridSizeX + x);
+							AddIndex((y + 1) * nScrGridSizeX + x);
+						}
+
+						// Restart strip
+						if (y + 2 == nScrGridSizeY - 1 && endX < nScrGridSizeX - 1)
+						{
+							if (endX < nScrGridSizeX - 1)
+							{
+								// Need to restart at the top of the next column
+								AddIndex((nScrGridSizeY - 1) * nScrGridSizeX + startX);
+								AddIndex(endX);
+							}
+						}
+						else
+						{
+							AddIndex((y + 1) * nScrGridSizeX + startX);
+							AddIndex((y + 2) * nScrGridSizeX + startX);
+						}
+					}
+					else
+					{
+						// We can restart to next column
+						if (endX < nScrGridSizeX - 1)
+						{
+							// Restart strip for next swath
+							AddIndex((nScrGridSizeY - 1) * nScrGridSizeX + endX);
+							AddIndex(endX);
+						}
+					}
+				}
+
+				startX = endX;
+				endX = startX + swathWidth - 1;
+
+				if (endX >= nScrGridSizeX) endX = nScrGridSizeX - 1;
+
+			}
+			while (startX < nScrGridSizeX - 1);
+
+		}
+	}
+
+	return std::make_tuple(verticesCount, indicesCount);
+}
+}
+
 ITimer* COcean::m_pOceanTimer = 0;
 CREWaterOcean* COcean::m_pOceanRE = 0;
 uint32 COcean::m_nVisiblePixelsCount = ~0;
 
 COcean::COcean(IMaterial* pMat)
 {
-	m_pRenderMesh = 0;
 	m_pBottomCapRenderMesh = 0;
 
 	memset(m_fRECustomData, 0, sizeof(m_fRECustomData));
@@ -42,11 +234,11 @@ COcean::COcean(IMaterial* pMat)
 
 	m_nLastVisibleFrameId = 0;
 
-	m_pBottomCapMaterial = GetMatMan()->LoadMaterial("EngineAssets/Materials/Water/WaterOceanBottom", false);
-	m_pFogIntoMat = GetMatMan()->LoadMaterial("EngineAssets/Materials/Fog/OceanInto", false);
-	m_pFogOutofMat = GetMatMan()->LoadMaterial("EngineAssets/Materials/Fog/OceanOutof", false);
-	m_pFogIntoMatLowSpec = GetMatMan()->LoadMaterial("EngineAssets/Materials/Fog/OceanIntoLowSpec", false);
-	m_pFogOutofMatLowSpec = GetMatMan()->LoadMaterial("EngineAssets/Materials/Fog/OceanOutofLowSpec", false);
+	m_pBottomCapMaterial = GetMatMan()->LoadMaterial("%ENGINE%/EngineAssets/Materials/Water/WaterOceanBottom", false);
+	m_pFogIntoMat = GetMatMan()->LoadMaterial("%ENGINE%/EngineAssets/Materials/Fog/OceanInto", false);
+	m_pFogOutofMat = GetMatMan()->LoadMaterial("%ENGINE%/EngineAssets/Materials/Fog/OceanOutof", false);
+	m_pFogIntoMatLowSpec = GetMatMan()->LoadMaterial("%ENGINE%/EngineAssets/Materials/Fog/OceanIntoLowSpec", false);
+	m_pFogOutofMatLowSpec = GetMatMan()->LoadMaterial("%ENGINE%/EngineAssets/Materials/Fog/OceanOutofLowSpec", false);
 
 	for (int i = 0; i < RT_COMMAND_BUF_COUNT; i++)
 	{
@@ -83,7 +275,6 @@ COcean::~COcean()
 			m_pREOcclusionQueries[x]->Release(true);
 	}
 
-	m_pRenderMesh = NULL;
 	m_pBottomCapRenderMesh = NULL;
 
 	SAFE_RELEASE(m_pOceanRE);
@@ -95,8 +286,6 @@ int32 COcean::GetMemoryUsage()
 {
 	int32 nSize = 0;
 
-	nSize += sizeofVector(m_pMeshIndices);
-	nSize += sizeofVector(m_pMeshVerts);
 	nSize += sizeofVector(m_pBottomCapVerts);
 	nSize += sizeofVector(m_pBottomCapIndices);
 
@@ -122,7 +311,9 @@ void COcean::Update(const SRenderingPassInfo& passInfo)
 	// No hardware FFT support
 	m_bOceanFFT = false;
 	if (GetCVars()->e_WaterOceanFFT && pRenderer->EF_GetShaderQuality(eST_Water) >= eSQ_High)
+	{
 		m_bOceanFFT = true;
+	}
 
 	if (vCamPos.z < fWaterLevel)
 	{
@@ -223,19 +414,20 @@ void COcean::Create()
 	if (!bUseWaterTessHW && m_bOceanFFT)
 		nScrGridSizeX = nScrGridSizeY = 20 * 10; // for hi/very specs - use maximum tessellation
 
+	// swath width must be equal or shorter than nScrGridSizeX, otherwise it causes corrupted indices.
+	const int32 currentSwathWidth = min(nScrGridSizeX, GetCVars()->e_WaterTessellationSwathWidth);
+
 	// Generate screen space grid
-	if ((m_bOceanFFT && bUsingFFT != m_bOceanFFT) || bUseTessHW != bUseWaterTessHW || swathWidth != GetCVars()->e_WaterTessellationSwathWidth || !m_nVertsCount || !m_nIndicesCount || nScrGridSizeX * nScrGridSizeY != m_nPrevGridDim)
+	if ((m_bOceanFFT && bUsingFFT != m_bOceanFFT) || bUseTessHW != bUseWaterTessHW || swathWidth != currentSwathWidth || !m_nVertsCount || !m_nIndicesCount || nScrGridSizeX * nScrGridSizeY != m_nPrevGridDim)
 	{
 		m_nPrevGridDim = nScrGridSizeX * nScrGridSizeY;
-		m_pMeshVerts.Clear();
-		m_pMeshIndices.Clear();
 		m_nVertsCount = 0;
 		m_nIndicesCount = 0;
 
 		bUsingFFT = m_bOceanFFT;
 		bUseTessHW = bUseWaterTessHW;
 		// Update the swath width
-		swathWidth = GetCVars()->e_WaterTessellationSwathWidth;
+		swathWidth = currentSwathWidth;
 
 		// Render ocean with screen space tessellation
 
@@ -247,189 +439,28 @@ void COcean::Create()
 			return;
 		}
 
-		float fRcpScrGridSizeX = 1.0f / ((float) nScrGridSizeX - 1);
-		float fRcpScrGridSizeY = 1.0f / ((float) nScrGridSizeY - 1);
+		const float fRcpScrGridSizeX = 1.0f / ((float) nScrGridSizeX - 1);
+		const float fRcpScrGridSizeY = 1.0f / ((float) nScrGridSizeY - 1);
 
-		SVF_P3F_C4B_T2F tmp;
-		Vec3 vv;
-		vv.z = 0;
+		SVF_P3F_C4B_T2F* pReqVertices = nullptr;
+		vtx_idx* pReqIndices = nullptr;
+		const uint32 reqVerticesCount = nScrGridSizeX * nScrGridSizeY;
+		const uint32 reqIndicesCount = nScrGridSizeX * nScrGridSizeY * 6;
+		const bool result = m_pOceanRE->RequestVerticesBuffer(&pReqVertices, (uint8**)&pReqIndices, reqVerticesCount, reqIndicesCount, sizeof(vtx_idx));
 
-		m_pMeshVerts.reserve(nScrGridSizeX * nScrGridSizeY);
-		m_pMeshIndices.reserve(nScrGridSizeX * nScrGridSizeY);
-
-		// Grid vertex generation
-		for (int32 y(0); y < nScrGridSizeY; ++y)
+		if (!result)
 		{
-			vv.y = (float) y * fRcpScrGridSizeY;// + fRcpScrGridSize;
-
-			for (int32 x(0); x < nScrGridSizeX; ++x)
-			{
-				// vert 1
-				vv.x = (float) x * fRcpScrGridSizeX;// + fRcpScrGridSize;
-
-				// store in z edges information
-				float fx = fabs((vv.x) * 2.0f - 1.0f);
-				float fy = fabs((vv.y) * 2.0f - 1.0f);
-				//float fEdgeDisplace = sqrt_tpl(fx*fx + fy * fy);//max(fx, fy);
-				float fEdgeDisplace = max(fx, fy);
-				//sqrt_tpl(fx*fx + fy * fy);
-				vv.z = fEdgeDisplace; //!((y==0 ||y == nScrGridSize-1) || (x==0 || x == nScrGridSize-1));
-
-				int32 n = m_pMeshVerts.Count();
-				tmp.xyz = vv;
-				m_pMeshVerts.Add(tmp);
-			}
+			return;
 		}
 
-		if (bUseTessHW)
-		{
-			// Normal approach
-			int32 nIndex = 0;
-			for (int32 y(0); y < nScrGridSizeY - 1; ++y)
-			{
-				for (int32 x(0); x < nScrGridSizeX - 1; ++x, ++nIndex)
-				{
-					m_pMeshIndices.Add(nScrGridSizeX * y + x);
-					m_pMeshIndices.Add(nScrGridSizeX * y + x + 1);
-					m_pMeshIndices.Add(nScrGridSizeX * (y + 1) + x);
+		auto counts = GenerateOceanSurfaceVertices(pReqVertices, pReqIndices, nScrGridSizeY, fRcpScrGridSizeY, nScrGridSizeX, fRcpScrGridSizeX, bUseTessHW, swathWidth);
 
-					m_pMeshIndices.Add(nScrGridSizeX * (y + 1) + x);
-					m_pMeshIndices.Add(nScrGridSizeX * y + x + 1);
-					m_pMeshIndices.Add(nScrGridSizeX * (y + 1) + x + 1);
+		m_nVertsCount = std::get<0>(counts);
+		m_nIndicesCount = std::get<1>(counts);
+		CRY_ASSERT(m_nVertsCount <= reqVerticesCount);
+		CRY_ASSERT(m_nIndicesCount <= reqIndicesCount);
 
-					//m_pMeshIndices.Add( nIndex );
-					//m_pMeshIndices.Add( nIndex + 1);
-					//m_pMeshIndices.Add( nIndex + nScrGridSizeX);
-
-					//m_pMeshIndices.Add( nIndex + nScrGridSizeX);
-					//m_pMeshIndices.Add( nIndex + 1);
-					//m_pMeshIndices.Add( nIndex + nScrGridSizeX + 1);
-				}
-			}
-		}
-		else
-		{
-			// Grid index generation
-
-			if (swathWidth <= 0)
-			{
-				// Normal approach
-				int32 nIndex = 0;
-				for (int32 y(0); y < nScrGridSizeY - 1; ++y)
-				{
-					for (int32 x(0); x < nScrGridSizeX; ++x, ++nIndex)
-					{
-						m_pMeshIndices.Add(nIndex);
-						m_pMeshIndices.Add(nIndex + nScrGridSizeX);
-					}
-
-					if (nScrGridSizeY - 2 > y)
-					{
-						m_pMeshIndices.Add(nIndex + nScrGridSizeY - 1);
-						m_pMeshIndices.Add(nIndex);
-					}
-				}
-			}
-			else
-			{
-				// Boustrophedonic walk
-				//
-				//  0  1  2  3  4
-				//  5  6  7  8  9
-				// 10 11 12 13 14
-				// 15 16 17 18 19
-				//
-				// Should generate the following indices
-				// 0 5 1 6 2 7 3 8 4 9 9 14 14 9 13 8 12 7 11 6 10 5 5 10 10 15 11 16 12 17 13 18 14 19
-				//
-
-				int32 startX = 0, endX = swathWidth - 1;
-
-				do
-				{
-
-					for (int32 y(0); y < nScrGridSizeY - 1; y += 2)
-					{
-						// Forward
-						for (int32 x(startX); x <= endX; ++x)
-						{
-							m_pMeshIndices.Add(y * nScrGridSizeX + x);
-							m_pMeshIndices.Add((y + 1) * nScrGridSizeX + x);
-						}
-
-						// Can we go backwards?
-						if (y + 2 < nScrGridSizeY)
-						{
-							// Restart strip by duplicating last and first of next strip
-							m_pMeshIndices.Add((y + 1) * nScrGridSizeX + endX);
-							m_pMeshIndices.Add((y + 2) * nScrGridSizeX + endX);
-
-							//Backward
-							for (int32 x(endX); x >= startX; --x)
-							{
-								m_pMeshIndices.Add((y + 2) * nScrGridSizeX + x);
-								m_pMeshIndices.Add((y + 1) * nScrGridSizeX + x);
-							}
-
-							// Restart strip
-							if (y + 2 == nScrGridSizeY - 1 && endX < nScrGridSizeX - 1)
-							{
-								if (endX < nScrGridSizeX - 1)
-								{
-									// Need to restart at the top of the next column
-									m_pMeshIndices.Add((nScrGridSizeY - 1) * nScrGridSizeX + startX);
-									m_pMeshIndices.Add(endX);
-								}
-							}
-							else
-							{
-								m_pMeshIndices.Add((y + 1) * nScrGridSizeX + startX);
-								m_pMeshIndices.Add((y + 2) * nScrGridSizeX + startX);
-							}
-						}
-						else
-						{
-							// We can restart to next column
-							if (endX < nScrGridSizeX - 1)
-							{
-								// Restart strip for next swath
-								m_pMeshIndices.Add((nScrGridSizeY - 1) * nScrGridSizeX + endX);
-								m_pMeshIndices.Add(endX);
-							}
-						}
-					}
-
-					startX = endX;
-					endX = startX + swathWidth - 1;
-
-					if (endX >= nScrGridSizeX) endX = nScrGridSizeX - 1;
-
-				}
-				while (startX < nScrGridSizeX - 1);
-
-			}
-		}
-
-		m_nVertsCount = m_pMeshVerts.Count();
-		m_nIndicesCount = m_pMeshIndices.Count();
-
-		m_pRenderMesh = GetRenderer()->CreateRenderMeshInitialized(
-		  m_pMeshVerts.GetElements(),
-		  m_pMeshVerts.Count(),
-		  eVF_P3F_C4B_T2F,
-		  m_pMeshIndices.GetElements(),
-		  m_pMeshIndices.Count(),
-		  bUseTessHW ? prtTriangleList : prtTriangleStrip,
-		  "OutdoorWaterGrid", "OutdoorWaterGrid",
-		  eRMT_Static);
-
-		m_pRenderMesh->SetChunk(m_pMaterial, 0, m_pMeshVerts.Count(), 0, m_pMeshIndices.Count(), 1.0f);
-
-		if (m_bOceanFFT)
-			m_pOceanRE->Create(m_pMeshVerts.Count(), m_pMeshVerts.GetElements(), m_pMeshIndices.Count(), m_pMeshIndices.GetElements(), sizeof(m_pMeshIndices[0]));
-
-		m_pMeshVerts.Free();
-		m_pMeshIndices.Free();
+		m_pOceanRE->SubmitVerticesBuffer(m_nVertsCount, m_nIndicesCount, sizeof(vtx_idx), pReqVertices, (uint8*)pReqIndices);
 	}
 }
 
@@ -446,16 +477,15 @@ void COcean::Render(const SRenderingPassInfo& passInfo)
 	Vec3 vCamPos = passInfo.GetCamera().GetPosition();
 	float fWaterLevel = p3DEngine->GetWaterLevel();
 
-	CRenderObject* pObject = GetRenderer()->EF_GetObject_Temp(passInfo.ThreadID());
+	const int fillThreadID = passInfo.ThreadID();
+
+	CRenderObject* pObject = GetRenderer()->EF_GetObject_Temp(fillThreadID);
 	if (!pObject)
 		return;
 	pObject->m_II.m_Matrix.SetIdentity();
 	pObject->m_pRenderNode = this;
 
 	m_fLastFov = passInfo.GetCamera().GetFov();
-
-	// make distance to water level near to zero
-	m_pRenderMesh->SetBBox(vCamPos, vCamPos);
 
 	// test for multiple lights and shadows support
 
@@ -466,7 +496,7 @@ void COcean::Render(const SRenderingPassInfo& passInfo)
 
 	m_fRECustomData[0] = p3DEngine->m_oceanWindDirection;
 	m_fRECustomData[1] = p3DEngine->m_oceanWindSpeed;
-	m_fRECustomData[2] = p3DEngine->m_oceanWavesSpeed;
+	m_fRECustomData[2] = 0.0f; // used to be m_oceanWavesSpeed
 	m_fRECustomData[3] = p3DEngine->m_oceanWavesAmount;
 	m_fRECustomData[4] = p3DEngine->m_oceanWavesSize;
 
@@ -484,7 +514,7 @@ void COcean::Render(const SRenderingPassInfo& passInfo)
 		if (camPos.z - fWaterLevel >= p3DEngine->m_oceanWavesSize)
 		{
 			Vec3 cFinalFogColor = gEnv->p3DEngine->GetSunColor().CompMul(m_p3DEngine->m_oceanFogColor);
-			Vec4 vFogParams = Vec4(cFinalFogColor, m_p3DEngine->m_oceanFogDensity * 1.44269502f);// log2(e) = 1.44269502
+			Vec4 vFogParams = Vec4(cFinalFogColor, max(OCEAN_FOG_DENSITY_MINIMUM, m_p3DEngine->m_oceanFogDensity) * 1.44269502f);// log2(e) = 1.44269502
 
 			m_fRECustomData[8] = vFogParams.x;
 			m_fRECustomData[9] = vFogParams.y;
@@ -503,15 +533,17 @@ void COcean::Render(const SRenderingPassInfo& passInfo)
 
 	if (!GetCVars()->e_WaterOceanFFT || !m_bOceanFFT)
 	{
-		m_pRenderMesh->SetREUserData(&m_fRECustomData[0]);
-		m_pRenderMesh->AddRenderElements(m_pMaterial, pObject, passInfo, EFSLIST_WATER, 0);
+		m_pOceanRE->m_oceanParam[fillThreadID].bWaterOceanFFT = false;
 	}
 	else
 	{
-		SShaderItem& shaderItem(m_pMaterial->GetShaderItem(0));
-		m_pOceanRE->m_CustomData = &m_fRECustomData[0];
-		pRenderer->EF_AddEf(m_pOceanRE, shaderItem, pObject, passInfo, EFSLIST_WATER, 0);
+		m_pOceanRE->m_oceanParam[fillThreadID].bWaterOceanFFT = m_bOceanFFT;
 	}
+
+	pObject->m_pCurrMaterial = m_pMaterial;
+	SShaderItem& shaderItem(m_pMaterial->GetShaderItem(0));
+	m_pOceanRE->m_CustomData = &m_fRECustomData[0];
+	pRenderer->EF_AddEf(m_pOceanRE, shaderItem, pObject, passInfo, EFSLIST_WATER, 0);
 
 	if (GetCVars()->e_WaterOceanBottom)
 		RenderBottomCap(passInfo);
@@ -580,7 +612,7 @@ void COcean::RenderBottomCap(const SRenderingPassInfo& passInfo)
 		m_pBottomCapRenderMesh = GetRenderer()->CreateRenderMeshInitialized(
 		  m_pBottomCapVerts.GetElements(),
 		  m_pBottomCapVerts.Count(),
-		  eVF_P3F_C4B_T2F,
+		  EDefaultInputLayouts::P3F_C4B_T2F,
 		  m_pBottomCapIndices.GetElements(),
 		  m_pBottomCapIndices.Count(),
 		  prtTriangleStrip,
@@ -657,7 +689,7 @@ void COcean::RenderFog(const SRenderingPassInfo& passInfo)
 
 				m_wvoParams[fillThreadID].m_fogColor = m_p3DEngine->m_oceanFogColor;
 				m_wvoParams[fillThreadID].m_fogColorShallow = m_p3DEngine->m_oceanFogColorShallow;
-				m_wvoParams[fillThreadID].m_fogDensity = m_p3DEngine->m_oceanFogDensity;
+				m_wvoParams[fillThreadID].m_fogDensity = max(OCEAN_FOG_DENSITY_MINIMUM, m_p3DEngine->m_oceanFogDensity);
 
 				m_pWVRE[fillThreadID]->m_pOceanParams = &m_wvoParams[fillThreadID];
 			}
@@ -716,10 +748,15 @@ void COcean::RenderFog(const SRenderingPassInfo& passInfo)
 			pROVol->m_II.m_Matrix.SetIdentity();
 			pROVol->m_fSort = 0;
 
+			auto pMaterial =
+			  m_wvParams[fillThreadID].m_viewerInsideVolume
+			  ? (isLowSpec ? m_pFogOutofMatLowSpec.get() : m_pFogOutofMat.get())
+			  : (isLowSpec ? m_pFogIntoMatLowSpec.get() : m_pFogIntoMat.get());
+
+			pROVol->m_pCurrMaterial = pMaterial;
+
 			// get shader item
-			SShaderItem& shaderItem(m_wvParams[fillThreadID].m_viewerInsideVolume ?
-			                        (isLowSpec ? m_pFogOutofMatLowSpec->GetShaderItem(0) : m_pFogOutofMat->GetShaderItem(0)) :
-			                        (isLowSpec ? m_pFogIntoMatLowSpec->GetShaderItem(0) : m_pFogIntoMat->GetShaderItem(0)));
+			SShaderItem& shaderItem(pMaterial->GetShaderItem(0));
 
 			// add to renderer
 			pRenderer->EF_AddEf(m_pWVRE[fillThreadID], shaderItem, pROVol, passInfo, EFSLIST_WATER_VOLUMES, distCamToFogPlane < -0.1f);
@@ -827,7 +864,7 @@ float COcean::GetWave(const Vec3& pPos, int32 nFrameID)
 	if (s_nFrameID != nFrameID)
 	{
 		sincos_tpl(p3DEngine->m_oceanWindDirection, &vFlowDir.y, &vFlowDir.x);
-		vFrequencies = Vec4(0.233f, 0.455f, 0.6135f, -0.1467f) * p3DEngine->m_oceanWavesSpeed * 5.0f;
+		vFrequencies = Vec4(0.233f, 0.455f, 0.6135f, -0.1467f) * 5.0f;
 		vPhases = Vec4(0.1f, 0.159f, 0.557f, 0.2199f) * p3DEngine->m_oceanWavesAmount;
 		vAmplitudes = Vec4(1.0f, 0.5f, 0.25f, 0.5f) * p3DEngine->m_oceanWavesSize;
 
@@ -863,4 +900,24 @@ void COcean::OffsetPosition(const Vec3& delta)
 #ifdef SEG_WORLD
 	if (m_pTempData) m_pTempData->OffsetPosition(delta);
 #endif
+}
+
+void COcean::FillBBox(AABB& aabb)
+{
+	aabb = COcean::GetBBox();
+}
+
+EERType COcean::GetRenderNodeType()
+{
+	return eERType_WaterVolume;
+}
+
+Vec3 COcean::GetPos(bool) const
+{
+	return Vec3(0, 0, 0);
+}
+
+IMaterial* COcean::GetMaterial(Vec3* pHitPos) const
+{
+	return m_pMaterial;
 }

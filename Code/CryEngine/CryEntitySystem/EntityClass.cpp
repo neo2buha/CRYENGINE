@@ -15,12 +15,14 @@
 #include "EntityClass.h"
 #include "EntityScript.h"
 
+#include <CrySchematyc/ICore.h>
+#include <CryFlowGraph/IFlowSystem.h>
+
 //////////////////////////////////////////////////////////////////////////
 CEntityClass::CEntityClass()
 {
 	m_pfnUserProxyCreate = NULL;
 	m_pUserProxyUserData = NULL;
-	m_pPropertyHandler = NULL;
 	m_pEventHandler = NULL;
 	m_pScriptFileHandler = NULL;
 
@@ -31,6 +33,7 @@ CEntityClass::CEntityClass()
 //////////////////////////////////////////////////////////////////////////
 CEntityClass::~CEntityClass()
 {
+	SAFE_RELEASE(m_pIFlowNodeFactory);
 	SAFE_RELEASE(m_pEntityScript);
 }
 
@@ -41,7 +44,7 @@ IScriptTable* CEntityClass::GetScriptTable() const
 
 	if (m_pEntityScript)
 	{
-		CEntityScript* pScript = (CEntityScript*)m_pEntityScript;
+		CEntityScript* pScript = static_cast<CEntityScript*>(m_pEntityScript);
 		pScriptTable = (pScript ? pScript->GetScriptTable() : NULL);
 	}
 
@@ -54,7 +57,7 @@ bool CEntityClass::LoadScript(bool bForceReload)
 	bool bRes = true;
 	if (m_pEntityScript)
 	{
-		CEntityScript* pScript = (CEntityScript*)m_pEntityScript;
+		CEntityScript* pScript = static_cast<CEntityScript*>(m_pEntityScript);
 		bRes = pScript->LoadScript(bForceReload);
 
 		m_bScriptLoaded = true;
@@ -62,9 +65,6 @@ bool CEntityClass::LoadScript(bool bForceReload)
 
 	if (m_pScriptFileHandler && bForceReload)
 		m_pScriptFileHandler->ReloadScriptFile();
-
-	if (m_pPropertyHandler && bForceReload)
-		m_pPropertyHandler->RefreshProperties();
 
 	if (m_pEventHandler && bForceReload)
 		m_pEventHandler->RefreshEvents();
@@ -178,32 +178,39 @@ bool CEntityClass::FindEventInfo(const char* sEvent, SEventInfo& event)
 }
 
 //////////////////////////////////////////////////////////////////////////
-TEntityAttributeArray& CEntityClass::GetClassAttributes()
+void CEntityClass::SetClassDesc(const IEntityClassRegistry::SEntityClassDesc &classDesc)
 {
-	return m_classAttributes;
-}
+	m_sName = classDesc.sName;
+	m_nFlags = classDesc.flags;
+	m_guid = classDesc.guid;
+	m_schematycRuntimeClassGuid = classDesc.schematycRuntimeClassGuid;
+	m_onSpawnCallback = classDesc.onSpawnCallback;
+	m_sScriptFile = classDesc.sScriptFile;
+	m_pfnUserProxyCreate = classDesc.pUserProxyCreateFunc;
+	m_pUserProxyUserData = classDesc.pUserProxyData;
+	m_pScriptFileHandler = classDesc.pScriptFileHandler;
+	m_EditorClassInfo = classDesc.editorClassInfo;
+	m_pEventHandler = classDesc.pEventHandler;
 
-//////////////////////////////////////////////////////////////////////////
-const TEntityAttributeArray& CEntityClass::GetClassAttributes() const
-{
-	return m_classAttributes;
-}
-
-//////////////////////////////////////////////////////////////////////////
-TEntityAttributeArray& CEntityClass::GetEntityAttributes()
-{
-	return m_entityAttributes;
-}
-
-//////////////////////////////////////////////////////////////////////////
-const TEntityAttributeArray& CEntityClass::GetEntityAttributes() const
-{
-	return m_entityAttributes;
+	if (m_pIFlowNodeFactory)
+	{ 
+		m_pIFlowNodeFactory->Release();
+	}
+	m_pIFlowNodeFactory = classDesc.pIFlowNodeFactory;
+	if (m_pIFlowNodeFactory)
+	{
+		m_pIFlowNodeFactory->AddRef();
+	}
 }
 
 void CEntityClass::SetName(const char* sName)
 {
 	m_sName = sName;
+}
+
+void CEntityClass::SetGUID(const CryGUID& guid)
+{
+	m_guid = guid;
 }
 
 void CEntityClass::SetScriptFile(const char* sScriptFile)
@@ -222,11 +229,6 @@ void CEntityClass::SetUserProxyCreateFunc(UserProxyCreateFunc pFunc, void* pUser
 	m_pUserProxyUserData = pUserData;
 }
 
-void CEntityClass::SetPropertyHandler(IEntityPropertyHandler* pPropertyHandler)
-{
-	m_pPropertyHandler = pPropertyHandler;
-}
-
 void CEntityClass::SetEventHandler(IEntityEventHandler* pEventHandler)
 {
 	m_pEventHandler = pEventHandler;
@@ -237,9 +239,20 @@ void CEntityClass::SetScriptFileHandler(IEntityScriptFileHandler* pScriptFileHan
 	m_pScriptFileHandler = pScriptFileHandler;
 }
 
-IEntityPropertyHandler* CEntityClass::GetPropertyHandler() const
+void CEntityClass::SetOnSpawnCallback(const OnSpawnCallback &callback)
 {
-	return m_pPropertyHandler;
+	m_onSpawnCallback = callback;
+}
+
+Schematyc::IRuntimeClassConstPtr CEntityClass::GetSchematycRuntimeClass() const
+{
+	if (!m_pSchematycRuntimeClass && !m_schematycRuntimeClassGuid.IsNull())
+	{
+		// Cache Schematyc runtime class pointer
+		m_pSchematycRuntimeClass = gEnv->pSchematyc->GetRuntimeRegistry().GetClass(m_schematycRuntimeClassGuid);
+	}
+
+	return m_pSchematycRuntimeClass;
 }
 
 IEntityEventHandler* CEntityClass::GetEventHandler() const
@@ -260,16 +273,4 @@ const SEditorClassInfo& CEntityClass::GetEditorClassInfo() const
 void CEntityClass::SetEditorClassInfo(const SEditorClassInfo& editorClassInfo)
 {
 	m_EditorClassInfo = editorClassInfo;
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityClass::SetEntityAttributes(const TEntityAttributeArray& attributes)
-{
-	m_entityAttributes = attributes;
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityClass::SetClassAttributes(const TEntityAttributeArray& attributes)
-{
-	m_classAttributes = attributes;
 }

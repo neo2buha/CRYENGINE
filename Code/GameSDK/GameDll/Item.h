@@ -348,7 +348,6 @@ public:
 	virtual void HandleEvent( const SGameObjectEvent& );
 	virtual void ProcessEvent(SEntityEvent& );
 	virtual void SetChannelId(uint16 id) {};
-	virtual void SetAuthority(bool auth) {}
 	virtual void GetMemoryUsage(ICrySizer *pSizer) const;
 	void GetInternalMemoryUsage(ICrySizer *pSizer) const;
 	virtual void OnAction(EntityId actorId, const ActionId& actionId, int activationMode, float value);
@@ -654,9 +653,8 @@ public:
 
 	virtual void OnAttach(bool attach);
 
-	IEntityAudioProxy *GetAudioProxy(bool create=false);
-	IEntityRenderProxy *GetRenderProxy(bool create=false);
-	IEntityPhysicalProxy *GetPhysicalProxy(bool create=false);
+	IEntityAudioComponent *GetAudioProxy(bool create=false);
+	IEntityRender *GetRenderProxy(bool create=false);
 		
 	EntityId NetGetOwnerId() const;
 	void NetSetOwnerId(EntityId id);

@@ -13,28 +13,55 @@
 
 #undef GetClassName
 
-class CEngineModule_CryMovie : public IEngineModule
+struct CSystemEventListner_Movie : public ISystemEventListener
 {
-	CRYINTERFACE_SIMPLE(IEngineModule)
+public:
+	virtual ~CSystemEventListner_Movie()
+	{
+		gEnv->pSystem->GetISystemEventDispatcher()->RemoveListener(this);
+	}
+
+	virtual void OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lparam)
+	{
+		switch (event)
+		{
+		case ESYSTEM_EVENT_LEVEL_POST_UNLOAD:
+			{
+				CLightAnimWrapper::ReconstructCache();
+				break;
+			}
+		}
+	}
+};
+
+static CSystemEventListner_Movie g_system_event_listener_movie;
+
+class CEngineModule_CryMovie : public IMovieEngineModule
+{
+	CRYINTERFACE_BEGIN()
+		CRYINTERFACE_ADD(Cry::IDefaultModule)
+		CRYINTERFACE_ADD(IMovieEngineModule)
+	CRYINTERFACE_END()
+
 	CRYGENERATE_SINGLETONCLASS(CEngineModule_CryMovie, "EngineModule_CryMovie", 0xdce26beebdc6400f, 0xa0e9b42839f2dd5b)
 
-	virtual const char* GetName() override { return "CryMovie"; };
-	virtual const char* GetCategory() override { return "CryEngine"; };
+	virtual ~CEngineModule_CryMovie()
+	{
+		gEnv->pSystem->GetISystemEventDispatcher()->RemoveListener(&g_system_event_listener_movie);
+		SAFE_RELEASE(gEnv->pMovieSystem);
+	}
+
+	virtual const char* GetName() const override { return "CryMovie"; };
+	virtual const char* GetCategory() const override { return "CryEngine"; };
 
 	virtual bool        Initialize(SSystemGlobalEnvironment& env, const SSystemInitParams& initParams) override
 	{
-		env.pMovieSystem = new CMovieSystem(env.pSystem);
+		ISystem* pSystem = env.pSystem;
+		pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_movie, "CEngineModule_CryMovie");
+
+		env.pMovieSystem = new CMovieSystem(pSystem);
 		return true;
 	}
 };
 
 CRYREGISTER_SINGLETON_CLASS(CEngineModule_CryMovie)
-
-CEngineModule_CryMovie::CEngineModule_CryMovie()
-{
-
-};
-
-CEngineModule_CryMovie::~CEngineModule_CryMovie()
-{
-};

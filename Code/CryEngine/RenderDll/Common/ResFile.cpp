@@ -3,6 +3,15 @@
 #include "StdAfx.h"
 #include "ResFile.h"
 
+// Prevent type-clash between LZMA and Scaleform
+#define UInt32 UInt32_NoOverwrite
+#define UInt64 UInt64_NoOverwrite
+#include <lzss/LZSS.H>
+#include <lzma/Lzma86.h>
+static_assert(sizeof(UInt32) == 4 && sizeof(UInt64) == 8, "Bad type sizes");
+#undef  UInt32
+#undef  UInt64
+
 CResFile CResFile::m_Root("Root");
 CResFile CResFile::m_RootStream("RootStream");
 int CResFile::m_nNumOpenResources;
@@ -101,7 +110,7 @@ bool CResFile::mfActivate(bool bFirstTime)
 		}
 
 		LOADING_TIME_PROFILE_SECTION(iSystem);
-		CDebugAllowFileAccess dafa;
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
 
 		int nFlags = !m_pLookupDataMan || m_pLookupDataMan->IsReadOnly() ? 0 : ICryPak::FLAGS_NEVER_IN_PAK | ICryPak::FLAGS_PATH_REAL | ICryPak::FOPEN_ONDISK;
 
@@ -1620,7 +1629,7 @@ int CResFile::mfFlushDir(long nOffset, bool bOptimise)
 		buf = new byte[sizeUn];
 		memcpy(buf, (byte*)&FDir[0], sizeUn);
 #else
-		COMPILE_TIME_ASSERT(0);
+		static_assert(false, "This should never be compiled...");
 #endif
 	}
 	else
@@ -1822,7 +1831,7 @@ int CResFile::mfFlush(bool bOptimise)
 					memcpy(buf + 10 + de->size, "<<rawbuf<<", 10);
 					de->size += 20;
 #else
-					COMPILE_TIME_ASSERT(0);
+					static_assert(false, "This should never be compiled...");
 #endif
 					if (gEnv->pCryPak->FWrite(buf, 1, de->size, m_handle) != de->size)
 						mfSetError("Flush - Writing fault");

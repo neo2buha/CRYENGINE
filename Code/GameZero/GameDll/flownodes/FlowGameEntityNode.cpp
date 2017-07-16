@@ -5,7 +5,6 @@
 
 CGameEntityNodeFactory::CGameEntityNodeFactory()
 {
-	m_nRefCount = 0;
 	m_activateCallback = 0;
 }
 
@@ -208,7 +207,7 @@ void CFlowGameEntityNode::ProcessEvent(EFlowEvent event, SActivationInfo* pActIn
 						assert(func);
 						if (func)
 						{
-							func(m_entityId, pActInfo->pInputPorts[i]);
+							func(m_entityId, GetPortAny(pActInfo, i));
 						}
 					}
 				}
@@ -223,7 +222,7 @@ void CFlowGameEntityNode::ProcessEvent(EFlowEvent event, SActivationInfo* pActIn
 				RegisterEvent();
 			}
 
-			const int frameId = gEnv->pRenderer->GetFrameID(false);
+			const int frameId = gEnv->nMainFrameID;
 			if (frameId != m_lastInitializeFrameId)
 			{
 				m_lastInitializeFrameId = frameId;

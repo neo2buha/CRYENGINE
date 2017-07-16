@@ -7,7 +7,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 23:8:2004   15:52 : Created by Márcio Martins
+   - 23:8:2004   15:52 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -48,7 +48,7 @@ void CActorSystem::DemoSpectatorSystem::SwitchSpectator(TActorMap* pActors, Enti
 		return;
 
 	m_currentActor = nextActor->GetEntityId();
-	if (IView* view = gEnv->pGame->GetIGameFramework()->GetIViewSystem()->GetActiveView())
+	if (IView* view = gEnv->pGameFramework->GetIViewSystem()->GetActiveView())
 		view->LinkTo(nextActor->GetEntity());
 
 	nextActor->SwitchDemoModeSpectator(true);
@@ -64,8 +64,6 @@ CActorSystem::CActorSystem(ISystem* pSystem, IEntitySystem* pEntitySystem)
 
 	if (gEnv->pEntitySystem)
 	{
-		gEnv->pEntitySystem->GetIEntityPoolManager()->AddListener(this, "CActorSystem",
-		                                                          (IEntityPoolListener::EntityPreparedFromPool | IEntityPoolListener::EntityReturnedToPool));
 		gEnv->pEntitySystem->AddSink(this, IEntitySystem::OnReused, 0);
 	}
 }
@@ -78,7 +76,6 @@ CActorSystem::~CActorSystem()
 {
 	if (gEnv->pEntitySystem)
 	{
-		gEnv->pEntitySystem->GetIEntityPoolManager()->RemoveListener(this);
 		gEnv->pEntitySystem->RemoveSink(this);
 	}
 
@@ -193,24 +190,15 @@ IActor* CActorSystem::CreateActor(uint16 channelId, const char* name, const char
 		params.nFlags |= ENTITY_FLAG_NEVER_NETWORK_STATIC;
 	params.pClass = pEntityClass;
 
-	IEntity* pEntity = m_pEntitySystem->SpawnEntity(params, false);
+	IEntity* pEntity = m_pEntitySystem->SpawnEntity(params);
 	CRY_ASSERT(pEntity);
 
 	if (!pEntity)
 	{
 		return 0;
 	}
-
-	const EntityId entityId = pEntity->GetId();
-	if (bIsClient)
-	{
-		gEnv->pGame->PlayerIdSet(entityId);
-	}
-	if (m_pEntitySystem->InitEntity(pEntity, params))
-	{
-		return GetActor(entityId);
-	}
-	return NULL;
+	
+	return GetActor(pEntity->GetId());
 }
 
 //------------------------------------------------------------------------
@@ -267,6 +255,9 @@ void CActorSystem::RegisterActorClass(const char* name, IGameFramework::IActorCr
 	classDesc.pCreator = pCreator;
 
 	m_classes.insert(TActorClassMap::value_type(name, classDesc));
+
+	// Automatically register scheduling profile
+	gEnv->pGameFramework->GetIGameObjectSystem()->RegisterSchedulingProfile(actorClass.sName, "dude", "own");
 }
 
 //------------------------------------------------------------------------
@@ -284,7 +275,7 @@ void CActorSystem::RemoveActor(EntityId entityId)
 //------------------------------------------------------------------------
 bool CActorSystem::HookCreateActor(IEntity* pEntity, IGameObject* pGameObject, void* pUserData)
 {
-	pGameObject->SetChannelId(*static_cast<uint16*>(pUserData));
+	pGameObject->SetChannelId(*reinterpret_cast<uint16*>(pUserData));
 	return true;
 }
 
@@ -413,22 +404,6 @@ bool CActorSystem::IsActorClass(IEntityClass* pClass) const
 }
 
 //------------------------------------------------------------------------
-void CActorSystem::OnEntityReturnedToPool(EntityId entityId, IEntity* pEntity)
-{
-	IActor* pActor = GetActor(entityId);
-	if (pActor)
-		pActor->OnReturnedToPool();
-}
-
-//------------------------------------------------------------------------
-void CActorSystem::OnEntityPreparedFromPool(EntityId entityId, IEntity* pEntity)
-{
-	IActor* pActor = GetActor(entityId);
-	if (pActor)
-		pActor->OnPreparedFromPool();
-}
-
-//------------------------------------------------------------------------
 bool CActorSystem::OnBeforeSpawn(SEntitySpawnParams& params)
 {
 	return true;  // nothing else (but needed to implement IEntitySystemSink)
@@ -473,43 +448,6 @@ void CActorSystem::GetMemoryUsage(class ICrySizer* pSizer) const
 	pSizer->Add(sizeof *this);
 }
 
-//------------------------------------------------------------------------
-#if 0
-IEntityProxy* CActorSystem::CreateActor(IEntity* pEntity, SEntitySpawnParams& params, void* pUserData)
-{
-	/*
-	   SActorUserData *pActorUserData = reinterpret_cast<SActorUserData *>(pUserData);
-	   string className = pActorUserData->className;
-
-	   CActorSystem *pActorSystem = reinterpret_cast<CActorSystem *>(pActorUserData->pActorSystem);
-	   CRY_ASSERT(pActorSystem);
-
-	   const SSpawnUserData * pSpawnUserData = static_cast<const SSpawnUserData *>(params.pUserData);
-
-	   TActorClassMap::iterator it = pActorSystem->m_classes.find(className);
-
-	   if (it == pActorSystem->m_classes.end())
-	   {
-	   GameWarning( "Unknown Actor class '%s'", className );
-
-	   return 0;
-	   }
-
-	   IActor *pActor = (*it->second)();
-	   CActor *pActor = new CActor(pActorSystem, className.c_str(), pEntity, pActor);
-	   CRY_ASSERT(pActor);
-	 */
-
-	pActor->GetGameObject()->SetChannelId(pSpawnUserData ? pSpawnUserData->channelId : 0);
-
-	//pEntity->Activate(true);
-
-	//pActorSystem->AddActor(pEntity->GetId(), pActor);
-
-	return pActor;
-}
-#endif
-
 IActorIteratorPtr CActorSystem::CreateActorIterator()
 {
 	if (m_iteratorPool.empty())
@@ -537,7 +475,7 @@ void CActorSystem::ActorSystemErrorMessage(const char* fileName, const char* err
 
 	if (displayErrorDialog)
 	{
-		gEnv->pSystem->ShowMessage(messageBuffer.c_str(), "Error", 0);
+		gEnv->pSystem->ShowMessage(messageBuffer.c_str(), "Error", eMB_Error);
 	}
 }
 

@@ -152,96 +152,94 @@ ILINE int CMessageQueue::SMsgEntOrderingInfo::LatencyBucket() const
 	return int(latencyClass) * 2 + (latencyClass == eLC_DontCare ? bandwidthExceeded : 0);
 }
 
-class CMessageQueue::CConfig
+bool CMessageQueue::CConfig::Read(XmlNodeRef n)
 {
-public:
-	bool Read(XmlNodeRef n)
+	for (int i = 0; i < n->getChildCount(); i++)
 	{
-		for (int i = 0; i < n->getChildCount(); i++)
+		XmlNodeRef child = n->getChild(i);
+		if (0 == strcmp("Group", child->getTag()))
 		{
-			XmlNodeRef child = n->getChild(i);
-			if (0 == strcmp("Group", child->getTag()))
+			SAccountingGroupPolicy pol;
+			pol.maxBandwidth = -1;
+			pol.maxLatency = -1;
+			pol.discardLatency = -1;
+			pol.priority = 0;
+			pol.numPulses = 0;
+			pol.drawn = false;
+			child->getAttr("bandwidth", pol.maxBandwidth);
+			child->getAttr("latency", pol.maxLatency);
+			child->getAttr("priority", pol.priority);
+			child->getAttr("discardLatency", pol.discardLatency);
+			child->getAttr("drawn", pol.drawn);
+
+			const char* name = child->getAttr("name");
+			if (!name[0])
+				return false;
+
+			if (!pol.distanceScaler.Load(child))
 			{
-				SAccountingGroupPolicy pol;
-				pol.maxBandwidth = -1;
-				pol.maxLatency = -1;
-				pol.discardLatency = -1;
-				pol.priority = 0;
-				pol.numPulses = 0;
-				pol.drawn = false;
-				child->getAttr("bandwidth", pol.maxBandwidth);
-				child->getAttr("latency", pol.maxLatency);
-				child->getAttr("priority", pol.priority);
-				child->getAttr("discardLatency", pol.discardLatency);
-				child->getAttr("drawn", pol.drawn);
+				NetWarning("Distance scaling for group %s failed", name);
+				return false;
+			}
+			if (!pol.dirScaler.Load(child))
+			{
+				NetWarning("Direction scaling for group %s failed", name);
+				return false;
+			}
 
-				const char* name = child->getAttr("name");
-				if (!name[0])
-					return false;
-
-				if (!pol.distanceScaler.Load(child))
+			for (int j = 0; j < child->getChildCount(); j++)
+			{
+				XmlNodeRef cfg = child->getChild(j);
+				if (0 == strcmp("Pulse", cfg->getTag()))
 				{
-					NetWarning("Distance scaling for group %s failed", name);
-					return false;
-				}
-				if (!pol.dirScaler.Load(child))
-				{
-					NetWarning("Direction scaling for group %s failed", name);
-					return false;
-				}
-
-				for (int j = 0; j < child->getChildCount(); j++)
-				{
-					XmlNodeRef cfg = child->getChild(j);
-					if (0 == strcmp("Pulse", cfg->getTag()))
+					if (pol.numPulses == MAXIMUM_PULSES_PER_STATE)
 					{
-						if (pol.numPulses == MAXIMUM_PULSES_PER_STATE)
-						{
-							NetWarning("Too many pulses for group");
-							return false;
-						}
-						SAccountingGroupPulse& pulse = pol.pulses[pol.numPulses++];
-						if (!pulse.scaler.Load(cfg))
-							return false;
-						const char* keyName = cfg->getAttr("name");
-						if (!keyName[0])
-							return false;
-						if (!StringToKey(keyName, pulse.name))
-						{
-							NetWarning("Couldn't load pulse %s", keyName);
-							return false;
-						}
+						NetWarning("Too many pulses for group");
+						return false;
 					}
-					else
+					SAccountingGroupPulse& pulse = pol.pulses[pol.numPulses++];
+					if (!pulse.scaler.Load(cfg))
+						return false;
+					const char* keyName = cfg->getAttr("name");
+					if (!keyName[0])
+						return false;
+					if (!StringToKey(keyName, pulse.name))
 					{
-						NetWarning("Unknown configuration object %s", child->getTag());
+						NetWarning("Couldn't load pulse %s", keyName);
 						return false;
 					}
 				}
-
-				std::sort(pol.pulses, pol.pulses + pol.numPulses);
-
-				uint32 key = 0;
-				if (!StringToKey(name, key))
+				else
+				{
+					NetWarning("Unknown configuration object %s", child->getTag());
 					return false;
-				m_policy[key] = pol;
+				}
 			}
-			else
+
+			std::sort(pol.pulses, pol.pulses + pol.numPulses);
+
+			uint32 key = 0;
+			if (!StringToKey(name, key))
+			{
+				CryWarning(VALIDATOR_MODULE_NETWORK, VALIDATOR_ERROR,
+					"Scheduler policy name should not exceed 4 characters.");
 				return false;
+			}
+			m_policy[key] = pol;
 		}
-		return true;
+		else
+			return false;
 	}
+	return true;
+}
 
-	void GetMemoryStatistics(ICrySizer* pSizer)
-	{
-		SIZER_COMPONENT_NAME(pSizer, "CMessageQueue::CConfig");
+void CMessageQueue::CConfig::GetMemoryStatistics(ICrySizer* pSizer)
+{
+	SIZER_COMPONENT_NAME(pSizer, "CMessageQueue::CConfig");
 
-		pSizer->Add(*this);
-		pSizer->AddContainer(m_policy);
-	}
-
-	std::map<uint32, SAccountingGroupPolicy> m_policy;
-};
+	pSizer->Add(*this);
+	pSizer->AddContainer(m_policy);
+}
 
 CMessageQueue::CConfig* CMessageQueue::LoadConfig(const char* name)
 {
@@ -517,7 +515,7 @@ private:
 	#if USE_SYSTEM_ALLOCATOR
 	typedef std::map<uint32, uint32, std::greater<uint32>>                                                 TBucketMap;
 	#else
-	typedef std::map<uint32, uint32, std::greater<uint32>, STLMementoAllocator<std::pair<uint32, uint32>>> TBucketMap;
+	typedef std::map<uint32, uint32, std::greater<uint32>, STLMementoAllocator<std::pair<const uint32, uint32>>> TBucketMap;
 	#endif
 
 	int                    m_curLatencyBucket;
@@ -1292,9 +1290,9 @@ struct SNetMessageProfileLogger
 
 		string message;
 		uint count;
-		uint minsize;
-		uint maxsize;
-		uint totalsize;
+		float minsize;
+		float maxsize;
+		float totalsize;
 	};
 
 	typedef std::vector<SProfileEntry>           TProfileData;
@@ -1308,13 +1306,13 @@ struct SNetMessageProfileLogger
 	uint64 lastBandwidthSent;
 	int lastPacketsSent;
 
-	void OnMessage(CNetChannel* pNC, uint32 group, const char* message, uint size)
+	void OnMessage(CNetChannel* pNC, uint32 group, const char* message, float size)
 	{
 		OnMessage(msg_profile, pNC, message, size);
 		OnMessage(grp_profile, pNC, KeyToString(group).c_str(), size);
 	}
 
-	static void OnMessage(TProfile& profile, CNetChannel* pNC, const char* message, uint size)
+	static void OnMessage(TProfile& profile, CNetChannel* pNC, const char* message, float size)
 	{
 		TProfile::iterator it = profile.find(pNC);
 		if (it == profile.end())
@@ -1361,14 +1359,14 @@ struct SNetMessageProfileLogger
 
 		if (*firstTime)
 		{
-			fout = fopen(name, "a+");
+			fout = gEnv->pCryPak->FOpen(name, "w+");
 			const char* header = "id\tprefix\tchannel\tmessage\tcount\tmisize\tmaxsize\ttotalsize\tavgsize\n";
 			fprintf(fout, header);
 			* firstTime = 0;
 		}
 		else
 		{
-			fout = fopen(name, "a+");
+			fout = gEnv->pCryPak->FOpen(name, "a+");
 		}
 		return fout;
 	}
@@ -1387,12 +1385,12 @@ struct SNetMessageProfileLogger
 		{
 			static ICVar* pName = gEnv->pConsole->GetCVar("net_profile_deep_bandwidth_logname");
 
-			fout = OpenLogFile(pName->GetString(), &firstTimeLogging);
+			fout = OpenLogFile((string("%USER%/") + pName->GetString()).c_str(), &firstTimeLogging);
 
 			DumpSocketStatistics(fout, "sck");
 
-			DumpProfile(msg_profile, fout, gEnv->bServer ? "msg" : "cl_msg");
-			DumpProfile(grp_profile, fout, gEnv->bServer ? "grp" : "cl_grp");
+			DumpProfile(msg_profile, fout, "msg");
+			DumpProfile(grp_profile, fout, "grp");
 
 			fclose(fout);
 			++dumpCount;
@@ -1425,7 +1423,7 @@ struct SNetMessageProfileLogger
 			{
 				const SProfileEntry& e = it->second.at(i);
 				total += e.totalsize;
-				fprintf(fout, "%u\t%s\t%s\t%s\t%u\t%u\t%u\t%u\t%.2f\n", dumpCount, prefix, name.c_str(), e.message.c_str(), e.count, e.minsize, e.maxsize, e.totalsize, float(e.totalsize) / e.count);
+				fprintf(fout, "%u\t%s\t%s\t%s\t%u\t%.2f\t%.2f\t%.2f\t%.2f\n", dumpCount, prefix, name.c_str(), e.message.c_str(), e.count, e.minsize, e.maxsize, e.totalsize, e.totalsize / e.count);
 			}
 		}
 		fprintf(fout, "Total approx bits written %u\n\n", total);
@@ -1566,7 +1564,7 @@ void CMessageQueue::WriteMessages(IMessageOutput* pOut, const SSchedulingParams&
 
 		uint32 sizeBefore = pStm->GetApproximateSize();
 	#if DEEP_BANDWIDTH_ANALYSIS
-		uint32 accSizeBefore = pStm->GetBitSize();
+		float accSizeBefore = pStm->GetBitSize();
 		g_DBASizePriorToUpdate = accSizeBefore;
 		g_DBAMainProfileBuffer = "";
 	#endif
@@ -1648,7 +1646,7 @@ void CMessageQueue::WriteMessages(IMessageOutput* pOut, const SSchedulingParams&
 	#if DEEP_BANDWIDTH_ANALYSIS
 		g_DBALargeProfileBuffer.Format("%s%s", pEntSend->msg.pSendable ? pEntSend->msg.pSendable->GetDescription() : "<null>", g_DBAMainProfileBuffer.c_str());
 		g_DBAMainProfileBuffer = "";
-		profiler.OnMessage(params.pChannel, pEntSend->pAG ? pEntSend->pAG->id : 'none', g_DBALargeProfileBuffer.c_str(), ((uint32)pStm->GetBitSize()) - accSizeBefore);
+		profiler.OnMessage(params.pChannel, pEntSend->pAG ? pEntSend->pAG->id : 'none', g_DBALargeProfileBuffer.c_str(), ((float)pStm->GetBitSize()) - accSizeBefore);
 	#endif
 	#if ENABLE_PACKET_PREDICTION
 		if (mTag.messageId != 0xFFFFFFFF)
@@ -2208,6 +2206,8 @@ static int GetIndentForMessage(int depth)
 	return 0;
 }
 
+#include <CryRenderer/IRenderAuxGeom.h>
+
 void CMessageQueue::DrawLabel(float x, float y, float* clr, const char* msg, ...)
 {
 	va_list args;
@@ -2216,7 +2216,7 @@ void CMessageQueue::DrawLabel(float x, float y, float* clr, const char* msg, ...
 	cry_vsprintf(buffer, msg, args);
 
 	float drawScale = CNetCVars::Get().DebugDrawScale;
-	gEnv->pRenderer->Draw2dLabel(x, y, drawScale, clr, false, "%s", buffer);
+	IRenderAuxText::Draw2dLabel(x, y, drawScale, clr, false, "%s", buffer);
 	ITextModeConsole* t = gEnv->pSystem->GetITextModeConsole();
 	if (t)
 		t->PutText((int)(x / (drawScale * 4.0f)) - 2, (int)(y / (drawScale * 10.0f)) - 1, buffer);

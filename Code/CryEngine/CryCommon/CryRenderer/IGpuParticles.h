@@ -32,6 +32,7 @@ typedef uint32 TComponentId;
   X(LocationBox)              \
   X(LocationSphere)           \
   X(LocationCircle)           \
+  X(LocationNoise)            \
   X(MotionFluidDynamics)
 
 enum EGpuFeatureType
@@ -62,19 +63,12 @@ public:
 	};
 
 	virtual gpu_pfx2::IParticleComponentRuntime* GetGpuRuntime() override { return this; }
-	virtual void                                 SetEmitterData(::IParticleEmitter* pEmitter) = 0;
+	virtual void                                 UpdateEmitterData() = 0;
 
 	virtual EState                               GetState() const = 0;
-	virtual void                                 SetActive(bool active) = 0;
-	virtual bool                                 IsSecondGen() = 0;
 	virtual bool                                 HasParticles() = 0;
 
-	virtual void                                 RemoveAllSubInstances() = 0;
-
 	virtual void                                 SetEnvironmentParameters(const SEnvironmentParameters& params) = 0;
-
-	// called from 3dengine::Renderscene
-	virtual void Render(CRenderObject* pRenderObject, const SRenderingPassInfo& passInfo, const SRendParams& renderParams) = 0;
 };
 
 enum class ESpawnRateMode
@@ -91,7 +85,7 @@ enum EGravityType
 
 enum EVortexDirection
 {
-	eVortexDirection_Clockwise        = 0,
+	eVortexDirection_Clockwise = 0,
 	eVortexDirection_CounterClockwise = 1
 };
 
@@ -100,8 +94,10 @@ enum EVortexDirection
     float amount;               \
     float delay;                \
     float duration;             \
+    float restart;              \
     bool useDelay;              \
-    bool useDuration; )         \
+    bool useDuration;           \
+    bool useRestart; )          \
   X(SpawnMode,                  \
     ESpawnRateMode mode; )      \
   X(Scale,                      \
@@ -173,6 +169,11 @@ enum EVortexDirection
     Vec2 scale;                 \
     float radius;               \
     float velocity; )           \
+  X(LocationNoise,              \
+    float amplitude;            \
+    float size;                 \
+    float rate;                 \
+    int octaves; )              \
   X(MotionFluidDynamics,        \
     Vec3 initialVelocity;       \
     float stiffness;            \
@@ -192,6 +193,10 @@ enum EVortexDirection
     int gridSizeY;              \
     int gridSizeZ;              \
     int numSpawnParticles; )    \
+  X(Collision,                  \
+    float offset;               \
+    float radius;               \
+    float restitution; )        \
   X(VelocityCone,               \
     float angle;                \
     float velocity; )           \
@@ -264,8 +269,9 @@ public:
 
 	virtual _smart_ptr<IParticleComponentRuntime>
 	CreateParticleComponentRuntime(
-	  pfx2::IParticleComponent* pComponent,
-	  const pfx2::SRuntimeInitializationParameters& params) = 0;
+		IParticleEmitter* pEmitter,
+		pfx2::IParticleComponent* pComponent,
+		const pfx2::SRuntimeInitializationParameters& params) = 0;
 
 	virtual _smart_ptr<IParticleFeatureGpuInterface>
 	CreateParticleFeatureGpuInterface(EGpuFeatureType) = 0;

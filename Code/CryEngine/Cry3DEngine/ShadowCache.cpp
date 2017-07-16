@@ -113,12 +113,14 @@ void ShadowCache::InitCachedFrustum(ShadowMapFrustumPtr& pFr, ShadowMapFrustum::
 		pFr->fBlurS = pFr->fBlurT = 0.0f;
 	}
 
-	const int maxNodesPerFrame = (nUpdateStrategy == ShadowMapFrustum::ShadowCacheData::eFullUpdate)
-	                             ? std::numeric_limits<int>::max()
-	                             : MAX_RENDERNODES_PER_FRAME* GetRenderer()->GetActiveGPUCount();
-
 	const bool bExcludeDynamicDistanceShadows = GetCVars()->e_DynamicDistanceShadows != 0;
+	const bool bUseCastersHull = (nUpdateStrategy == ShadowMapFrustum::ShadowCacheData::eFullUpdateTimesliced);
+	const int maxNodesPerFrame = (nUpdateStrategy == ShadowMapFrustum::ShadowCacheData::eIncrementalUpdate)
+	                             ? MAX_RENDERNODES_PER_FRAME* GetRenderer()->GetActiveGPUCount()
+	                             : std::numeric_limits<int>::max();
+
 	m_pObjManager->MakeStaticShadowCastersList(((CLightEntity*)m_pLightEntity->m_light.m_pOwner)->m_pNotCaster, pFr,
+	                                           bUseCastersHull ? &m_pLightEntity->GetCastersHull() : nullptr,
 	                                           bExcludeDynamicDistanceShadows ? ERF_DYNAMIC_DISTANCESHADOWS : 0, maxNodesPerFrame, passInfo);
 	AddTerrainCastersToFrustum(pFr, passInfo);
 
@@ -252,7 +254,7 @@ void ShadowCache::AddTerrainCastersToFrustum(ShadowMapFrustum* pFr, const SRende
 {
 	FUNCTION_PROFILER_3DENGINE;
 
-	if ((GetCVars()->e_GsmCastFromTerrain || pFr->m_eFrustumType == ShadowMapFrustum::e_HeightMapAO) && !pFr->bIsMGPUCopy)
+	if ((Get3DEngine()->m_bSunShadowsFromTerrain || pFr->m_eFrustumType == ShadowMapFrustum::e_HeightMapAO) && !pFr->bIsMGPUCopy)
 	{
 		PodArray<CTerrainNode*> lstTerrainNodes;
 		GetTerrain()->IntersectWithBox(pFr->aabbCasters, &lstTerrainNodes, GetDefSID());

@@ -4,7 +4,6 @@
 #include "Tornado.h"
 #include "../Game.h"
 #include "../Actor.h"
-#include "Environment/FlowTornado.h"
 #include <CryAction/IMaterialEffects.h>
 #include <IEffectSystem.h>
 #include <IVehicleSystem.h>
@@ -27,7 +26,6 @@ CTornado::CTornado()
 	, m_radius(300.f)
 	, m_curMatID(0)
 	, m_wanderSpeed(10.0f)
-	, m_pTargetCallback(nullptr)
 	, m_nextEntitiesCheck(0.0f)
 	, m_spinImpulse(9.0f)
 	, m_attractionImpulse(13.0f)
@@ -198,11 +196,8 @@ void CTornado::Update(SEntityUpdateContext &ctx, int updateSlot)
 			bool bValue = true;
 			event.nParam[2] = (INT_PTR)&bValue;
 			GetEntity()->SendEvent( event );
-			if (m_pTargetCallback)
-				m_pTargetCallback->Done();
 
 			m_pTargetEntity = 0;
-			m_pTargetCallback = 0;
 		}
 
 		targetSteer = (target - dir);
@@ -230,7 +225,7 @@ void CTornado::Update(SEntityUpdateContext &ctx, int updateSlot)
 	}
 	else if (!m_isOnWater)
 	{		
-		IMaterialEffects *mfx = gEnv->pGame->GetIGameFramework()->GetIMaterialEffects();
+		IMaterialEffects *mfx = gEnv->pGameFramework->GetIMaterialEffects();
 		Vec3 down = Vec3(0,0,-1.0f);
 		int matID = mfx->GetDefaultSurfaceIndex();
 
@@ -292,14 +287,9 @@ void CTornado::ProcessEvent(SEntityEvent &event)
 }
 
 //------------------------------------------------------------------------
-void CTornado::SetAuthority(bool auth)
-{
-}
-
-void CTornado::SetTarget(IEntity *pTargetEntity, CFlowTornadoWander *pCallback)
+void CTornado::SetTarget(IEntity* pTargetEntity)
 {
 	m_pTargetEntity = pTargetEntity;
-	m_pTargetCallback = pCallback;
 }
 
 
@@ -314,7 +304,6 @@ bool CTornado::UseFunnelEffect(const char* effectName)
 	GetEntity()->LoadParticleEmitter(0, m_pFunnelEffect, 0, true);
 	Matrix34 tm(IDENTITY);
 	GetEntity()->SetSlotLocalTM(0, tm);
-	GetEntity()->SetSlotFlags(0, GetEntity()->GetSlotFlags(0)|ENTITY_SLOT_RENDER);
 
 	// init the first time
 	if (!m_pCloudConnectEffect)
@@ -354,7 +343,6 @@ void CTornado::UpdateParticleEmitters()
 	{
 		cloudOffset.z = m_cloudHeight - pos.z;
 		GetEntity()->SetSlotLocalTM(1, Matrix34(ParticleLoc(cloudOffset)));
-		GetEntity()->SetSlotFlags(1, GetEntity()->GetSlotFlags(1)|ENTITY_SLOT_RENDER);
 	}
 
 	if (m_pTopEffect)
@@ -363,7 +351,6 @@ void CTornado::UpdateParticleEmitters()
 		topOffset.z -= 140.0f;
 
 		GetEntity()->SetSlotLocalTM(2, Matrix34(ParticleLoc(topOffset)));
-		GetEntity()->SetSlotFlags(2, GetEntity()->GetSlotFlags(2)|ENTITY_SLOT_RENDER);
 	}
 
 	m_pGroundEffect->Update();
@@ -401,7 +388,7 @@ void CTornado::UpdateTornadoSpline()
 	areaDef.pPoints = m_points;
 	areaDef.pGravityParams = &gravityParams;
 	gravityParams.gravity.Set(0,0,-9.81f);
-	gravityParams.falloff0 = -1.0f;	// ?: was NAN. CPhysicalProxy::PhysicalizeArea sets to 'unused' if less than zero...
+	gravityParams.falloff0 = 0.8f; // passing -1.0f produces unnatural gap between weather.tornado.large and weather.tornado.top_part.
 	//gravityParams.gravity.Set(0,0,0);
 	
 	gravityParams.bUniform = 1;

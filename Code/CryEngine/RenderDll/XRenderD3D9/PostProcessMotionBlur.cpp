@@ -21,7 +21,7 @@ CThreadSafeRendererContainer<CMotionBlur::OMBParamsMap::value_type> CMotionBlur:
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void CMotionBlur::GetPrevObjToWorldMat(CRenderObject* pObj, Matrix44A& res)
+bool CMotionBlur::GetPrevObjToWorldMat(CRenderObject* pObj, Matrix44A& res)
 {
 	assert(pObj);
 
@@ -38,11 +38,12 @@ void CMotionBlur::GetPrevObjToWorldMat(CRenderObject* pObj, Matrix44A& res)
 		if (it != m_pOMBData[nObjFrameReadID].end())
 		{
 			res = it->second.mObjToWorld;
-			return;
+			return true;
 		}
 	}
 
 	res = pObj->m_II.m_Matrix;
+	return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -165,7 +166,7 @@ void CMotionBlur::RenderObjectsVelocity()
 		nBatchMask |= SRendItem::BatchFlags(EFSLIST_TRANSP);
 		if (nBatchMask & FB_MOTIONBLUR)
 		{
-			CRendElementBase* pPrevRE = gRenDev->m_RP.m_pRE;
+			CRenderElement* pPrevRE = gRenDev->m_RP.m_pRE;
 			gRenDev->m_RP.m_pRE = NULL;
 
 			if (!gcpRendD3D->FX_MotionVectorGeneration(true))
@@ -462,7 +463,7 @@ void CMotionBlur::Render()
 				CShaderMan::s_shPostMotionBlur->FXSetPSFloat(m_pDofFocusParam1Name, &vDofParams1, 1);
 
 				gcpRendD3D->FX_Commit();
-				if (!FAILED(gcpRendD3D->FX_SetVertexDeclaration(0, eVF_P3S_C4B_T2S)))
+				if (!FAILED(gcpRendD3D->FX_SetVertexDeclaration(0, EDefaultInputLayouts::P3S_C4B_T2S)))
 				{
 					gcpRendD3D->FX_SetVStream(0, NULL, 0, 0);
 					gcpRendD3D->FX_SetIStream(0, 0, Index16);

@@ -8,10 +8,12 @@
 #include "StdAfx.h"
 #include <numeric>
 #include <CrySystem/Profilers/IStatoscope.h>
+#include <CryCore/BitFiddling.h> // IntegerLog2_RoundUp
 #include <CryMemory/IMemory.h>
 #include "DriverD3D.h"
 
 CryCriticalSection CGraphicsDeviceConstantBuffer::s_accessLock;
+CryCriticalSectionNonRecursive CGpuBuffer::s_invalidationLock;
 
 #if defined(min)
 	#undef min
@@ -28,21 +30,10 @@ CryCriticalSection CGraphicsDeviceConstantBuffer::s_accessLock;
 #endif
 
 #if DEVBUFFERMAN_DEBUG
-	#define DEVBUFFERMAN_ASSERT(x) \
-	  do {                         \
-	    if (!(x))                  \
-	      __debugbreak();          \
-	  } while (false)
+	#define DEVBUFFERMAN_ASSERT(x) assert(x)
 #else
 	#define DEVBUFFERMAN_ASSERT(x) (void)0
 #endif
-
-// VERIFY
-#define DEVBUFFERMAN_VERIFY(x) \
-  do {                         \
-    if (!(x))                  \
-      __debugbreak();          \
-  } while (false)
 
 #ifdef TRACK_DEVBUFFER_WITH_MEMREPLAY
 	#define DB_MEMREPLAY_SCOPE(a, b)               MEMREPLAY_SCOPE(a, b)
@@ -56,19 +47,19 @@ CryCriticalSection CGraphicsDeviceConstantBuffer::s_accessLock;
 	#define DB_MEMREPLAY_SCOPE_FREE(id)
 #endif
 
-#define BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS)                                                 \
-  (BIND_FLAGS == CDeviceManager::BIND_VERTEX_BUFFER ? D3D11_MAP_WRITE_NO_OVERWRITE_VB :      \
-   (BIND_FLAGS == CDeviceManager::BIND_INDEX_BUFFER ? D3D11_MAP_WRITE_NO_OVERWRITE_IB :      \
-    (BIND_FLAGS == CDeviceManager::BIND_CONSTANT_BUFFER ? D3D11_MAP_WRITE_NO_OVERWRITE_CB :  \
-     (BIND_FLAGS == CDeviceManager::BIND_SHADER_RESOURCE ? D3D11_MAP_WRITE_NO_OVERWRITE_SR : \
-      (BIND_FLAGS == CDeviceManager::BIND_UNORDERED_ACCESS ? D3D11_MAP_WRITE_NO_OVERWRITE_UA : D3D11_MAP_WRITE_NO_OVERWRITE)))))
+#define BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS)                                                              \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_VERTEX_BUFFER    ? D3D11_MAP_WRITE_NO_OVERWRITE_VB :      \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_INDEX_BUFFER     ? D3D11_MAP_WRITE_NO_OVERWRITE_IB :      \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_CONSTANT_BUFFER  ? D3D11_MAP_WRITE_NO_OVERWRITE_CB :      \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_SHADER_RESOURCE  ? D3D11_MAP_WRITE_NO_OVERWRITE_SR :      \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_UNORDERED_ACCESS ? D3D11_MAP_WRITE_NO_OVERWRITE_UA : D3D11_MAP_WRITE_NO_OVERWRITE)))))
 
-#define BINDFLAGS_to_WRITEDISCARD(BIND_FLAGS)                                           \
-  (BIND_FLAGS == CDeviceManager::BIND_VERTEX_BUFFER ? D3D11_MAP_WRITE_DISCARD_VB :      \
-   (BIND_FLAGS == CDeviceManager::BIND_INDEX_BUFFER ? D3D11_MAP_WRITE_DISCARD_IB :      \
-    (BIND_FLAGS == CDeviceManager::BIND_CONSTANT_BUFFER ? D3D11_MAP_WRITE_DISCARD_CB :  \
-     (BIND_FLAGS == CDeviceManager::BIND_SHADER_RESOURCE ? D3D11_MAP_WRITE_DISCARD_SR : \
-      (BIND_FLAGS == CDeviceManager::BIND_UNORDERED_ACCESS ? D3D11_MAP_WRITE_DISCARD_UA : D3D11_MAP_WRITE_DISCARD)))))
+#define BINDFLAGS_to_WRITEDISCARD(BIND_FLAGS)                                                             \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_VERTEX_BUFFER    ? D3D11_MAP_WRITE_DISCARD_VB :           \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_INDEX_BUFFER     ? D3D11_MAP_WRITE_DISCARD_IB :           \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_CONSTANT_BUFFER  ? D3D11_MAP_WRITE_DISCARD_CB :           \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_SHADER_RESOURCE  ? D3D11_MAP_WRITE_DISCARD_SR :           \
+      (BIND_FLAGS == CDeviceObjectFactory::BIND_UNORDERED_ACCESS ? D3D11_MAP_WRITE_DISCARD_UA : D3D11_MAP_WRITE_DISCARD)))))
 
 #if ENABLE_STATOSCOPE
 struct SStatoscopeData
@@ -112,10 +103,11 @@ SStatoscopeData& GetStatoscopeData(uint32 nIndex);
 // The buffer invalidations
 struct SBufferInvalidation
 {
-	D3DBuffer* buffer;
-	void*      base_ptr;
-	size_t     offset;
-	size_t     size;
+	CDeviceBuffer* buffer;
+	void*          base_ptr;
+	buffer_size_t  offset;
+	buffer_size_t  size;
+
 	bool operator<(const SBufferInvalidation& other) const
 	{
 		if (buffer == other.buffer)
@@ -131,34 +123,13 @@ struct SBufferInvalidation
 		;
 	}
 };
+
 typedef std::vector<SBufferInvalidation> BufferInvalidationsT;
 // returns a reference to the internal buffer invalidates (used to break cyclic depencies in file)
 BufferInvalidationsT& GetBufferInvalidations(uint32 threadid);
 
 namespace
 {
-
-static inline bool CopyData(void* dst, const void* src, size_t size)
-{
-	bool requires_flush = true;
-#if defined(_CPU_SSE)
-	if ((((uintptr_t)dst | (uintptr_t)src | size) & 0xf) == 0u)
-	{
-		__m128* d = (__m128*)dst;
-		const __m128* s = (const __m128*)src;
-		const __m128* e = (const __m128*)src + (size >> 4);
-		while (s < e)
-			_mm_stream_ps((float*)(d++), _mm_load_ps((const float*)(s++)));
-		_mm_sfence();
-		requires_flush = false;
-	}
-	else
-#endif
-	{
-		cryMemcpy(dst, src, size, MC_CPU_TO_GPU);
-	}
-	return requires_flush;
-}
 
 //===============================================================================
 struct SPoolConfig
@@ -168,19 +139,20 @@ struct SPoolConfig
 		POOL_STAGING_COUNT       = 1,
 		POOL_ALIGNMENT           = 128,
 		POOL_FRAME_QUERY_COUNT   = 4,
+		POOL_BANK_GRANULARITY    = 1 << 20,
 #if CRY_PLATFORM_ORBIS
-		POOL_MAX_ALLOCATION_SIZE = 4 << 20,
+		POOL_MAX_ALLOCATION_SIZE =  4 * POOL_BANK_GRANULARITY,
 #else
-		POOL_MAX_ALLOCATION_SIZE = 64 << 20,
+		POOL_MAX_ALLOCATION_SIZE = 64 * POOL_BANK_GRANULARITY,
 #endif
 		POOL_FRAME_QUERY_MASK    = POOL_FRAME_QUERY_COUNT - 1
 	};
 
-	size_t m_pool_bank_size;
-	size_t m_transient_pool_size;
-	size_t m_cb_bank_size;
-	size_t m_cb_threshold;
-	size_t m_pool_bank_mask;
+	buffer_size_t m_pool_bank_size;
+	buffer_size_t m_transient_pool_size;
+	buffer_size_t m_cb_bank_size;
+	buffer_size_t m_cb_threshold;
+	buffer_size_t m_pool_bank_mask;
 	size_t m_pool_max_allocs;
 	size_t m_pool_max_moves_per_update;
 	bool   m_pool_defrag_static;
@@ -188,18 +160,21 @@ struct SPoolConfig
 
 	bool   Configure()
 	{
-		m_pool_bank_size = (size_t)NextPower2(gRenDev->CV_r_buffer_banksize) << 20;
-		m_transient_pool_size = (size_t)NextPower2(gRenDev->CV_r_transient_pool_size) << 20;
-		m_cb_bank_size = NextPower2(gRenDev->CV_r_constantbuffer_banksize) << 20;
-		m_cb_threshold = NextPower2(gRenDev->CV_r_constantbuffer_watermark) << 20;
-		m_pool_bank_mask = m_pool_bank_size - 1;
-		m_pool_max_allocs = gRenDev->CV_r_buffer_pool_max_allocs;
-		m_pool_defrag_static = gRenDev->CV_r_buffer_pool_defrag_static != 0;
+		m_pool_bank_size      = buffer_size_t(NextPower2(gRenDev->CV_r_buffer_banksize         )) * POOL_BANK_GRANULARITY;
+		m_transient_pool_size = buffer_size_t(NextPower2(gRenDev->CV_r_transient_pool_size     )) * POOL_BANK_GRANULARITY;
+		m_cb_bank_size        = buffer_size_t(NextPower2(gRenDev->CV_r_constantbuffer_banksize )) * POOL_BANK_GRANULARITY;
+		m_cb_threshold        = buffer_size_t(NextPower2(gRenDev->CV_r_constantbuffer_watermark)) * POOL_BANK_GRANULARITY;
+
+		m_pool_bank_mask      = m_pool_bank_size - 1;
+		m_pool_max_allocs     = gRenDev->CV_r_buffer_pool_max_allocs;
+		m_pool_defrag_static  = gRenDev->CV_r_buffer_pool_defrag_static != 0;
 		m_pool_defrag_dynamic = gRenDev->CV_r_buffer_pool_defrag_dynamic != 0;
+
 		if (m_pool_defrag_static | m_pool_defrag_dynamic)
 			m_pool_max_moves_per_update = gRenDev->CV_r_buffer_pool_defrag_max_moves;
 		else
 			m_pool_max_moves_per_update = 0;
+
 		return true;
 	}
 };
@@ -246,9 +221,10 @@ static inline int _GetThreadID()
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 // If buffer is bound to device, remove it from device (Must be called before releasing the buffer!)
-static inline void UnsetStreamSources(D3DBuffer* buffer)
+static inline void UnsetStreamSources(CDeviceBuffer* buffer)
 {
-	gcpRendD3D->FX_UnbindBuffer(buffer);
+	if (buffer)
+		gcpRendD3D->FX_UnbindBuffer(buffer->GetBuffer());
 }
 
 //===============================================================================
@@ -351,7 +327,6 @@ public:
 		size_t key = ~0u;
 		IF (m_partition + 1 >= m_capacity, 0)
 		{
-			ScopedSwitchToGlobalHeap heap_switch;
 			size_t old_capacity = m_capacity;
 			m_capacity += TableSize;
 			if ((m_capacity >> TableShift) > MaxTables)
@@ -383,16 +358,16 @@ public:
 struct SBufferPoolBank
 {
 	// The pointer to backing device buffer.
-	D3DBuffer* m_buffer;
+	CDeviceBuffer* m_buffer;
 
 	// Base pointer to buffer (used on platforms with unified memory)
 	uint8* m_base_ptr;
 
 	// Size of the backing buffer
-	size_t m_capacity;
+	buffer_size_t m_capacity;
 
 	// Number of allocated bytes from within the buffer
-	size_t m_free_space;
+	buffer_size_t m_free_space;
 
 	// Handle into the bank table
 	size_t m_handle;
@@ -422,7 +397,7 @@ typedef CPartitionTable<SBufferPoolBank> CBufferPoolBankTable;
 struct SBufferPoolItem
 {
 	// The pointer to the backing buffer
-	D3DBuffer* m_buffer;
+	CDeviceBuffer* m_buffer;
 
 	// The pool that maintains this item (will be null if pool-less)
 	SBufferPool* m_pool;
@@ -449,10 +424,10 @@ struct SBufferPoolItem
 	item_handle_t m_cow_handle;
 
 	// The size of the item in bytes
-	uint32 m_size;
+	buffer_size_t m_size;
 
 	// The offset in bytes from the start of the buffer
-	uint32 m_offset;
+	buffer_size_t m_offset;
 
 	// The bank index this item resides in
 	uint32 m_bank;
@@ -472,6 +447,9 @@ struct SBufferPoolItem
 	// Set to one if the item is backed by the defrag allocator (XXXX)
 	uint8 m_gpu_flush : 1;
 
+	// Set to 0 if not R/W locked, 1 for READ, 2 for WRITE and 3 for READ & WRITE
+	uint8 m_marked : 2;
+
 	SBufferPoolItem(size_t handle)
 		: m_buffer()
 		, m_pool()
@@ -489,6 +467,7 @@ struct SBufferPoolItem
 		, m_defrag()
 		, m_cpu_flush()
 		, m_gpu_flush()
+		, m_marked(0)
 	{
 		//CryLogAlways("ITEM %4d created", handle);
 	}
@@ -529,14 +508,13 @@ typedef CPartitionTable<SBufferPoolItem> CBufferItemTable;
 
 struct SStagingResources
 {
-	enum { WRITE = 0, READ = 1 };
+	enum { WRITE = 0, READ = 1, NUM = 2 };
 
-	D3DBuffer* m_staging_buffers[2];
-	size_t     m_staged_open[2];
-	size_t     m_staged_base;
-	size_t     m_staged_size;
-	size_t     m_staged_offset;
-	D3DBuffer* m_staged_buffer;
+	CDeviceBuffer* m_staging_buffers[NUM];
+	buffer_size_t  m_staged_base;
+	buffer_size_t  m_staged_size;
+	buffer_size_t  m_staged_offset;
+	bool           m_staged_open[NUM];
 
 	SStagingResources() { memset(this, 0x0, sizeof(*this)); }
 };
@@ -544,7 +522,7 @@ struct SStagingResources
 //////////////////////////////////////////////////////////////////////////
 // Does nothing - but still useful
 //
-template<size_t BIND_FLAGS>
+template<size_t BIND_FLAGS, size_t USAGE_FLAGS>
 class CDefaultUpdater
 {
 protected:
@@ -556,303 +534,284 @@ public:
 	bool  CreateResources()                                         { return true;  }
 	bool  FreeResources()                                           { return true;  }
 
-	void* BeginRead(D3DBuffer* buffer, size_t size, size_t offset)  { return NULL; }
-	void* BeginWrite(D3DBuffer* buffer, size_t size, size_t offset) { return NULL; }
-	void  EndReadWrite()                                            {}
+	void* BeginRead   (CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset) { CryFatalError("Attempting to use unimplemented CDefaultUpdater"); return nullptr; }
+	void* BeginWrite  (CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset) { CryFatalError("Attempting to use unimplemented CDefaultUpdater"); return nullptr; }
+	void  EndReadWrite(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset) { CryFatalError("Attempting to use unimplemented CDefaultUpdater"); }
 
 	void  RegisterBank(SBufferPoolBank* bank)                       {}
 	void  UnregisterBank(SBufferPoolBank* bank)                     {}
 
+	void  Read (CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset,       void* dst) { CryFatalError("Attempting to use unimplemented CDefaultUpdater"); }
+	void  Write(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset, const void* src) { CryFatalError("Attempting to use unimplemented CDefaultUpdater"); }
+
 	void  Move(
-	  D3DBuffer* dst_buffer
-	  , size_t dst_size
-	  , size_t dst_offset
-	  , D3DBuffer* src_buffer
-	  , size_t src_size
-	  , size_t src_offset)
+		CDeviceBuffer* dst_buffer
+	  , buffer_size_t dst_size
+	  , buffer_size_t dst_offset
+	  , CDeviceBuffer* src_buffer
+	  , buffer_size_t src_size
+	  , buffer_size_t src_offset)
 	{
 		DEVBUFFERMAN_ASSERT(dst_buffer && src_buffer && dst_size == src_size);
-#if CRY_PLATFORM_ORBIS
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents);
-#elif defined(DEVICE_SUPPORTS_D3D11_1)
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion1(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents
-		  , 0);
+#if (CRY_RENDERER_DIRECT3D < 111)
+		CryFatalError("Defragmentation not stageable on directx 11.0! Turn off the defragmenter.");
 #endif
+
+		const SResourceRegionMapping mapping =
+		{
+			{ src_offset, 0, 0, 0 }, // src position
+			{ dst_offset, 0, 0, 0 }, // dst position
+			{ src_size  , 1, 1, 1 }  // size
+		};
+
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			src_buffer,
+			dst_buffer,
+			mapping);
 	}
 };
 
 //////////////////////////////////////////////////////////////////////////
-// Performs buffer updates over staging buffers
+// Performs buffer updates over staging buffers, never blocks but transitions to next free fragment or discards
 //
-template<size_t BIND_FLAGS>
-class CDynamicStagingBufferUpdater : public CDefaultUpdater<BIND_FLAGS>
+template<size_t BIND_FLAGS, size_t USAGE_FLAGS>
+class CTransientStagingBufferUpdater : public CDefaultUpdater<BIND_FLAGS, USAGE_FLAGS>
 {
 	SStagingResources& m_resources;
 
 public:
 
-	CDynamicStagingBufferUpdater(SStagingResources& resources)
+	CTransientStagingBufferUpdater(SStagingResources& resources)
 		: m_resources(resources)
 	{}
-	~CDynamicStagingBufferUpdater() {}
+	~CTransientStagingBufferUpdater() {}
 
 	// Create the staging buffers if supported && enabled
 	bool CreateResources()
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
-		if (!m_resources.m_staging_buffers[SStagingResources::WRITE] && gRenDev->m_DevMan.CreateBuffer(
-		      s_PoolConfig.m_pool_bank_size
-		      , 1
-		      , CDeviceManager::USAGE_CPU_WRITE | CDeviceManager::USAGE_DYNAMIC
-		      , BIND_FLAGS
-		      , &m_resources.m_staging_buffers[SStagingResources::WRITE]) != S_OK)
+
+		const SBufferLayout LayoutW =
 		{
-			CryLogAlways("SStaticBufferPool::CreateResources: could not create staging buffer");
-			goto error;
-		}
-		if (!m_resources.m_staging_buffers[SStagingResources::READ] && gRenDev->m_DevMan.CreateBuffer(
-		      s_PoolConfig.m_pool_bank_size
-		      , 1
-		      , CDeviceManager::USAGE_CPU_READ | CDeviceManager::USAGE_STAGING
-		      , BIND_FLAGS
-		      , &m_resources.m_staging_buffers[SStagingResources::READ]) != S_OK)
+			DXGI_FORMAT_UNKNOWN, s_PoolConfig.m_pool_bank_size, 1,
+#if (CRY_RENDERER_DIRECT3D >= 120)
+			CDeviceObjectFactory::USAGE_CPU_WRITE /* BIND_FLAGS */ // NOTE: this is a staging buffer, no bind-flags are allowed
+#else
+			CDeviceObjectFactory::USAGE_CPU_WRITE  | BIND_FLAGS    // NOTE: this is for CPU-to-GPU uploads
+#endif
+		};
+
+		const SBufferLayout LayoutR =
 		{
-			CryLogAlways("SStaticBufferPool::CreateResources: could not create staging buffer");
-			goto error;
-		}
-		if (false)
+			DXGI_FORMAT_UNKNOWN, s_PoolConfig.m_pool_bank_size, 1,
+#if (CRY_RENDERER_DIRECT3D >= 120)
+			CDeviceObjectFactory::USAGE_CPU_READ /* BIND_FLAGS */ // NOTE: this is a staging buffer, no bind-flags are allowed
+#else
+			CDeviceObjectFactory::USAGE_CPU_READ  | BIND_FLAGS    // NOTE: this is for CPU-to-GPU uploads
+#endif
+		};
+
+		if (!(m_resources.m_staging_buffers[SStagingResources::WRITE] = CDeviceBuffer::Create(LayoutW, nullptr)) ||
+			!(m_resources.m_staging_buffers[SStagingResources::READ ] = CDeviceBuffer::Create(LayoutR, nullptr)))
 		{
-error:
+			CryLogAlways("CTransientStagingBufferPool::CreateResources: could not create staging buffer");
 			FreeResources();
 			return false;
 		}
+
 		return true;
 	}
 
 	bool FreeResources()
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
-		for (size_t i = 0; i < 2; ++i)
+		for (size_t i = 0; i < SStagingResources::NUM; ++i)
 		{
-			UnsetStreamSources(m_resources.m_staging_buffers[i]);
 			SAFE_RELEASE(m_resources.m_staging_buffers[i]);
-			m_resources.m_staged_open[i] = 0;
+			m_resources.m_staged_open[i] = false;
 		}
 		m_resources.m_staged_base = 0;
 		m_resources.m_staged_size = 0;
 		m_resources.m_staged_offset = 0;
-		m_resources.m_staged_buffer = NULL;
 		return true;
 	}
 
-	void* BeginRead(D3DBuffer* buffer, size_t size, size_t offset)
+	void* BeginRead(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
 		DEVBUFFERMAN_ASSERT(buffer && size);
 		DEVBUFFERMAN_ASSERT(size <= s_PoolConfig.m_pool_bank_size);
-		DEVBUFFERMAN_VERIFY(m_resources.m_staged_open[SStagingResources::READ] == 0);
+		DEVBUFFERMAN_ASSERT(m_resources.m_staged_open[SStagingResources::READ] == false);
 
-		D3D11_BOX contents;
-		contents.left = offset;
-		contents.right = offset + size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , 0
-		  , 0
-		  , 0
-		  , buffer
-		  , 0
-		  , &contents);
-
-		D3D11_MAPPED_SUBRESOURCE mapped_resource;
-		D3D11_MAP map = D3D11_MAP_READ;
-		HRESULT hr = gcpRendD3D->GetDeviceContext().Map(
-		  m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , map
-		  , 0
-		  , &mapped_resource);
-		if (!CHECK_HRESULT(hr))
+		const SResourceRegionMapping mapping =
 		{
-			CryLogAlways("map of staging buffer for READING failed!");
-			return NULL;
-		}
-		m_resources.m_staged_open[SStagingResources::READ] = 1;
-		return mapped_resource.pData;
+			{ offset, 0, 0, 0 }, // src position
+			{ 0     , 0, 0, 0 }, // dst position
+			{ size  , 1, 1, 1 }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		// NOTE: this Copy() needs to be synchronous because the Map() follows immediately
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			buffer->GetBuffer(),
+			m_resources.m_staging_buffers[SStagingResources::READ]->GetBuffer(),
+			mapping);
+
+		m_resources.m_staged_open[SStagingResources::READ] = true;
+
+		return CDeviceObjectFactory::Map(m_resources.m_staging_buffers[SStagingResources::READ]->GetBuffer(), 0, 0, size, D3D11_MAP_READ);
 	}
 
-	void* BeginWrite(D3DBuffer* buffer, size_t size, size_t offset)
+	void* BeginWrite(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
 		DEVBUFFERMAN_ASSERT(buffer && size);
 		DEVBUFFERMAN_ASSERT(size <= s_PoolConfig.m_pool_bank_size);
-		DEVBUFFERMAN_ASSERT(!m_resources.m_staged_buffer);
 
-		D3D11_MAPPED_SUBRESOURCE mapped_resource;
 		D3D11_MAP map = BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS);
 		if (m_resources.m_staged_base + size > s_PoolConfig.m_pool_bank_size)
 		{
 			map = BINDFLAGS_to_WRITEDISCARD(BIND_FLAGS);
 			m_resources.m_staged_base = 0;
+
+			if (m_resources.m_staging_buffers[SStagingResources::WRITE]->SubstituteUsedResource() != CDeviceResource::eSubResult_Failed)
+				map = BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS);
 		}
-		HRESULT hr = gcpRendD3D->GetDeviceContext().Map(
-		  m_resources.m_staging_buffers[SStagingResources::WRITE]
-		  , 0
-		  , map
-		  , 0
-		  , &mapped_resource);
-		if (!CHECK_HRESULT(hr))
-		{
-			CryLogAlways("map of staging buffer for WRITING failed!");
-			return NULL;
-		}
-		void* result = reinterpret_cast<uint8*>(mapped_resource.pData) + m_resources.m_staged_base;
-		m_resources.m_staged_size = size;
-		m_resources.m_staged_offset = offset;
-		m_resources.m_staged_buffer = buffer;
-		m_resources.m_staged_open[SStagingResources::WRITE] = 1;
-		return result;
+
+		m_resources.m_staged_open[SStagingResources::WRITE] = true;
+
+		return CDeviceObjectFactory::Map(m_resources.m_staging_buffers[SStagingResources::WRITE]->GetBuffer(), 0, m_resources.m_staged_base, 0, map) + m_resources.m_staged_base;
 	}
 
-	void EndReadWrite()
+	void EndReadWrite(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
-		D3D11_BOX contents;
 		if (m_resources.m_staged_open[SStagingResources::READ])
 		{
-			gcpRendD3D->GetDeviceContext().Unmap(m_resources.m_staging_buffers[SStagingResources::READ], 0);
-			m_resources.m_staged_open[SStagingResources::READ] = 0;
+			m_resources.m_staged_open[SStagingResources::READ] = false;
+
+			CDeviceObjectFactory::Unmap(m_resources.m_staging_buffers[SStagingResources::READ]->GetBuffer(), 0, 0, 0, D3D11_MAP_READ);
 		}
 		if (m_resources.m_staged_open[SStagingResources::WRITE])
 		{
-			DEVBUFFERMAN_ASSERT(m_resources.m_staged_buffer);
-			gcpRendD3D->GetDeviceContext().Unmap(m_resources.m_staging_buffers[SStagingResources::WRITE], 0);
-			contents.left = m_resources.m_staged_base;
-			contents.right = m_resources.m_staged_base + m_resources.m_staged_size;
-			contents.top = 0;
-			contents.bottom = 1;
-			contents.front = 0;
-			contents.back = 1;
-			gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-			  m_resources.m_staged_buffer
-			  , 0
-			  , m_resources.m_staged_offset
-			  , 0
-			  , 0
-			  , m_resources.m_staging_buffers[SStagingResources::WRITE]
-			  , 0
-			  , &contents);
-			m_resources.m_staged_base += m_resources.m_staged_size;
-			m_resources.m_staged_offset = 0;
-			m_resources.m_staged_size = 0;
-			m_resources.m_staged_buffer = NULL;
-			m_resources.m_staged_open[SStagingResources::WRITE] = 0;
+			m_resources.m_staged_open[SStagingResources::WRITE] = false;
+
+			CDeviceObjectFactory::Unmap(m_resources.m_staging_buffers[SStagingResources::WRITE]->GetBuffer(), 0, m_resources.m_staged_base, size, BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS));
+
+			DEVBUFFERMAN_ASSERT(buffer);
+
+			const SResourceRegionMapping mapping =
+			{
+				{ m_resources.m_staged_base, 0, 0, 0 }, // src position
+				{ offset                   , 0, 0, 0 }, // dst position
+				{ size                     , 1, 1, 1 }, // size
+				D3D11_COPY_NO_OVERWRITE_REVERT
+			};
+
+			GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+				m_resources.m_staging_buffers[SStagingResources::WRITE]->GetBuffer(),
+				buffer->GetBuffer(),
+				mapping);
+
+			m_resources.m_staged_base += size;
 		}
 	}
 
+	void Read(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset, void* dst)
+	{
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT(buffer && size);
+		DEVBUFFERMAN_ASSERT(size <= s_PoolConfig.m_pool_bank_size);
+		DEVBUFFERMAN_ASSERT(m_resources.m_staged_open[SStagingResources::READ] == false);
+
+		const SResourceRegionMapping mapping =
+		{
+			{ offset, 0, 0, 0 }, // src position
+			{ 0     , 0, 0, 0 }, // dst position
+			{ size  , 1, 1, 1 }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		// NOTE: this Copy() needs to be synchronous because the DownloadContents() follows immediately
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			buffer->GetBuffer(),
+			m_resources.m_staging_buffers[SStagingResources::READ]->GetBuffer(),
+			mapping);
+
+#if CRY_RENDERER_VULKAN
+		GetDeviceObjectFactory().GetVKScheduler()->Flush(true); // cpu-gpu synchronization must happen externally in vulkan renderer
+#endif
+
+		CDeviceObjectFactory::DownloadContents<false>(m_resources.m_staging_buffers[SStagingResources::READ]->GetBuffer(), 0, 0, size, D3D11_MAP_READ, dst);
+	}
+
+	void Write(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset, const void* src)
+	{
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT(buffer && size);
+		DEVBUFFERMAN_ASSERT(size <= s_PoolConfig.m_pool_bank_size);
+
+		D3D11_MAP map = BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS);
+		if (m_resources.m_staged_base + size > s_PoolConfig.m_pool_bank_size)
+		{
+			map = BINDFLAGS_to_WRITEDISCARD(BIND_FLAGS);
+			m_resources.m_staged_base = 0;
+
+			if (m_resources.m_staging_buffers[SStagingResources::WRITE]->SubstituteUsedResource() != CDeviceResource::eSubResult_Failed)
+				map = BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS);
+		}
+
+		CDeviceObjectFactory::UploadContents<false>(m_resources.m_staging_buffers[SStagingResources::WRITE]->GetBuffer(), 0, m_resources.m_staged_base, size, map, src);
+
+		const SResourceRegionMapping mapping =
+		{
+			{ m_resources.m_staged_base, 0, 0, 0 }, // src position
+			{ offset                   , 0, 0, 0 }, // dst position
+			{ size                     , 1, 1, 1 }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			m_resources.m_staging_buffers[SStagingResources::WRITE]->GetBuffer(),
+			buffer->GetBuffer(),
+			mapping);
+
+		m_resources.m_staged_base += size;
+	}
+
 	void Move(
-	  D3DBuffer* dst_buffer
-	  , size_t dst_size
-	  , size_t dst_offset
-	  , D3DBuffer* src_buffer
-	  , size_t src_size
-	  , size_t src_offset)
+		CDeviceBuffer* dst_buffer
+	  , buffer_size_t dst_size
+	  , buffer_size_t dst_offset
+	  , CDeviceBuffer* src_buffer
+	  , buffer_size_t src_size
+	  , buffer_size_t src_offset)
 	{
 		DEVBUFFERMAN_ASSERT(dst_buffer && src_buffer && dst_size == src_size);
-#if defined(DEVICE_SUPPORTS_D3D11_1)
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion1(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents
-		  , 0);
-#else
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , 0
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents);
+#if (CRY_RENDERER_DIRECT3D < 111)
+		CryFatalError("Defragmentation not stageable on directx 11.0! Turn off the defragmenter.");
 #endif
-		contents.left = 0;
-		contents.right = src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , &contents);
+
+		const SResourceRegionMapping mapping =
+		{
+			{ src_offset, 0, 0, 0 }, // src position
+			{ dst_offset, 0, 0, 0 }, // dst position
+			{ src_size  , 1, 1, 1 }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			src_buffer,
+			dst_buffer,
+			mapping);
 	}
 };
 
 //////////////////////////////////////////////////////////////////////////
-// Performs buffer updates over staging buffers
+// Performs buffer updates over staging buffers, blocks when staging buffer is still to be copied
 //
-template<size_t BIND_FLAGS>
-class CStagingBufferUpdater : public CDefaultUpdater<BIND_FLAGS>
+template<size_t BIND_FLAGS, size_t USAGE_FLAGS>
+class CStagingBufferUpdater : public CDefaultUpdater<BIND_FLAGS, USAGE_FLAGS>
 {
 	SStagingResources& m_resources;
 
@@ -867,449 +826,376 @@ public:
 	bool CreateResources()
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
-		if (!m_resources.m_staging_buffers[SStagingResources::WRITE] && gRenDev->m_DevMan.CreateBuffer(
-		      s_PoolConfig.m_pool_bank_size
-		      , 1
-#if CRY_USE_DX12
-		      , CDeviceManager::USAGE_CPU_WRITE | CDeviceManager::USAGE_DYNAMIC
+
+		const SBufferLayout LayoutW =
+		{
+			DXGI_FORMAT_UNKNOWN, s_PoolConfig.m_pool_bank_size, 1,
+#if (CRY_RENDERER_DIRECT3D >= 120)
+			CDeviceObjectFactory::USAGE_CPU_WRITE /* BIND_FLAGS */ // NOTE: this is a staging buffer, no bind-flags are allowed
 #else
-		      , CDeviceManager::USAGE_CPU_WRITE | CDeviceManager::USAGE_STAGING // NOTE: this is for GPU-to-CPU downloads, but DYNAMIC doesn't allow MAP_WRITE under DX11
+			CDeviceObjectFactory::USAGE_CPU_WRITE  | BIND_FLAGS    // NOTE: this is for CPU-to-GPU uploads
 #endif
-		      , BIND_FLAGS
-		      , &m_resources.m_staging_buffers[SStagingResources::WRITE]) != S_OK)
+		};
+
+		const SBufferLayout LayoutR =
+		{
+			DXGI_FORMAT_UNKNOWN, s_PoolConfig.m_pool_bank_size, 1,
+#if (CRY_RENDERER_DIRECT3D >= 120)
+			CDeviceObjectFactory::USAGE_CPU_READ /* BIND_FLAGS */ // NOTE: this is a staging buffer, no bind-flags are allowed
+#else
+			CDeviceObjectFactory::USAGE_CPU_READ  | BIND_FLAGS    // NOTE: this is for CPU-to-GPU uploads
+#endif
+		};
+
+		if (!(m_resources.m_staging_buffers[SStagingResources::WRITE] = CDeviceBuffer::Create(LayoutW, nullptr)) ||
+			!(m_resources.m_staging_buffers[SStagingResources::READ ] = CDeviceBuffer::Create(LayoutR, nullptr)))
 		{
 			CryLogAlways("SStaticBufferPool::CreateResources: could not create staging buffer");
-			goto error;
-		}
-		/*
-		   if (!m_resources.m_staging_buffers[SStagingResources::READ] && gRenDev->m_DevMan.CreateBuffer(
-		   max(s_PoolConfig.m_pool_bank_size, (size_t)SPoolConfig::POOL_MAX_ALLOCATION_SIZE)
-		   , 1
-		   , CDeviceManager::USAGE_CPU_READ|CDeviceManager::USAGE_STAGING
-		   , BIND_FLAGS
-		   , &m_resources.m_staging_buffers[SStagingResources::READ]) != S_OK)
-		   {
-		   CryLogAlways("SStaticBufferPool::CreateResources: could not create staging buffer");
-		   goto error;
-		   }
-		 */
-		if (false)
-		{
-error:
 			FreeResources();
 			return false;
 		}
+
 		return true;
 	}
 
 	bool FreeResources()
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
-		for (size_t i = 0; i < 2; ++i)
+		for (size_t i = 0; i < SStagingResources::NUM; ++i)
 		{
-			UnsetStreamSources(m_resources.m_staging_buffers[i]);
 			SAFE_RELEASE(m_resources.m_staging_buffers[i]);
-			m_resources.m_staged_open[i] = 0;
+			m_resources.m_staged_open[i] = false;
 		}
 		m_resources.m_staged_base = 0;
 		m_resources.m_staged_size = 0;
 		m_resources.m_staged_offset = 0;
-		m_resources.m_staged_buffer = 0;
-		m_resources.m_staged_open[SStagingResources::WRITE] = 1;
+		m_resources.m_staged_open[SStagingResources::WRITE] = true;
 		return true;
 	}
 
-	void* BeginRead(D3DBuffer* buffer, size_t size, size_t offset)
+	void* BeginRead(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
 		DEVBUFFERMAN_ASSERT(buffer && size && offset);
 		DEVBUFFERMAN_ASSERT(size <= s_PoolConfig.m_pool_bank_size);
-		DEVBUFFERMAN_VERIFY(m_resources.m_staged_open[SStagingResources::READ] == 0);
+		DEVBUFFERMAN_ASSERT(m_resources.m_staged_open[SStagingResources::READ] == false);
 
-		D3D11_BOX contents;
-		contents.left = offset;
-		contents.right = offset + size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , 0
-		  , 0
-		  , 0
-		  , buffer
-		  , 0
-		  , &contents);
-
-		D3D11_MAPPED_SUBRESOURCE mapped_resource;
-		D3D11_MAP map = D3D11_MAP_READ;
-		HRESULT hr = gcpRendD3D->GetDeviceContext().Map(
-		  m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , map
-		  , 0
-		  , &mapped_resource);
-		if (!CHECK_HRESULT(hr))
+		const SResourceRegionMapping mapping =
 		{
-			CryLogAlways("map of staging buffer for READING failed!");
-			return NULL;
-		}
-		m_resources.m_staged_open[SStagingResources::READ] = 1;
-		return mapped_resource.pData;
+			{ offset, 0, 0, 0 }, // src position
+			{ 0     , 0, 0, 0 }, // dst position
+			{ size  , 1, 1, 1 }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		// NOTE: this Copy() needs to be synchronous because the Map() follows immediately
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			buffer,
+			m_resources.m_staging_buffers[SStagingResources::READ],
+			mapping);
+
+		m_resources.m_staged_open[SStagingResources::READ] = true;
+
+		return CDeviceObjectFactory::Map(m_resources.m_staging_buffers[SStagingResources::READ]->GetBuffer(), 0, 0, size, D3D11_MAP_READ);
 	}
 
-	void* BeginWrite(D3DBuffer* buffer, size_t size, size_t offset)
+	void* BeginWrite(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
 		DEVBUFFERMAN_ASSERT(buffer && size);
 		DEVBUFFERMAN_ASSERT(size <= s_PoolConfig.m_pool_bank_size);
+		DEVBUFFERMAN_ASSERT(m_resources.m_staged_open[SStagingResources::WRITE] == false);
 
-		D3D11_MAPPED_SUBRESOURCE mapped_resource;
-		D3D11_MAP map = D3D11_MAP_WRITE;
-		HRESULT hr = gcpRendD3D->GetDeviceContext().Map(
-		  m_resources.m_staging_buffers[SStagingResources::WRITE]
-		  , 0
-		  , map
-		  , 0
-		  , &mapped_resource);
-		if (!CHECK_HRESULT(hr))
-		{
-			CryLogAlways("map of staging buffer for WRITING failed!");
-			return NULL;
-		}
-		void* result = reinterpret_cast<uint8*>(mapped_resource.pData);
-		m_resources.m_staged_size = size;
-		m_resources.m_staged_offset = offset;
-		m_resources.m_staged_buffer = buffer;
-		m_resources.m_staged_open[SStagingResources::WRITE] = 1;
-		return result;
+		m_resources.m_staged_open[SStagingResources::WRITE] = true;
+
+		return CDeviceObjectFactory::Map(m_resources.m_staging_buffers[SStagingResources::WRITE]->GetBuffer(), 0, 0, 0, D3D11_MAP_WRITE);
 	}
 
-	void EndReadWrite()
+	void EndReadWrite(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
-		D3D11_BOX contents;
 		if (m_resources.m_staged_open[SStagingResources::READ])
 		{
-			gcpRendD3D->GetDeviceContext().Unmap(m_resources.m_staging_buffers[SStagingResources::READ], 0);
-			m_resources.m_staged_open[SStagingResources::READ] = 0;
+			m_resources.m_staged_open[SStagingResources::READ] = false;
+
+			CDeviceObjectFactory::Unmap(m_resources.m_staging_buffers[SStagingResources::READ]->GetBuffer(), 0, 0, 0, D3D11_MAP_READ);
 		}
 		if (m_resources.m_staged_open[SStagingResources::WRITE])
 		{
-			DEVBUFFERMAN_ASSERT(m_resources.m_staged_buffer);
-			gcpRendD3D->GetDeviceContext().Unmap(m_resources.m_staging_buffers[SStagingResources::WRITE], 0);
-			contents.left = 0;
-			contents.right = m_resources.m_staged_size;
-			contents.top = 0;
-			contents.bottom = 1;
-			contents.front = 0;
-			contents.back = 1;
-			gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-			  m_resources.m_staged_buffer
-			  , 0
-			  , m_resources.m_staged_offset
-			  , 0
-			  , 0
-			  , m_resources.m_staging_buffers[SStagingResources::WRITE]
-			  , 0
-			  , &contents);
-			m_resources.m_staged_size = 0;
-			m_resources.m_staged_offset = 0;
-			m_resources.m_staged_buffer = 0;
-			m_resources.m_staged_open[SStagingResources::WRITE] = 0;
+			m_resources.m_staged_open[SStagingResources::WRITE] = false;
+
+			CDeviceObjectFactory::Unmap(m_resources.m_staging_buffers[SStagingResources::WRITE]->GetBuffer(), 0, 0, size, D3D11_MAP_WRITE);
+
+			DEVBUFFERMAN_ASSERT(buffer);
+
+			const SResourceRegionMapping mapping =
+			{
+				{ 0     , 0, 0, 0 }, // src position
+				{ offset, 0, 0, 0 }, // dst position
+				{ size  , 1, 1, 1 }, // size
+				D3D11_COPY_NO_OVERWRITE_REVERT
+			};
+
+			GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+				m_resources.m_staging_buffers[SStagingResources::WRITE],
+				buffer,
+				mapping);
 		}
 	}
 
+	void Read(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset, void* dst)
+	{
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT(buffer && size && offset);
+		DEVBUFFERMAN_ASSERT(size <= s_PoolConfig.m_pool_bank_size);
+		DEVBUFFERMAN_ASSERT(m_resources.m_staged_open[SStagingResources::READ] == false);
+
+		const SResourceRegionMapping mapping =
+		{
+			{ offset, 0, 0, 0 }, // src position
+			{ 0     , 0, 0, 0 }, // dst position
+			{ size  , 1, 1, 1 }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		// NOTE: this Copy() needs to be synchronous because the DownloadContents() follows immediately
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			buffer,
+			m_resources.m_staging_buffers[SStagingResources::READ]->GetBuffer(),
+			mapping);
+
+#if CRY_RENDERER_VULKAN
+		GetDeviceObjectFactory().GetVKScheduler()->Flush(true); // cpu-gpu synchronization must happen externally in vulkan renderer
+#endif
+
+		CDeviceObjectFactory::DownloadContents<false>(m_resources.m_staging_buffers[SStagingResources::READ]->GetBuffer(), 0, 0, size, D3D11_MAP_READ, dst);
+	}
+
+	void Write(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset, const void* src)
+	{
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT(buffer && size);
+		DEVBUFFERMAN_ASSERT(size <= s_PoolConfig.m_pool_bank_size);
+		DEVBUFFERMAN_ASSERT(m_resources.m_staged_open[SStagingResources::WRITE] == false);
+
+		CDeviceObjectFactory::UploadContents<false>(m_resources.m_staging_buffers[SStagingResources::WRITE]->GetBuffer(), 0, 0, size, D3D11_MAP_WRITE, src);
+
+		const SResourceRegionMapping mapping =
+		{
+			{ 0     , 0, 0, 0 }, // src position
+			{ offset, 0, 0, 0 }, // dst position
+			{ size  , 1, 1, 1 }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			m_resources.m_staging_buffers[SStagingResources::WRITE],
+			buffer,
+			mapping);
+	}
+
 	void Move(
-	  D3DBuffer* dst_buffer
-	  , size_t dst_size
-	  , size_t dst_offset
-	  , D3DBuffer* src_buffer
-	  , size_t src_size
-	  , size_t src_offset)
+		CDeviceBuffer* dst_buffer
+	  , buffer_size_t dst_size
+	  , buffer_size_t dst_offset
+	  , CDeviceBuffer* src_buffer
+	  , buffer_size_t src_size
+	  , buffer_size_t src_offset)
 	{
 		DEVBUFFERMAN_ASSERT(dst_buffer && src_buffer && dst_size == src_size);
-#if defined(DEVICE_SUPPORTS_D3D11_1)
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion1(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents
-		  , 0);
-#else
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , 0
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents);
+#if (CRY_RENDERER_DIRECT3D < 111)
+		CryFatalError("Defragmentation not stageable on directx 11.0! Turn off the defragmenter.");
 #endif
-		contents.left = 0;
-		contents.right = src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , &contents);
+
+		const SResourceRegionMapping mapping =
+		{
+			{ src_offset, 0, 0, 0 }, // src position
+			{ dst_offset, 0, 0, 0 }, // dst position
+			{ src_size  , 1, 1, 1 }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			src_buffer,
+			dst_buffer,
+			mapping);
 	}
 };
 
 //////////////////////////////////////////////////////////////////////////
 // Performs buffer updates over dynamic updates
 //
-template<size_t BIND_FLAGS>
-class CDynamicBufferUpdater : public CDefaultUpdater<BIND_FLAGS>
+template<size_t BIND_FLAGS, size_t USAGE_FLAGS>
+class CDynamicBufferUpdater : public CDefaultUpdater<BIND_FLAGS, USAGE_FLAGS>
 {
-	// DX11 has the (imho) arbitrary limitation that it
-	// will refuse to perform copies from the same subresource, in this
-	// case we have a local temp. buffer that acts as a tmp resource
-	// for copying.
-	SStagingResources& m_resources;
-
-	D3DBuffer*         m_locked_buffer;
 
 public:
+
 	CDynamicBufferUpdater(SStagingResources& resources)
-		: m_resources(resources)
-		, m_locked_buffer()
+		: CDefaultUpdater<BIND_FLAGS, USAGE_FLAGS>(resources)
 	{}
-	~CDynamicBufferUpdater() {}
 
-	bool CreateResources()
-	{
-		if (!m_resources.m_staging_buffers[SStagingResources::READ] &&
-		    gRenDev->m_DevMan.CreateBuffer(
-		      s_PoolConfig.m_pool_bank_size
-		      , 1
-		      , CDeviceManager::USAGE_DEFAULT
-		      , BIND_FLAGS
-		      , &m_resources.m_staging_buffers[SStagingResources::READ]) != S_OK)
-		{
-			CryLogAlways("SStaticBufferPool::CreateResources: could not create temporary buffer");
-			goto error;
-		}
-		if (false)
-		{
-error:
-			FreeResources();
-			return false;
-		}
-		return true;
-	}
-
-	bool FreeResources()
-	{
-		UnsetStreamSources(m_resources.m_staging_buffers[SStagingResources::READ]);
-		SAFE_RELEASE(m_resources.m_staging_buffers[SStagingResources::READ]);
-		return true;
-	}
-
-	void* BeginWrite(D3DBuffer* buffer, size_t size, size_t offset)
+	void* BeginWrite(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
 		DEVBUFFERMAN_ASSERT(buffer && size);
-		D3D11_MAPPED_SUBRESOURCE mapped_resource;
-		D3D11_MAP map = BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS);
-#if defined(OPENGL) && !DXGL_FULL_EMULATION
-		HRESULT hr = DXGLMapBufferRange(
-		  gcpRendD3D->GetDeviceContext().GetRealDeviceContext()
-		  , m_locked_buffer = buffer
-		  , offset
-		  , size
-		  , map
-		  , 0
-		  , &mapped_resource);
-#else
-		HRESULT hr = gcpRendD3D->GetDeviceContext().Map(
-		  m_locked_buffer = buffer
-		  , 0
-		  , map
-		  , 0
-		  , &mapped_resource);
-#endif
-		if (!CHECK_HRESULT(hr))
-		{
-			CryLogAlways("map of staging buffer for WRITING failed!");
-			return NULL;
-		}
-#if defined(OPENGL) && !DXGL_FULL_EMULATION
-		return reinterpret_cast<uint8*>(mapped_resource.pData);
-#else
-		return reinterpret_cast<uint8*>(mapped_resource.pData) + offset;
-#endif
+		return CDeviceObjectFactory::Map(buffer->GetBuffer(), 0, offset, 0, BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS)) + offset;
 	}
 
-	void EndReadWrite()
+	void EndReadWrite(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
-		DEVBUFFERMAN_ASSERT(m_locked_buffer);
-		gcpRendD3D->GetDeviceContext().Unmap(m_locked_buffer, 0);
-		m_locked_buffer = NULL;
+		DEVBUFFERMAN_ASSERT(buffer && size);
+		CDeviceObjectFactory::Unmap(buffer->GetBuffer(), 0, offset, size, BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS));
+	}
+
+	void Write(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset, const void* src)
+	{
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT(buffer && size);
+		CDeviceObjectFactory::UploadContents<false>(buffer->GetBuffer(), 0, offset, size, BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS), src);
 	}
 
 	void Move(
-	  D3DBuffer* dst_buffer
-	  , size_t dst_size
-	  , size_t dst_offset
-	  , D3DBuffer* src_buffer
-	  , size_t src_size
-	  , size_t src_offset)
+		CDeviceBuffer* dst_buffer
+	  , buffer_size_t dst_size
+	  , buffer_size_t dst_offset
+	  , CDeviceBuffer* src_buffer
+	  , buffer_size_t src_size
+	  , buffer_size_t src_offset)
 	{
 		DEVBUFFERMAN_ASSERT(dst_buffer && src_buffer && dst_size == src_size);
-#if defined(DEVICE_SUPPORTS_D3D11_1)
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion1(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents
-		  , 0);
-#else
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , 0
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents);
+#if (CRY_RENDERER_DIRECT3D < 111)
+		CryFatalError("Defragmentation not stageable on directx 11.0! Turn off the defragmenter.");
 #endif
-		contents.left = 0;
-		contents.right = src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , m_resources.m_staging_buffers[SStagingResources::READ]
-		  , 0
-		  , &contents);
+
+		const SResourceRegionMapping mapping =
+		{
+			{ src_offset, 0, 0, 0 }, // src position
+			{ dst_offset, 0, 0, 0 }, // dst position
+			{ src_size  , 1, 1, 1 }, // size
+			D3D11_COPY_NO_OVERWRITE_REVERT
+		};
+
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+			src_buffer,
+			dst_buffer,
+			mapping);
 	}
 };
 
-template<size_t BIND_FLAGS>
-class CDirectBufferUpdater : public CDefaultUpdater<BIND_FLAGS>
+//////////////////////////////////////////////////////////////////////////
+// Dummy class used when buffers are direct access and no staging is needed
+//
+template<size_t BIND_FLAGS, size_t USAGE_FLAGS>
+class CDirectBufferUpdater : public CDefaultUpdater<BIND_FLAGS, USAGE_FLAGS>
 {
-	D3DBuffer* m_locked_buffer;
 
 public:
 
 	CDirectBufferUpdater(SStagingResources& resources)
-		: m_locked_buffer()
+		: CDefaultUpdater<BIND_FLAGS, USAGE_FLAGS>(resources)
 	{}
 
-	void* BeginRead(D3DBuffer* buffer, size_t size, size_t offset)
+#if BUFFER_ENABLE_DIRECT_ACCESS
+	void* BeginRead(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
-		return NULL;
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT(buffer && size);
+
+		uint8* base_ptr = nullptr;
+		CDeviceObjectFactory::ExtractBasePointer(buffer->GetBuffer(), D3D11_MAP_READ, base_ptr);
+		return base_ptr + offset;
 	}
 
-	void* BeginWrite(D3DBuffer* buffer, size_t size, size_t offset)
+	void* BeginWrite(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
-		return NULL;
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT(buffer && size);
+
+		uint8* base_ptr = nullptr;
+		CDeviceObjectFactory::ExtractBasePointer(buffer->GetBuffer(), D3D11_MAP_WRITE_NO_OVERWRITE, base_ptr);
+		return base_ptr + offset;
 	}
-	void EndReadWrite()
+
+	void EndReadWrite(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset)
 	{
+		DEVBUFFERMAN_ASSERT(buffer && size);
+		CDeviceObjectFactory::ReleaseBasePointer(buffer->GetBuffer());
+
+		// NOTE: this is only true for writes, reads would need a flush in BeginRead() above
+		if ((USAGE_FLAGS & (CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT |
+			                CDeviceObjectFactory::USAGE_DIRECT_ACCESS_GPU_COHERENT)) != 
+			               (CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT |
+			                CDeviceObjectFactory::USAGE_DIRECT_ACCESS_GPU_COHERENT))
+		{
+			uint8* base_ptr = nullptr;
+			CDeviceObjectFactory::ExtractBasePointer(buffer->GetBuffer(), D3D11_MAP_WRITE_NO_OVERWRITE, base_ptr);
+
+			if ((USAGE_FLAGS & CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT) == 0)
+			{
+				STATOSCOPE_TIMER(GetStatoscopeData(0).m_cpu_flush_time);
+				CDeviceObjectFactory::InvalidateCpuCache(
+					base_ptr, size, offset);
+			}
+			if ((USAGE_FLAGS & CDeviceObjectFactory::USAGE_DIRECT_ACCESS_GPU_COHERENT) == 0)
+			{
+				GetDeviceObjectFactory().InvalidateBuffer(
+					buffer->GetBuffer()
+					, base_ptr
+					, offset
+					, size
+					, _GetThreadID());
+			}
+
+			CDeviceObjectFactory::ReleaseBasePointer(buffer->GetBuffer());
+		}
+	}
+
+	void Read(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset, void* dst)
+	{
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT(buffer && size);
+
+		void* base_ptr = BeginRead(buffer, size, offset);
+		StreamBufferData(dst, base_ptr, size);
+		EndReadWrite(buffer, size, offset);
+
+		// if MarkRead/WriteRange would work this would be the better implementation
+		//	CDeviceObjectFactory::DownloadContents<true>(buffer->GetBuffer(), 0, offset, size, D3D11_MAP_READ, dst, base_ptr + offset);
+	}
+
+	void Write(CDeviceBuffer* buffer, buffer_size_t size, buffer_size_t offset, const void* src)
+	{
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT(buffer && size);
+
+		void* base_ptr = BeginWrite(buffer, size, offset);
+		StreamBufferData(base_ptr, src, size);
+		EndReadWrite(buffer, size, offset);
+
+		// if MarkRead/WriteRange would work this would be the better implementation
+		//	CDeviceObjectFactory::UploadContents<true>(buffer->GetBuffer(), 0, offset, size, BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS), src, base_ptr + offset);
 	}
 
 	void Move(
-	  D3DBuffer* dst_buffer
-	  , size_t dst_size
-	  , size_t dst_offset
-	  , D3DBuffer* src_buffer
-	  , size_t src_size
-	  , size_t src_offset)
+		CDeviceBuffer* dst_buffer
+		, buffer_size_t dst_size
+		, buffer_size_t dst_offset
+		, CDeviceBuffer* src_buffer
+		, buffer_size_t src_size
+		, buffer_size_t src_offset)
 	{
 		DEVBUFFERMAN_ASSERT(dst_buffer && src_buffer && dst_size == src_size);
-#if defined(DEVICE_SUPPORTS_D3D11_1)
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion1(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents
-		  , 0);
-#else
-		D3D11_BOX contents;
-		contents.left = src_offset;
-		contents.right = src_offset + src_size;
-		contents.top = 0;
-		contents.bottom = 1;
-		contents.front = 0;
-		contents.back = 1;
-		gcpRendD3D->GetDeviceContext().CopySubresourceRegion(
-		  dst_buffer
-		  , 0
-		  , dst_offset
-		  , 0
-		  , 0
-		  , src_buffer
-		  , 0
-		  , &contents);
-#endif
+
+		// NOTE: if the source in in WC memory this would be bad and the GPU-side copy should be used
+		// (async gpu + wait, otherwise the whole command-queue needs to be flushed and processed through)
+		void* src_ptr = BeginRead (src_buffer, src_size, src_offset);
+		void* dst_ptr = BeginWrite(dst_buffer, dst_size, dst_offset);
+		StreamBufferData(dst_ptr, src_ptr, src_size);
+		EndReadWrite(src_buffer, src_size, src_offset);
+		EndReadWrite(dst_buffer, dst_size, dst_offset);
 	}
+#endif
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -1332,7 +1218,7 @@ struct CDynamicDefragAllocator
 		, m_item_table(table)
 	{}
 
-	~CDynamicDefragAllocator() { DEVBUFFERMAN_VERIFY(m_defrag_allocator == NULL); }
+	~CDynamicDefragAllocator() { DEVBUFFERMAN_ASSERT(m_defrag_allocator == NULL); }
 
 	bool Initialize(IDefragAllocatorPolicy* policy, bool bestFit)
 	{
@@ -1362,11 +1248,11 @@ struct CDynamicDefragAllocator
 			stats = m_defrag_allocator->GetStats();
 	}
 
-	item_handle_t Allocate(size_t size, SBufferPoolItem*& item)
+	item_handle_t Allocate(buffer_size_t size, SBufferPoolItem*& item)
 	{
 		FUNCTION_PROFILER(gEnv->pSystem, PROFILE_RENDERER);
 		MEMORY_SCOPE_CHECK_HEAP();
-		DEVBUFFERMAN_VERIFY(size);
+		DEVBUFFERMAN_ASSERT(size);
 		IDefragAllocator::Hdl hdl = m_defrag_allocator->Allocate(size, NULL);
 		if (hdl == IDefragAllocator::InvalidHdl)
 			return ~0u;
@@ -1400,7 +1286,8 @@ struct CDynamicDefragAllocator
 
 	void PinItem(SBufferPoolItem* item)
 	{
-		DEVBUFFERMAN_VERIFY((m_defrag_allocator->Pin(item->m_defrag_handle) & s_PoolConfig.m_pool_bank_mask) == item->m_offset);
+		UINT_PTR temp = m_defrag_allocator->Pin(item->m_defrag_handle) & s_PoolConfig.m_pool_bank_mask;
+		DEVBUFFERMAN_ASSERT(temp == item->m_offset);
 	}
 	void UnpinItem(SBufferPoolItem* item)
 	{
@@ -1412,7 +1299,7 @@ struct CDynamicDefragAllocator
 // Partition based allocator for constant buffers of roughly the same size
 struct CPartitionAllocator
 {
-	D3DBuffer*          m_buffer;
+	CDeviceBuffer*      m_buffer;
 	void*               m_base_ptr;
 	uint32              m_page_size;
 	uint32              m_bucket_size;
@@ -1423,7 +1310,7 @@ struct CPartitionAllocator
 	std::vector<uint32> m_remap;
 
 	CPartitionAllocator(
-	  D3DBuffer* buffer, void* base_ptr, size_t page_size, size_t bucket_size)
+		CDeviceBuffer* buffer, void* base_ptr, size_t page_size, size_t bucket_size)
 		: m_buffer(buffer)
 		, m_base_ptr(base_ptr)
 		, m_page_size((uint32)page_size)
@@ -1439,16 +1326,16 @@ struct CPartitionAllocator
 	}
 	~CPartitionAllocator()
 	{
-		DEVBUFFERMAN_VERIFY(m_partition == 0);
+		DEVBUFFERMAN_ASSERT(m_partition == 0);
 		UnsetStreamSources(m_buffer);
 		SAFE_RELEASE(m_buffer);
 	}
 
-	D3DBuffer* buffer() const   { return m_buffer; }
-	void*      base_ptr() const { return m_base_ptr; }
-	bool       empty() const    { return m_partition == 0; }
+	CDeviceBuffer* buffer() const   { return m_buffer; }
+	void*          base_ptr() const { return m_base_ptr; }
+	bool           empty() const    { return m_partition == 0; }
 
-	uint32     allocate()
+	uint32 allocate()
 	{
 		size_t key = ~0u;
 		IF (m_partition + 1 >= m_capacity, 0)
@@ -1540,7 +1427,7 @@ struct CConstantBufferAllocator
 	{
 		for (size_t idx = 0; idx < SPoolConfig::POOL_FRAME_QUERY_COUNT; ++idx)
 		{
-			if (m_fences[idx] && gRenDev->m_DevMan.SyncFence(m_fences[idx], false, false) == S_OK)
+			if (m_fences[idx] && GetDeviceObjectFactory().SyncFence(m_fences[idx], false, false) == S_OK)
 			{
 				for (auto& slot : m_retired_slots[idx])
 					slot.first->deallocate(slot.second);
@@ -1553,9 +1440,11 @@ struct CConstantBufferAllocator
 	bool Allocate(CConstantBuffer* cbuffer)
 	{
 		FUNCTION_PROFILER(gEnv->pSystem, PROFILE_RENDERER);
+		CRY_ASSERT(cbuffer && cbuffer->m_size && "Bad allocation request");
 		const unsigned size = cbuffer->m_size;
 		const unsigned nsize = NextPower2(size);
 		const unsigned bucket = IntegerLog2(nsize) - 8;
+		CRY_ASSERT(bucket < CRY_ARRAY_COUNT(m_page_buckets) && "Bad allocation size");
 		bool failed = false;
 retry:
 		for (size_t i = m_page_buckets[bucket].size(); i > 0; --i)
@@ -1572,29 +1461,33 @@ retry:
 		}
 		if (!failed)
 		{
-			uint8* base_ptr;
 			++m_pages;
-			D3DBuffer* buffer = NULL;
-			if (gRenDev->m_DevMan.CreateBuffer(
-			      s_PoolConfig.m_cb_bank_size
-			      , 1
-			      , CDeviceManager::USAGE_DIRECT_ACCESS
-			      | CDeviceManager::USAGE_DIRECT_ACCESS_CPU_COHERENT
-			      | CDeviceManager::USAGE_DIRECT_ACCESS_GPU_COHERENT
-	#if defined(CRY_USE_DX12) && (BUFFER_ENABLE_DIRECT_ACCESS == 1)
-			      // under dx12 there is direct access, but through the dynamic-usage flag
-			      | CDeviceManager::USAGE_DYNAMIC
-			      | CDeviceManager::USAGE_CPU_WRITE
-	#endif
-			      , CDeviceManager::BIND_CONSTANT_BUFFER
-			      , &buffer) != S_OK)
+
+			const SBufferLayout Layout =
 			{
-				CryLogAlways("failed to create constant buffer pool");
+				DXGI_FORMAT_UNKNOWN, s_PoolConfig.m_cb_bank_size, 1,
+#if (CRY_PLATFORM_CONSOLE) // UMA
+				CDeviceObjectFactory::USAGE_DIRECT_ACCESS |
+				CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT |
+				CDeviceObjectFactory::USAGE_DIRECT_ACCESS_GPU_COHERENT |
+#endif
+#if (BUFFER_ENABLE_DIRECT_ACCESS == 1) // UMA || PersistentMap
+				CDeviceObjectFactory::USAGE_CPU_WRITE |
+#endif
+				CDeviceObjectFactory::BIND_CONSTANT_BUFFER
+			};
+
+			CDeviceBuffer* buffer;
+			if (!(buffer = CDeviceBuffer::Create(Layout, nullptr)))
+			{
+				CryLogAlways("Failed to create constant buffer pool");
 				return false;
 			}
-			CDeviceManager::ExtractBasePointer<BBT_CONSTANT_BUFFER>(buffer, base_ptr);
-			m_page_buckets[bucket].push_back(
-			  new CPartitionAllocator(buffer, base_ptr, s_PoolConfig.m_cb_bank_size, nsize));
+
+			uint8* base_ptr;
+			CDeviceObjectFactory::ExtractBasePointer(buffer->GetBuffer(), D3D11_MAP_WRITE_NO_OVERWRITE, base_ptr);
+
+			m_page_buckets[bucket].push_back(new CPartitionAllocator(buffer, base_ptr, s_PoolConfig.m_cb_bank_size, nsize));
 			failed = true;
 			goto retry;
 		}
@@ -1640,7 +1533,7 @@ public:
 	{}
 	virtual ~SBufferPool() {}
 
-	virtual item_handle_t Allocate(size_t)                                                            { return ~0u; }
+	virtual item_handle_t Allocate(buffer_size_t, bool bUsePool)                                      { return ~0u; }
 	virtual void          Free(SBufferPoolItem* item)                                                 {}
 	virtual bool          CreateResources(bool, bool)                                                 { return false; }
 	virtual bool          FreeResources()                                                             { return false; }
@@ -1652,7 +1545,7 @@ public:
 	virtual void*         BeginRead(SBufferPoolItem* item)                                            { return NULL; }
 	virtual void*         BeginWrite(SBufferPoolItem* item)                                           { return NULL; }
 	virtual void          EndReadWrite(SBufferPoolItem* item, bool requires_flush)                    {}
-	virtual void          Write(SBufferPoolItem* item, const void* src, size_t size)                  { __debugbreak(); }
+	virtual void          Write(SBufferPoolItem* item, const void* src, buffer_size_t size, buffer_size_t offset) { __debugbreak(); }
 	SBufferPoolItem*      Resolve(item_handle_t handle)                                               { return &m_item_table[handle]; }
 };
 
@@ -1662,14 +1555,14 @@ template<
   size_t BIND_FLAGS,
   size_t USAGE_FLAGS,
   typename Allocator,
-  template<size_t> class Updater,
+  template<size_t,size_t> class Updater,
   size_t ALIGNMENT = SPoolConfig::POOL_ALIGNMENT>
-struct CBufferPoolImpl
+struct CBufferPoolImpl final
 	: public SBufferPool
 	  , private IDefragAllocatorPolicy
 {
-	typedef Allocator           allocator_t;
-	typedef Updater<BIND_FLAGS> updater_t;
+	typedef Allocator                       allocator_t;
+	typedef Updater<BIND_FLAGS,USAGE_FLAGS> updater_t;
 
 	// The item allocator backing this storage
 	allocator_t m_allocator;
@@ -1716,8 +1609,8 @@ struct CBufferPoolImpl
 #if !defined(_RELEASE)
 		if (m_lockstep_fence && block)
 		{
-			gRenDev->m_DevMan.IssueFence(m_lockstep_fence);
-			gRenDev->m_DevMan.SyncFence(m_lockstep_fence, true);
+			GetDeviceObjectFactory().IssueFence(m_lockstep_fence);
+			GetDeviceObjectFactory().SyncFence(m_lockstep_fence, true);
 		}
 #endif
 	}
@@ -1727,9 +1620,9 @@ struct CBufferPoolImpl
 	{
 		IDefragAllocatorCopyNotification* m_notification;
 		item_handle_t                     m_item_handle;
-		UINT_PTR                          m_src_offset;
-		UINT_PTR                          m_dst_offset;
-		UINT_PTR                          m_size;
+		buffer_size_t                     m_src_offset;
+		buffer_size_t                     m_dst_offset;
+		buffer_size_t                     m_size;
 		DeviceFenceHandle                 m_copy_fence;
 		DeviceFenceHandle                 m_relocate_fence;
 		bool                              m_moving     : 1;
@@ -1752,8 +1645,8 @@ struct CBufferPoolImpl
 		{}
 		~SPendingMove()
 		{
-			if (m_copy_fence) gRenDev->m_DevMan.ReleaseFence(m_copy_fence);
-			if (m_relocate_fence) gRenDev->m_DevMan.ReleaseFence(m_relocate_fence);
+			if (m_copy_fence) GetDeviceObjectFactory().ReleaseFence(m_copy_fence);
+			if (m_relocate_fence) GetDeviceObjectFactory().ReleaseFence(m_relocate_fence);
 		}
 	};
 	std::vector<SPendingMove, stl::STLGlobalAllocator<SPendingMove>> m_pending_moves;
@@ -1765,7 +1658,7 @@ struct CBufferPoolImpl
 		// Should have finished by now ... soft-sync to fence, if not done, don't finish
 		if (move.m_moving)
 		{
-			if (gRenDev->m_DevMan.SyncFence(move.m_copy_fence, block, block) == S_OK)
+			if (GetDeviceObjectFactory().SyncFence(move.m_copy_fence, block, block) == S_OK)
 			{
 				move.m_notification->bDstIsValid = true;
 				move.m_moving = false;
@@ -1775,7 +1668,7 @@ struct CBufferPoolImpl
 		// point where the new destination has been considered valid
 		else if (move.m_relocating)
 		{
-			if (gRenDev->m_DevMan.SyncFence(move.m_relocate_fence, block, block) == S_OK)
+			if (GetDeviceObjectFactory().SyncFence(move.m_relocate_fence, block, block) == S_OK)
 			{
 				move.m_notification->bSrcIsUnneeded = true;
 				move.m_relocating = false;
@@ -1789,12 +1682,12 @@ struct CBufferPoolImpl
 		}
 		if (done)
 		{
-			UINT_PTR nDecOffs = move.m_canceled && !move.m_relocated
+			buffer_size_t nDecOffs = move.m_canceled && !move.m_relocated
 			                    ? move.m_dst_offset
 			                    : move.m_src_offset;
 
 			{
-				int nSrcBank = nDecOffs / s_PoolConfig.m_pool_bank_size;
+				uint32 nSrcBank = nDecOffs / s_PoolConfig.m_pool_bank_size;
 				SBufferPoolBank* bank = &m_bank_table[m_banks[nSrcBank]];
 				bank->m_free_space += move.m_size;
 			}
@@ -1814,24 +1707,27 @@ struct CBufferPoolImpl
 		FUNCTION_PROFILER_RENDERER;
 		// Allocate a new bank
 		size_t bank_index = ~0u;
-		D3DBuffer* buffer;
+		CDeviceBuffer* buffer;
 		SBufferPoolBank* bank = NULL;
 		{
 			DB_MEMREPLAY_SCOPE(EMemReplayAllocClass::C_UserPointer, EMemReplayUserPointerClass::C_CryMalloc);
-			if (gRenDev->m_DevMan.CreateBuffer(
-			      s_PoolConfig.m_pool_bank_size
-			      , 1
-			      , USAGE_FLAGS | CDeviceManager::USAGE_DIRECT_ACCESS
-#if defined(CRY_USE_DX12) && (BUFFER_ENABLE_DIRECT_ACCESS == 1) && !BUFFER_USE_STAGED_UPDATES
-			      // under dx12 there is direct access, but through the dynamic-usage flag
-			      | CDeviceManager::USAGE_DYNAMIC
-			      | CDeviceManager::USAGE_CPU_WRITE
+
+			const SBufferLayout Layout =
+			{
+				DXGI_FORMAT_UNKNOWN, s_PoolConfig.m_pool_bank_size, 1,
+#if !BUFFER_USE_STAGED_UPDATES && (CRY_PLATFORM_CONSOLE) // UMA
+				CDeviceObjectFactory::USAGE_DIRECT_ACCESS |
 #endif
-			      , BIND_FLAGS
-			      , &buffer) != S_OK)
+#if !BUFFER_USE_STAGED_UPDATES && (BUFFER_ENABLE_DIRECT_ACCESS == 1) // UMA || PersistentMap
+				CDeviceObjectFactory::USAGE_CPU_WRITE |
+#endif
+				USAGE_FLAGS | BIND_FLAGS
+			};
+
+			if (!(buffer = CDeviceBuffer::Create(Layout, nullptr)))
 			{
 				CryLogAlways("SBufferPoolImpl::Allocate: could not allocate additional bank of size %" PRISIZE_T, s_PoolConfig.m_pool_bank_size);
-				return NULL;
+				return nullptr;
 			}
 		}
 		bank = &m_bank_table[bank_index = m_bank_table.Allocate()];
@@ -1839,7 +1735,7 @@ struct CBufferPoolImpl
 		bank->m_capacity = s_PoolConfig.m_pool_bank_size;
 		bank->m_free_space = s_PoolConfig.m_pool_bank_size;
 #if !BUFFER_USE_STAGED_UPDATES
-		CDeviceManager::ExtractBasePointer<BIND_FLAGS>(buffer, bank->m_base_ptr);
+		CDeviceObjectFactory::ExtractBasePointer(buffer->GetBuffer(), D3D11_MAP_WRITE_NO_OVERWRITE, bank->m_base_ptr);
 #endif
 		m_banks.push_back(bank_index);
 		return bank;
@@ -1869,24 +1765,27 @@ struct CBufferPoolImpl
 		FUNCTION_PROFILER_RENDERER;
 		{
 			DB_MEMREPLAY_SCOPE(EMemReplayAllocClass::C_UserPointer, EMemReplayUserPointerClass::C_CryMalloc);
-			if (gRenDev->m_DevMan.CreateBuffer(
-			      s_PoolConfig.m_pool_bank_size
-			      , 1
-			      , USAGE_FLAGS | CDeviceManager::USAGE_DIRECT_ACCESS
-#if defined(CRY_USE_DX12) && (BUFFER_ENABLE_DIRECT_ACCESS == 1) && !BUFFER_USE_STAGED_UPDATES
-			      // under dx12 there is direct access, but through the dynamic-usage flag
-			      | CDeviceManager::USAGE_DYNAMIC
-			      | CDeviceManager::USAGE_CPU_WRITE
+
+			const SBufferLayout Layout =
+			{
+				DXGI_FORMAT_UNKNOWN, s_PoolConfig.m_pool_bank_size, 1,
+#if !BUFFER_USE_STAGED_UPDATES && (CRY_PLATFORM_CONSOLE) // UMA
+				CDeviceObjectFactory::USAGE_DIRECT_ACCESS |
 #endif
-			      , BIND_FLAGS
-			      , &bank->m_buffer) != S_OK)
+#if !BUFFER_USE_STAGED_UPDATES && (BUFFER_ENABLE_DIRECT_ACCESS == 1) // UMA || PersistentMap
+				CDeviceObjectFactory::USAGE_CPU_WRITE |
+#endif
+				USAGE_FLAGS | BIND_FLAGS
+			};
+
+			if (!(bank->m_buffer = CDeviceBuffer::Create(Layout, nullptr)))
 			{
 				CryLogAlways("SBufferPoolImpl::Allocate: could not re-allocate freed bank of size %" PRISIZE_T, s_PoolConfig.m_pool_bank_size);
 				return false;
 			}
 		}
 #if !BUFFER_USE_STAGED_UPDATES
-		CDeviceManager::ExtractBasePointer<BIND_FLAGS>(bank->m_buffer, bank->m_base_ptr);
+		CDeviceObjectFactory::ExtractBasePointer(bank->m_buffer->GetBuffer(), D3D11_MAP_WRITE_NO_OVERWRITE, bank->m_base_ptr);
 #endif
 		return true;
 	}
@@ -1900,9 +1799,13 @@ struct CBufferPoolImpl
 			IF (bank.m_capacity != bank.m_free_space, 1)
 				continue;
 			DB_MEMREPLAY_SCOPE(EMemReplayAllocClass::C_UserPointer, EMemReplayUserPointerClass::C_CryMalloc);
+#if !BUFFER_USE_STAGED_UPDATES
+			if (bank.m_buffer)
+				CDeviceObjectFactory::ReleaseBasePointer(bank.m_buffer->GetBuffer());
+#endif
 			UnsetStreamSources(bank.m_buffer);
 			SAFE_RELEASE(bank.m_buffer);
-			bank.m_base_ptr = NULL;
+			bank.m_base_ptr = nullptr;
 		}
 	}
 
@@ -1947,7 +1850,7 @@ struct CBufferPoolImpl
 	  , UINT_PTR dstOffset
 	  , UINT_PTR srcOffset
 	  , UINT_PTR size
-	  , IDefragAllocatorCopyNotification* pNotification)
+	  , IDefragAllocatorCopyNotification* pNotification) final
 	{
 #if CRY_PLATFORM_WINDOWS && CRY_PLATFORM_64BIT // Workaround for Win64, using a C-cast here breaks Orbis
 	#pragma warning( push )
@@ -1982,7 +1885,11 @@ struct CBufferPoolImpl
 		// The below should never happen in practice, but who knows for sure, so to be
 		// on the safe side we account for the fact that the allocator might want to move
 		// an allocation onto an empty bank.
+<<<<<<< HEAD
 		IF (bank->m_buffer == NULL, 0)
+=======
+		IF (bank->m_buffer == nullptr, 0)
+>>>>>>> upstream/stabilisation
 		{
 			if (RecreateBank(bank) == false)
 			{
@@ -1990,32 +1897,37 @@ struct CBufferPoolImpl
 				return 0;
 			}
 		}
-		bank->m_free_space -= size;
+
+		DEVBUFFERMAN_ASSERT(size      <= UINT_PTR(~buffer_size_t(0)));
+		DEVBUFFERMAN_ASSERT(srcOffset <= UINT_PTR(~buffer_size_t(0)));
+		DEVBUFFERMAN_ASSERT(dstOffset <= UINT_PTR(~buffer_size_t(0)));
+
+		bank->m_free_space -= buffer_size_t(size);
 
 		SPendingMove& pending = m_pending_moves[pm];
 		pending.m_notification = pNotification;
 		pending.m_item_handle = handle;
-		pending.m_src_offset = srcOffset;
-		pending.m_dst_offset = dstOffset;
-		pending.m_size = size;
+		pending.m_src_offset = buffer_size_t(srcOffset);
+		pending.m_dst_offset = buffer_size_t(dstOffset);
+		pending.m_size       = buffer_size_t(size);
 
 		// Perform the actual move in (hopefully) hardware
 		m_updater.Move(
 		  bank->m_buffer
-		  , size
+		  , buffer_size_t(size)
 		  , dstOffset & s_PoolConfig.m_pool_bank_mask
 		  , old_item->m_buffer
 		  , old_item->m_size
 		  , old_item->m_offset);
 
 		// Issue a fence so that the copy can be synced
-		gRenDev->m_DevMan.IssueFence(pending.m_copy_fence);
+		GetDeviceObjectFactory().IssueFence(pending.m_copy_fence);
 		pending.m_moving = true;
 		// The move will be considered "done" (bDstIsValid) on the next Update call
 		// thanks to r_flush being one, this is always true!
 		return pm + 1;
 	}
-	void Relocate(uint32 userMoveId, void* pContext, UINT_PTR newOffset, UINT_PTR oldOffset, UINT_PTR size)
+	void Relocate(uint32 userMoveId, void* pContext, UINT_PTR newOffset, UINT_PTR oldOffset, UINT_PTR size) final
 	{
 		// Swap both items. The previous item will be the new item and will get freed upon
 		// the next update loop
@@ -2030,21 +1942,21 @@ struct CBufferPoolImpl
 		item.m_buffer = bank->m_buffer;
 		// Issue a fence so that the previous location will only be able
 		// to be shelled after this point in terms of gpu execution
-		gRenDev->m_DevMan.IssueFence(move.m_relocate_fence);
+		GetDeviceObjectFactory().IssueFence(move.m_relocate_fence);
 		move.m_relocating = true;
 		move.m_relocated = true;
 
 		DB_MEMREPLAY_SCOPE(EMemReplayAllocClass::C_UserPointer, EMemReplayUserPointerClass::C_CryMalloc);
 		DB_MEMREPLAY_SCOPE_REALLOC(old_offset, bank->m_base_ptr + item.m_offset, item.m_size, ALIGNMENT);
 	}
-	void CancelCopy(uint32 userMoveId, void* pContext, bool bSync)
+	void CancelCopy(uint32 userMoveId, void* pContext, bool bSync) final
 	{
 		// Remove the move from the list of pending moves, free the destination item
 		// as it's not going to be used anymore
 		SPendingMove& move = m_pending_moves[userMoveId - 1];
 		move.m_canceled = true;
 	}
-	void SyncCopy(void* pContext, UINT_PTR dstOffset, UINT_PTR srcOffset, UINT_PTR size) { __debugbreak(); }
+	void SyncCopy(void* pContext, UINT_PTR dstOffset, UINT_PTR srcOffset, UINT_PTR size) final { __debugbreak(); }
 
 public:
 	CBufferPoolImpl(SStagingResources& resources)
@@ -2074,41 +1986,49 @@ public:
 
 	// Try to satisfy an allocation of a given size from within the pool
 	// allocating a new bank if all previously created banks are full
-	item_handle_t Allocate(size_t size)
+	item_handle_t Allocate(buffer_size_t size, bool bUsePool) final
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
-		D3DBuffer* buffer = NULL;
+		CDeviceBuffer* buffer = NULL;
 		SBufferPoolItem* item = NULL;
 		SBufferPoolBank* bank = NULL;
-		size_t offset = 0u, bank_index = 0u;
+		size_t bank_index = 0u;
 		item_handle_t handle;
 		bool failed = false;
 
 		// Align the allocation size up to the configured allocation alignment
-		size = (max(size, size_t(1u)) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
+		size = (max(size, buffer_size_t(1u)) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
 
 		// Handle the case where an allocation cannot be satisfied by a pool bank
 		// as the size is too large and create a free standing buffer therefore.
 		// Note: Care should be taken to reduce the amount of unpooled items!
+<<<<<<< HEAD
 		IF (size > s_PoolConfig.m_pool_bank_size, 0)
+=======
+		IF (size > s_PoolConfig.m_pool_bank_size || !bUsePool, 0)
+>>>>>>> upstream/stabilisation
 		{
 freestanding:
-			if (gRenDev->m_DevMan.CreateBuffer(
-			      size
-			      , 1
-			      , USAGE_FLAGS | CDeviceManager::USAGE_DIRECT_ACCESS
-#if defined(CRY_USE_DX12) && (BUFFER_ENABLE_DIRECT_ACCESS == 1) && !BUFFER_USE_STAGED_UPDATES
-			      // under dx12 there is direct access, but through the dynamic-usage flag
-			      | CDeviceManager::USAGE_DYNAMIC
-			      | CDeviceManager::USAGE_CPU_WRITE
+
+			const SBufferLayout Layout =
+			{
+				DXGI_FORMAT_UNKNOWN, size, 1,
+#if !BUFFER_USE_STAGED_UPDATES && (CRY_PLATFORM_CONSOLE) // UMA
+				CDeviceObjectFactory::USAGE_DIRECT_ACCESS |
 #endif
-			      , BIND_FLAGS
-			      , &buffer) != S_OK)
+#if !BUFFER_USE_STAGED_UPDATES && (BUFFER_ENABLE_DIRECT_ACCESS == 1) // UMA || PersistentMap
+				CDeviceObjectFactory::USAGE_CPU_WRITE |
+#endif
+				USAGE_FLAGS | BIND_FLAGS
+			};
+
+			if (!(buffer = CDeviceBuffer::Create(Layout, nullptr)))
 			{
 				CryLogAlways("SBufferPoolImpl::Allocate: could not allocate buffer of size %" PRISIZE_T, size);
 				gEnv->bIsOutOfVideoMemory = true;
 				return ~0u;
 			}
+
 			item = &m_item_table[handle = m_item_table.Allocate()];
 			item->m_buffer = buffer;
 			item->m_pool = this;
@@ -2117,7 +2037,7 @@ freestanding:
 			item->m_size = size;
 			item->m_defrag_handle = IDefragAllocator::InvalidHdl;
 #if !BUFFER_USE_STAGED_UPDATES
-			CDeviceManager::ExtractBasePointer<BIND_FLAGS>(buffer, item->m_base_ptr);
+			CDeviceObjectFactory::ExtractBasePointer(buffer->GetBuffer(), D3D11_MAP_WRITE_NO_OVERWRITE, item->m_base_ptr);
 #endif
 			return handle;
 		}
@@ -2132,7 +2052,11 @@ retry:
 			item->m_offset &= s_PoolConfig.m_pool_bank_mask;
 			DEVBUFFERMAN_ASSERT(bank_index < m_banks.size());
 			bank = &m_bank_table[m_banks[bank_index]];
+<<<<<<< HEAD
 			IF (bank->m_buffer == NULL, 0)
+=======
+			IF (bank->m_buffer == nullptr, 0)
+>>>>>>> upstream/stabilisation
 			{
 				if (RecreateBank(bank) == false)
 				{
@@ -2166,6 +2090,9 @@ retry:
 			PrintDebugStats();
 #endif
 
+#if !BUFFER_USE_STAGED_UPDATES
+			CDeviceObjectFactory::ReleaseBasePointer(bank->m_buffer->GetBuffer());
+#endif
 			// Extending the allocator failed, so the newly created bank is rolled back
 			UnsetStreamSources(bank->m_buffer);
 			SAFE_RELEASE(bank->m_buffer);
@@ -2180,12 +2107,15 @@ retry:
 	}
 
 	// Free a previously made allocation
-	void Free(SBufferPoolItem* item)
+	void Free(SBufferPoolItem* item) final
 	{
 		DEVBUFFERMAN_ASSERT(item);
 		// Handle un pooled buffers
 		IF ((item->m_bank) == ~0u, 0)
 		{
+#if !BUFFER_USE_STAGED_UPDATES
+			CDeviceObjectFactory::ReleaseBasePointer(item->m_buffer->GetBuffer());
+#endif
 			UnsetStreamSources(item->m_buffer);
 			SAFE_RELEASE(item->m_buffer);
 			m_item_table.Free(item->m_handle);
@@ -2195,7 +2125,7 @@ retry:
 	}
 
 	//////////////////////////////////////////////////////////////////////////////////////
-	bool CreateResources(bool enable_defragging, bool best_fit)
+	bool CreateResources(bool enable_defragging, bool best_fit) final
 	{
 		IDefragAllocatorPolicy* defrag_policy = enable_defragging ? this : NULL;
 		if (!m_allocator.Initialize(defrag_policy, best_fit))
@@ -2211,18 +2141,18 @@ retry:
 		m_pending_moves.resize(s_PoolConfig.m_pool_max_moves_per_update);
 		for (size_t i = 0; i < s_PoolConfig.m_pool_max_moves_per_update; ++i)
 		{
-			if (gRenDev->m_DevMan.CreateFence(m_pending_moves[i].m_copy_fence) != S_OK)
+			if (GetDeviceObjectFactory().CreateFence(m_pending_moves[i].m_copy_fence) != S_OK)
 			{
 				CryLogAlways("Could not create buffer pool copy gpu fence");
 				return false;
 			}
-			if (gRenDev->m_DevMan.CreateFence(m_pending_moves[i].m_relocate_fence) != S_OK)
+			if (GetDeviceObjectFactory().CreateFence(m_pending_moves[i].m_relocate_fence) != S_OK)
 			{
 				CryLogAlways("Could not create buffer pool relocate fence");
 				return false;
 			}
 		}
-		if (gRenDev->m_DevMan.CreateFence(m_lockstep_fence) != S_OK)
+		if (GetDeviceObjectFactory().CreateFence(m_lockstep_fence) != S_OK)
 		{
 			CryLogAlways("Could not create lockstep debugging fence");
 			return false;
@@ -2231,7 +2161,7 @@ retry:
 	}
 
 	//////////////////////////////////////////////////////////////////////////////////////
-	bool FreeResources()
+	bool FreeResources() final
 	{
 		Sync();
 		if (m_updater.FreeResources() == false)
@@ -2240,7 +2170,7 @@ retry:
 			return false;
 		for (size_t i = 0, end = m_banks.size(); i < end; ++i)
 			m_bank_table.Free((item_handle_t)m_banks[i]);
-		if (m_lockstep_fence && gRenDev->m_DevMan.ReleaseFence(m_lockstep_fence) != S_OK)
+		if (m_lockstep_fence && GetDeviceObjectFactory().ReleaseFence(m_lockstep_fence) != S_OK)
 			return false;
 		stl::free_container(m_banks);
 		stl::free_container(m_pending_moves);
@@ -2248,10 +2178,10 @@ retry:
 	}
 
 	//////////////////////////////////////////////////////////////////////////////////////
-	void ReleaseEmptyBanks() { RetireEmptyBanks(); }
+	void ReleaseEmptyBanks() final { RetireEmptyBanks(); }
 
 	//////////////////////////////////////////////////////////////////////////////////////
-	void Sync()
+	void Sync() final
 	{
 		for (size_t i = 0, end = m_pending_moves.size(); i < end; ++i)
 		{
@@ -2274,7 +2204,7 @@ retry:
 	}
 
 	//////////////////////////////////////////////////////////////////////////////////////
-	void Update(uint32 frame_id, DeviceFenceHandle fence, bool allow_defragmentation)
+	void Update(uint32 frame_id, DeviceFenceHandle fence, bool allow_defragmentation) final
 	{
 		// Loop over the pending moves and update their state accordingly
 		uint32 inflight = 0;
@@ -2292,7 +2222,7 @@ retry:
 		for (uint32 i = m_current_frame; i < m_current_frame + SPoolConfig::POOL_FRAME_QUERY_COUNT; ++i)
 		{
 			SDeferredItems& deferred = m_deferred_items[i & SPoolConfig::POOL_FRAME_QUERY_MASK];
-			if (deferred.m_fence && gRenDev->m_DevMan.SyncFence(deferred.m_fence, false, false) != S_OK)
+			if (deferred.m_fence && GetDeviceObjectFactory().SyncFence(deferred.m_fence, false, false) != S_OK)
 				continue;
 			RetirePendingFrees(deferred);
 		}
@@ -2308,37 +2238,55 @@ retry:
 
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// Buffer IO methods
-	void* BeginRead(SBufferPoolItem* item)
+	void* BeginRead(SBufferPoolItem* item) final
 	{
 		SyncToGPU(CRenderer::CV_r_enable_full_gpu_sync != 0);
 
+<<<<<<< HEAD
 		DEVBUFFERMAN_VERIFY(item->m_used);
+=======
+		DEVBUFFERMAN_ASSERT(item->m_used);
+>>>>>>> upstream/stabilisation
 		IF (item->m_bank != ~0u, 1)
 			m_allocator.PinItem(item);
 #if !BUFFER_USE_STAGED_UPDATES
 		IF (item->m_bank != ~0u, 1)
 		{
 			SBufferPoolBank& bank = m_bank_table[m_banks[item->m_bank]];
+<<<<<<< HEAD
 			IF (bank.m_base_ptr != NULL && CRenderer::CV_r_buffer_enable_lockless_updates, 1)
 				return bank.m_base_ptr + item->m_offset;
+=======
+			IF(bank.m_base_ptr != NULL && CRenderer::CV_r_buffer_enable_lockless_updates, 1)
+			{
+				// Transfer sub-set of GPU resource to CPU, also allows graphics debugger and multi-gpu broadcaster to do the right thing
+				item->m_marked |= CDeviceObjectFactory::MarkReadRange(item->m_buffer->GetBuffer(), item->m_offset, item->m_size, D3D11_MAP_READ);
+
+				return bank.m_base_ptr + item->m_offset;
+			}
+>>>>>>> upstream/stabilisation
 		}
 #endif
 		return m_updater.BeginRead(item->m_buffer, item->m_size, item->m_offset);
 	}
 
-	void* BeginWrite(SBufferPoolItem* item)
+private:
+	SBufferPoolItem* GetWritableItem(SBufferPoolItem* item)
 	{
-		SyncToGPU(CRenderer::CV_r_enable_full_gpu_sync != 0);
 		// In case item was previously used and the current last fence can not be
 		// synced already we allocate a new item and swap it with the existing one
 		// to make sure that we do not contend with the gpu on an already
 		// used item's buffer update.
+<<<<<<< HEAD
 		size_t item_handle = item->m_handle;
 		IF (item->m_bank != ~0u, 1)
 			m_allocator.PinItem(item);
 		IF (item->m_bank != ~0u && item->m_used /*&& gRenDev->m_DevMan.SyncFence(m_current_fence, false, false) != S_OK*/, 0)
+=======
+		IF(item->m_bank != ~0u && item->m_used /*&& GetDeviceObjectFactory().SyncFence(m_current_fence, false, false) != S_OK*/, 0)
+>>>>>>> upstream/stabilisation
 		{
-			item_handle_t handle = Allocate(item->m_size);
+			item_handle_t handle = Allocate(item->m_size, true);
 			if (handle == ~0u)
 			{
 				CryLogAlways("failed to allocate new slot on write");
@@ -2359,14 +2307,15 @@ retry:
 		}
 		item->m_used = 1u;
 		PREFAST_SUPPRESS_WARNING(6326)
-		if ((USAGE_FLAGS& CDeviceManager::USAGE_DIRECT_ACCESS_CPU_COHERENT) == 0)
+		if ((USAGE_FLAGS & CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT) == 0)
 		{
 			item->m_cpu_flush = 1;
 		}
-		if ((USAGE_FLAGS& CDeviceManager::USAGE_DIRECT_ACCESS_GPU_COHERENT) == 0)
+		if ((USAGE_FLAGS & CDeviceObjectFactory::USAGE_DIRECT_ACCESS_GPU_COHERENT) == 0)
 		{
 			item->m_gpu_flush = 1;
 		}
+<<<<<<< HEAD
 #if !BUFFER_USE_STAGED_UPDATES
 		IF (item->m_bank != ~0u, 1)
 		{
@@ -2379,6 +2328,12 @@ retry:
 	}
 
 	void EndReadWrite(SBufferPoolItem* item, bool requires_flush)
+=======
+		return item;
+	}
+
+	SBufferPoolItem* ReturnUnwritableItem(SBufferPoolItem* item)
+>>>>>>> upstream/stabilisation
 	{
 		IF (item->m_cow_handle != ~0u, 0)
 		{
@@ -2398,50 +2353,178 @@ retry:
 				item = new_item;
 			}
 		}
+		return item;
+	}
+
+	void WriteStaged(SBufferPoolItem* item_, const void* src, buffer_size_t size, buffer_size_t offset)
+	{
+		SyncToGPU(CRenderer::CV_r_enable_full_gpu_sync != 0);
+		SBufferPoolItem* item = item_;
+
+		IF(item->m_bank != ~0u, 1)
+			m_allocator.PinItem(item);
+
+		item = GetWritableItem(item_);
+
+		m_updater.Write(item->m_buffer, size, item->m_offset + offset, src);
+		
+		item = ReturnUnwritableItem(item_);
+
+		IF(item->m_bank != ~0u, 1)
+			m_allocator.UnpinItem(item);
+
+		SyncToGPU(CRenderer::CV_r_enable_full_gpu_sync != 0);
+	}
+
 #if !BUFFER_USE_STAGED_UPDATES
+	void WriteUnstaged(SBufferPoolItem* item_, const void* src, buffer_size_t size, buffer_size_t offset)
+	{
+		SyncToGPU(CRenderer::CV_r_enable_full_gpu_sync != 0);
+		SBufferPoolItem* item = item_;
+		uint8* item_base_ptr = nullptr;
+		const bool requires_flush = false;
+
+		IF(item->m_bank != ~0u, 1)
+			m_allocator.PinItem(item);
+
+		item = GetWritableItem(item_);
+
+		IF(item->m_bank != ~0u, 1)
+		{
+			SBufferPoolBank& bank = m_bank_table[m_banks[item->m_bank]];
+			IF(bank.m_base_ptr != NULL && CRenderer::CV_r_buffer_enable_lockless_updates, 1)
+			{
+				item_base_ptr = bank.m_base_ptr + item->m_offset;
+			}
+		}
+
+		// Transfer sub-set of GPU resource to CPU, also allows graphics debugger and multi-gpu broadcaster to do the right thing
+		CDeviceObjectFactory::UploadContents<true>(item->m_buffer->GetBuffer(), 0, item->m_offset + offset, size, BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS), src, item_base_ptr);
+
+		item = ReturnUnwritableItem(item_);
+
 		IF (item->m_bank != ~0u, 1)
 		{
 			m_allocator.UnpinItem(item);
+
 			SBufferPoolBank* bank = &m_bank_table[m_banks[item->m_bank]];
 			IF (bank->m_base_ptr != NULL && CRenderer::CV_r_buffer_enable_lockless_updates, 1)
 			{
+#if BUFFER_ENABLE_DIRECT_ACCESS
+				if (item->m_cpu_flush)
+				{
+					if (requires_flush)
+					{
+						STATOSCOPE_TIMER(GetStatoscopeData(0).m_cpu_flush_time);
+						CDeviceObjectFactory::InvalidateCpuCache(
+							bank->m_base_ptr, item->m_size, item->m_offset);
+					}
+					item->m_cpu_flush = 0;
+				}
+				if (item->m_gpu_flush)
+				{
+					GetDeviceObjectFactory().InvalidateBuffer(
+						bank->m_buffer->GetBuffer()
+						, bank->m_base_ptr
+						, item->m_offset
+						, item->m_size
+						, _GetThreadID());
+					item->m_gpu_flush = 0;
+				}
+#endif
+				return;
+			}
+		}
+
+		SyncToGPU(CRenderer::CV_r_enable_full_gpu_sync != 0);
+	}
+#endif
+
+public:
+	void* BeginWrite(SBufferPoolItem* item) final
+	{
+		SyncToGPU(CRenderer::CV_r_enable_full_gpu_sync != 0);
+
+		IF(item->m_bank != ~0u, 1)
+			m_allocator.PinItem(item);
+
+		item = GetWritableItem(item);
+
+#if !BUFFER_USE_STAGED_UPDATES
+		IF (item->m_bank != ~0u, 1)
+		{
+			SBufferPoolBank& bank = m_bank_table[m_banks[item->m_bank]];
+			IF(bank.m_base_ptr != NULL && CRenderer::CV_r_buffer_enable_lockless_updates, 1)
+			{
+				// Transfer sub-set of GPU resource to CPU, also allows graphics debugger and multi-gpu broadcaster to do the right thing
+				item->m_marked |= CDeviceObjectFactory::MarkReadRange(item->m_buffer->GetBuffer(), item->m_offset, 0, D3D11_MAP_WRITE);
+
+				return bank.m_base_ptr + item->m_offset;
+			}
+		}
+#endif
+
+		return m_updater.BeginWrite(item->m_buffer, item->m_size, item->m_offset);
+	}
+
+	void EndReadWrite(SBufferPoolItem* item, bool requires_flush) final
+	{
+		item = ReturnUnwritableItem(item);
+		IF(item->m_bank != ~0u, 1)
+		{
+			m_allocator.UnpinItem(item);
+
+#if !BUFFER_USE_STAGED_UPDATES
+			SBufferPoolBank* bank = &m_bank_table[m_banks[item->m_bank]];
+			IF (bank->m_base_ptr != NULL && CRenderer::CV_r_buffer_enable_lockless_updates, 1)
+			{
+				// Transfer sub-set of GPU resource to CPU, also allows graphics debugger and multi-gpu broadcaster to do the right thing
+				item->m_marked &= ~CDeviceObjectFactory::MarkWriteRange(item->m_buffer->GetBuffer(), item->m_offset, item->m_size, item->m_marked);
+
 	#if BUFFER_ENABLE_DIRECT_ACCESS
 				if (item->m_cpu_flush)
 				{
 					if (requires_flush)
 					{
 						STATOSCOPE_TIMER(GetStatoscopeData(0).m_cpu_flush_time);
-						CDeviceManager::InvalidateCpuCache(
+						CDeviceObjectFactory::InvalidateCpuCache(
 						  bank->m_base_ptr, item->m_size, item->m_offset);
 					}
+
 					item->m_cpu_flush = 0;
 				}
+
 				if (item->m_gpu_flush)
 				{
-					gRenDev->m_DevMan.InvalidateBuffer(
-					  bank->m_buffer
+					GetDeviceObjectFactory().InvalidateBuffer(
+					  bank->m_buffer->GetBuffer()
 					  , bank->m_base_ptr
 					  , item->m_offset
 					  , item->m_size
 					  , _GetThreadID());
+
 					item->m_gpu_flush = 0;
 				}
 	#endif
 				return;
 			}
-		}
 #endif
-		m_updater.EndReadWrite();
+		}
+
+		m_updater.EndReadWrite(item->m_buffer, item->m_size, item->m_offset);
 
 		SyncToGPU(CRenderer::CV_r_enable_full_gpu_sync != 0);
 	}
 
-	void Write(SBufferPoolItem* item, const void* src, size_t size)
+	void Write(SBufferPoolItem* item, const void* src, buffer_size_t size, buffer_size_t offset) final
 	{
-		DEVBUFFERMAN_ASSERT(size <= item->m_size);
+		DEVBUFFERMAN_ASSERT((size + offset) <= item->m_size);
+
+		size = min(item->m_size, size);
 
 		if (item->m_size <= s_PoolConfig.m_pool_bank_size)
 		{
+<<<<<<< HEAD
 			void* const dst = BeginWrite(item);
 			IF (dst, 1)
 			{
@@ -2449,6 +2532,13 @@ retry:
 				const bool requires_flush = CopyData(dst, src, csize);
 				EndReadWrite(item, requires_flush);
 			}
+=======
+#if !BUFFER_USE_STAGED_UPDATES
+			WriteUnstaged(item, src, size, offset);
+#else
+			WriteStaged(item, src, size, offset);
+#endif
+>>>>>>> upstream/stabilisation
 			return;
 		}
 
@@ -2459,8 +2549,9 @@ retry:
 
 		item->m_used = 1u;
 
-		for (size_t offset = 0; offset < size; )
+		for (buffer_size_t cursor = 0; cursor < size; )
 		{
+<<<<<<< HEAD
 			const size_t sz = min(size - offset, s_PoolConfig.m_pool_bank_size);
 			void* const dst = m_updater.BeginWrite(item->m_buffer, sz, item->m_offset + offset);
 			IF (dst, 1)
@@ -2469,6 +2560,14 @@ retry:
 			}
 			m_updater.EndReadWrite();
 			offset += sz;
+=======
+			const buffer_size_t sz = min(size - cursor, s_PoolConfig.m_pool_bank_size);
+			const buffer_size_t of = cursor;
+
+			m_updater.Write(item->m_buffer, sz, item->m_offset + offset + of, reinterpret_cast<const uint8*>(src) + of);
+
+			cursor += sz;
+>>>>>>> upstream/stabilisation
 		}
 
 		SyncToGPU(gRenDev->CV_r_enable_full_gpu_sync != 0);
@@ -2487,20 +2586,24 @@ retry:
 // Corresponding update strategy : d3d11 staging buffers (CopySubResource)
 //
 typedef CBufferPoolImpl<
-    CDeviceManager::BIND_VERTEX_BUFFER
-    , CDeviceManager::USAGE_DEFAULT | CDeviceManager::USAGE_DIRECT_ACCESS_CPU_COHERENT
+    CDeviceObjectFactory::BIND_VERTEX_BUFFER
+    , CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT
     , CDynamicDefragAllocator
-#if BUFFER_USE_STAGED_UPDATES
+#if BUFFER_USE_STAGED_UPDATES && BUFFER_SUPPORT_TRANSIENT_POOLS
+	, CTransientStagingBufferUpdater
+#elif BUFFER_USE_STAGED_UPDATES
     , CStagingBufferUpdater
 #else
     , CDirectBufferUpdater
 #endif
     > SStaticBufferPoolVB;
 typedef CBufferPoolImpl<
-    CDeviceManager::BIND_INDEX_BUFFER
-    , CDeviceManager::USAGE_DEFAULT | CDeviceManager::USAGE_DIRECT_ACCESS_CPU_COHERENT
+    CDeviceObjectFactory::BIND_INDEX_BUFFER
+    , CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT
     , CDynamicDefragAllocator
-#if BUFFER_USE_STAGED_UPDATES
+#if BUFFER_USE_STAGED_UPDATES && BUFFER_SUPPORT_TRANSIENT_POOLS
+	, CTransientStagingBufferUpdater
+#elif BUFFER_USE_STAGED_UPDATES
     , CStagingBufferUpdater
 #else
     , CDirectBufferUpdater
@@ -2518,38 +2621,36 @@ typedef CBufferPoolImpl<
 // Corresponding D3D_USAGE : USAGE_DYNAMIC
 // Corresponding update strategy : NO_OVERWRITE direct map of the buffer
 typedef CBufferPoolImpl<
-    CDeviceManager::BIND_VERTEX_BUFFER
-    , CDeviceManager::USAGE_DYNAMIC
-    | CDeviceManager::USAGE_CPU_WRITE
-    | CDeviceManager::USAGE_DIRECT_ACCESS_CPU_COHERENT
-    | CDeviceManager::USAGE_DIRECT_ACCESS_GPU_COHERENT
+    CDeviceObjectFactory::BIND_VERTEX_BUFFER
+    , CDeviceObjectFactory::USAGE_CPU_WRITE
+    | CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT
+    | CDeviceObjectFactory::USAGE_DIRECT_ACCESS_GPU_COHERENT
     , CDynamicDefragAllocator
 #if BUFFER_USE_STAGED_UPDATES
-    , CDynamicBufferUpdater
+	, CDynamicBufferUpdater
 #else
-    , CDirectBufferUpdater
+	, CDirectBufferUpdater
 #endif
     > SDynamicBufferPoolVB;
 typedef CBufferPoolImpl<
-    CDeviceManager::BIND_INDEX_BUFFER
-    , CDeviceManager::USAGE_DYNAMIC
-    | CDeviceManager::USAGE_CPU_WRITE
-    | CDeviceManager::USAGE_DIRECT_ACCESS_CPU_COHERENT
-    | CDeviceManager::USAGE_DIRECT_ACCESS_GPU_COHERENT
+    CDeviceObjectFactory::BIND_INDEX_BUFFER
+    , CDeviceObjectFactory::USAGE_CPU_WRITE
+    | CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT
+    | CDeviceObjectFactory::USAGE_DIRECT_ACCESS_GPU_COHERENT
     , CDynamicDefragAllocator
 #if BUFFER_USE_STAGED_UPDATES
-    , CDynamicBufferUpdater
+	, CDynamicBufferUpdater
 #else
-    , CDirectBufferUpdater
+	, CDirectBufferUpdater
 #endif
     > SDynamicBufferPoolIB;
 
 #if BUFFER_SUPPORT_TRANSIENT_POOLS
-template<size_t BIND_FLAGS, size_t ALIGNMENT = SPoolConfig::POOL_ALIGNMENT>
-class CTransientBufferPool : public SBufferPool
+template<size_t BIND_FLAGS, buffer_size_t ALIGNMENT = SPoolConfig::POOL_ALIGNMENT>
+class CTransientBufferPool final : public SBufferPool
 {
 	SBufferPoolBank m_backing_buffer;
-	size_t          m_allocation_count;
+	buffer_size_t   m_allocation_count;
 	D3D11_MAP       m_map_type;
 
 public:
@@ -2560,17 +2661,25 @@ public:
 	{
 	}
 
-	item_handle_t Allocate(size_t size)
+	item_handle_t Allocate(buffer_size_t size, bool /*bUsePool*/) final
 	{
 		// Align the allocation size up to the configured allocation alignment
-		size = (max(size, size_t(1u)) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
+		size = (max(size, buffer_size_t(1u)) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
 
 		DEVBUFFERMAN_ASSERT(size <= m_backing_buffer.m_capacity);
 
-		if (m_backing_buffer.m_free_space + size >= m_backing_buffer.m_capacity)
+		if (m_backing_buffer.m_free_space + size > m_backing_buffer.m_capacity)
 		{
 			m_map_type = BINDFLAGS_to_WRITEDISCARD(BIND_FLAGS);
 			m_backing_buffer.m_free_space = 0;
+
+			// DISCARD will re-base the resource pointer
+			CDeviceObjectFactory::ReleaseBasePointer(m_backing_buffer.m_buffer->GetBuffer());
+
+			if (m_backing_buffer.m_buffer->SubstituteUsedResource() != CDeviceResource::eSubResult_Failed)
+				m_map_type = BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS);
+
+			CDeviceObjectFactory::ExtractBasePointer(m_backing_buffer.m_buffer->GetBuffer(), m_map_type, m_backing_buffer.m_base_ptr);
 		}
 
 		SBufferPoolItem* item = &m_item_table[m_item_table.Allocate()];
@@ -2580,51 +2689,65 @@ public:
 		item->m_bank = ~0u;
 		item->m_size = size;
 		item->m_defrag_handle = IDefragAllocator::InvalidHdl;
-		CDeviceManager::ExtractBasePointer<BIND_FLAGS>(m_backing_buffer.m_buffer, item->m_base_ptr);
+		item->m_base_ptr = m_backing_buffer.m_base_ptr;
+
+		// Ensure transient range is an aligned range
+		assert(!(uintptr_t(item->m_offset  ) & (CRY_PLATFORM_ALIGNMENT - 1ULL)));
+		assert(!(uintptr_t(item->m_base_ptr) & (CRY_PLATFORM_ALIGNMENT - 1ULL)));
 
 		m_backing_buffer.m_free_space += size;
 		++m_allocation_count;
 
 		return item->m_handle;
 	}
-	void Free(SBufferPoolItem* item)
+	void Free(SBufferPoolItem* item) final
 	{
 		m_item_table.Free(item->m_handle);
 		--m_allocation_count;
 	}
-	bool CreateResources(bool, bool)
+	bool CreateResources(bool, bool) final
 	{
-		if (gRenDev->m_DevMan.CreateBuffer(
-		      s_PoolConfig.m_transient_pool_size
-		      , 1
-		      , CDeviceManager::USAGE_CPU_WRITE | CDeviceManager::USAGE_DYNAMIC
-		      , BIND_FLAGS
-		      , &m_backing_buffer.m_buffer) != S_OK)
+		const SBufferLayout Layout =
 		{
-			CryLogAlways(
-			  "CTransientBufferPool::CreateResources: could not allocate backing buffer of size %" PRISIZE_T
-			  , s_PoolConfig.m_transient_pool_size);
+			DXGI_FORMAT_UNKNOWN, s_PoolConfig.m_transient_pool_size, 1,
+			CDeviceObjectFactory::USAGE_CPU_WRITE |
+			BIND_FLAGS
+		};
+
+		if (!(m_backing_buffer.m_buffer = CDeviceBuffer::Create(Layout, nullptr)))
+		{
+			CryLogAlways("CTransientBufferPool::CreateResources: could not allocate backing buffer of size %" PRISIZE_T, s_PoolConfig.m_transient_pool_size);
 			return false;
 		}
+
 		m_backing_buffer.m_capacity = s_PoolConfig.m_transient_pool_size;
 		m_backing_buffer.m_free_space = 0;
 		m_backing_buffer.m_handle = ~0u;
-		CDeviceManager::ExtractBasePointer<BIND_FLAGS>(m_backing_buffer.m_buffer, m_backing_buffer.m_base_ptr);
+
+		CDeviceObjectFactory::ExtractBasePointer(m_backing_buffer.m_buffer->GetBuffer(), m_map_type, m_backing_buffer.m_base_ptr);
+
 		return true;
 	}
-	bool FreeResources()
+	bool FreeResources() final
 	{
+		// NOTE: Context could have been freed by ShutDown()
+		if (gcpRendD3D->GetDeviceContext().IsValid())
+		{
+			CDeviceObjectFactory::ReleaseBasePointer(m_backing_buffer.m_buffer->GetBuffer());
+		}
+
 		UnsetStreamSources(m_backing_buffer.m_buffer);
 		SAFE_RELEASE(m_backing_buffer.m_buffer);
 		m_backing_buffer.m_capacity = 0;
 		m_backing_buffer.m_free_space = 0;
 		m_backing_buffer.m_handle = ~0u;
+
 		return true;
 	}
-	bool GetStats(SDeviceBufferPoolStats&) { return false; }
-	bool DebugRender()                     { return false; }
-	void Sync()                            {}
-	void Update(uint32 frameId, DeviceFenceHandle fence, bool allow_defragmentation)
+	bool GetStats(SDeviceBufferPoolStats&) final { return false; }
+	bool DebugRender() final                     { return false; }
+	void Sync() final                            {}
+	void Update(uint32 frameId, DeviceFenceHandle fence, bool allow_defragmentation) final
 	{
 		if (m_allocation_count)
 		{
@@ -2632,55 +2755,51 @@ public:
 			  "CTransientBufferPool::Update %" PRISIZE_T " allocations still in transient pool!"
 			  , m_allocation_count);
 		}
-		m_map_type = BINDFLAGS_to_WRITEDISCARD(BIND_FLAGS);
-		m_backing_buffer.m_free_space = 0;
+
+		if (m_backing_buffer.m_free_space > 0)
+		{
+			m_map_type = BINDFLAGS_to_WRITEDISCARD(BIND_FLAGS);
+			m_backing_buffer.m_free_space = 0;
+
+			// DISCARD will re-base the resource pointer
+			CDeviceObjectFactory::ReleaseBasePointer(m_backing_buffer.m_buffer->GetBuffer());
+
+			if (m_backing_buffer.m_buffer->SubstituteUsedResource() != CDeviceResource::eSubResult_Failed)
+				m_map_type = BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS);
+
+			CDeviceObjectFactory::ExtractBasePointer(m_backing_buffer.m_buffer->GetBuffer(), m_map_type, m_backing_buffer.m_base_ptr);
+		}
 	}
-	void  ReleaseEmptyBanks()              {}
-	void* BeginRead(SBufferPoolItem* item) { return NULL; }
-	void* BeginWrite(SBufferPoolItem* item)
+	void  ReleaseEmptyBanks() final              {}
+	void* BeginRead(SBufferPoolItem* item) final { return NULL; }
+	void* BeginWrite(SBufferPoolItem* item) final
 	{
 		MEMORY_SCOPE_CHECK_HEAP();
-		D3DBuffer* buffer = m_backing_buffer.m_buffer;
-		size_t size = item->m_size;
-		D3D11_MAPPED_SUBRESOURCE mapped_resource;
-		D3D11_MAP map = m_map_type;
-	#if defined(OPENGL) && !DXGL_FULL_EMULATION
-		HRESULT hr = DXGLMapBufferRange(
-		  gcpRendD3D->GetDeviceContext().GetRealDeviceContext()
-		  , buffer
-		  , item->m_offset
-		  , item->m_size
-		  , map
-		  , 0
-		  , &mapped_resource);
+		void *ret;
+	#if BUFFER_ENABLE_DIRECT_ACCESS
+		CDeviceObjectFactory::MarkReadRange(item->m_buffer->GetBuffer(), item->m_offset, 0, D3D11_MAP_WRITE);
+		ret = reinterpret_cast<uint8*>(item->m_base_ptr) + item->m_offset;
 	#else
-		HRESULT hr = gcpRendD3D->GetDeviceContext().Map(
-		  buffer
-		  , 0
-		  , map
-		  , 0
-		  , &mapped_resource);
+		ret = CDeviceObjectFactory::Map(item->m_buffer->GetBuffer(), 0, item->m_offset, 0, m_map_type) + item->m_offset;
 	#endif
-		if (!CHECK_HRESULT(hr))
-		{
-			CryLogAlways("map of staging buffer for WRITING failed!");
-			return NULL;
-		}
-	#if defined(OPENGL) && !DXGL_FULL_EMULATION
-		return reinterpret_cast<uint8*>(mapped_resource.pData);
-	#else
-		return reinterpret_cast<uint8*>(mapped_resource.pData) + item->m_offset;
-	#endif
+		return ret;
 	}
-	void EndReadWrite(SBufferPoolItem* item, bool requires_flush)
+	void EndReadWrite(SBufferPoolItem* item, bool requires_flush) final
 	{
-		gcpRendD3D->GetDeviceContext().Unmap(m_backing_buffer.m_buffer, 0);
+	#if BUFFER_ENABLE_DIRECT_ACCESS
+		CDeviceObjectFactory::MarkWriteRange(item->m_buffer->GetBuffer(), item->m_offset, item->m_size, D3D11_MAP_WRITE);
+	#else
+		CDeviceObjectFactory::Unmap(item->m_buffer->GetBuffer(), 0, item->m_offset, item->m_size, m_map_type);
+	#endif
+
 		m_map_type = BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS);
 	}
-	void Write(SBufferPoolItem* item, const void* src, size_t size)
+	void Write(SBufferPoolItem* item, const void* src, buffer_size_t size, buffer_size_t offset) final
 	{
-		DEVBUFFERMAN_ASSERT(size <= item->m_size);
+		MEMORY_SCOPE_CHECK_HEAP();
+		DEVBUFFERMAN_ASSERT((size + offset) <= item->m_size);
 		DEVBUFFERMAN_ASSERT(item->m_size <= m_backing_buffer.m_capacity);
+<<<<<<< HEAD
 		void* const dst = BeginWrite(item);
 		IF (dst, 1)
 		{
@@ -2688,6 +2807,18 @@ public:
 			const bool requires_flush = CopyData(dst, src, csize);
 			EndReadWrite(item, requires_flush);
 		}
+=======
+
+		size = min(item->m_size, Align(size, CRY_PLATFORM_ALIGNMENT));
+
+	#if BUFFER_ENABLE_DIRECT_ACCESS
+		CDeviceObjectFactory::UploadContents<true>(item->m_buffer->GetBuffer(), 0, item->m_offset + offset, size, m_map_type, src, reinterpret_cast<uint8*>(item->m_base_ptr) + item->m_offset);
+	#else
+		CDeviceObjectFactory::UploadContents<false>(item->m_buffer->GetBuffer(), 0, item->m_offset + offset, size, m_map_type, src);
+	#endif
+
+		m_map_type = BINDFLAGS_to_NOOVERWRITE(BIND_FLAGS);
+>>>>>>> upstream/stabilisation
 	}
 };
 
@@ -2697,8 +2828,8 @@ public:
 //
 // Corresponding D3D_USAGE : USAGE_DYNAMIC
 // Corresponding update strategy : DISCARD + NO_OVERWRITE direct map of the buffer
-typedef CTransientBufferPool<CDeviceManager::BIND_VERTEX_BUFFER> CTransientBufferPoolVB;
-typedef CTransientBufferPool<CDeviceManager::BIND_INDEX_BUFFER>  CTransientBufferPoolIB;
+typedef CTransientBufferPool<CDeviceObjectFactory::BIND_VERTEX_BUFFER> CTransientBufferPoolVB;
+typedef CTransientBufferPool<CDeviceObjectFactory::BIND_INDEX_BUFFER>  CTransientBufferPoolIB;
 #endif
 
 //////////////////////////////////////////////////////////////////////////
@@ -2707,20 +2838,20 @@ template<
   size_t BIND_FLAGS,
   size_t USAGE_FLAGS,
   typename Allocator,
-  template<size_t> class Updater>
-struct CFreeBufferPoolImpl : public SBufferPool
+  template<size_t,size_t> class Updater>
+struct CFreeBufferPoolImpl final : public SBufferPool
 {
-	typedef Updater<BIND_FLAGS> updater_t;
+	typedef Updater<BIND_FLAGS,USAGE_FLAGS> updater_t;
 
 	SBufferPoolBank m_backing_buffer;
-	size_t          m_allocation_size;
+	buffer_size_t   m_allocation_size;
 	size_t          m_item_handle;
 	updater_t       m_updater;
 
 public:
-	CFreeBufferPoolImpl(SStagingResources& resources, size_t size)
+	CFreeBufferPoolImpl(SStagingResources& resources, buffer_size_t size)
 		: m_backing_buffer(~0u)
-		, m_allocation_size((max(size, size_t(1u)) + (SPoolConfig::POOL_ALIGNMENT - 1)) & ~(SPoolConfig::POOL_ALIGNMENT - 1))
+		, m_allocation_size((max(size, buffer_size_t(1u)) + (SPoolConfig::POOL_ALIGNMENT - 1)) & ~(SPoolConfig::POOL_ALIGNMENT - 1))
 		, m_item_handle(~0u)
 		, m_updater(resources)
 	{
@@ -2732,10 +2863,11 @@ public:
 
 	virtual ~CFreeBufferPoolImpl()  { FreeResources();  }
 
-	item_handle_t Allocate(size_t size)
+	item_handle_t Allocate(buffer_size_t size, bool /*bUsePool*/) final
 	{
 		// Align the allocation size up to the configured allocation alignment
-		size = (max(size, size_t(1u)) + (SPoolConfig::POOL_ALIGNMENT - 1)) & ~(SPoolConfig::POOL_ALIGNMENT - 1);
+		size = (max(size, buffer_size_t(1u)) + (SPoolConfig::POOL_ALIGNMENT - 1)) & ~(SPoolConfig::POOL_ALIGNMENT - 1);
+
 		if (m_item_handle != ~0u || size != m_allocation_size)
 		{
 			CryFatalError("free standing buffer allocated twice?!");
@@ -2749,13 +2881,14 @@ public:
 		item->m_bank = ~0u;
 		item->m_size = size;
 		item->m_defrag_handle = IDefragAllocator::InvalidHdl;
-		CDeviceManager::ExtractBasePointer<BIND_FLAGS>(m_backing_buffer.m_buffer, item->m_base_ptr);
+
+		CDeviceObjectFactory::ExtractBasePointer(m_backing_buffer.m_buffer->GetBuffer(), D3D11_MAP_WRITE_NO_OVERWRITE, item->m_base_ptr);
 
 		m_backing_buffer.m_free_space += size;
 		return (m_item_handle = item->m_handle);
 	}
 
-	void Free(SBufferPoolItem* item)
+	void Free(SBufferPoolItem* item) final
 	{
 		m_item_table.Free(item->m_handle);
 
@@ -2764,27 +2897,30 @@ public:
 		delete this;
 	}
 
-	bool CreateResources(bool, bool)
+	bool CreateResources(bool, bool) final
 	{
-		if (gRenDev->m_DevMan.CreateBuffer(
-		      m_allocation_size
-		      , 1
-		      , USAGE_FLAGS
-		      , BIND_FLAGS
-		      , &m_backing_buffer.m_buffer) != S_OK)
+		const SBufferLayout Layout =
 		{
-			CryLogAlways(
-			  "FreeStandingBuffer::CreateResources: could not allocate backing buffer of size %" PRISIZE_T
-			  , s_PoolConfig.m_transient_pool_size);
+			DXGI_FORMAT_UNKNOWN, m_allocation_size, 1,
+			USAGE_FLAGS |
+			BIND_FLAGS
+		};
+
+		if (!(m_backing_buffer.m_buffer = CDeviceBuffer::Create(Layout, nullptr)))
+		{
+			CryLogAlways("FreeStandingBuffer::CreateResources: could not allocate backing buffer of size %" PRISIZE_T, m_allocation_size);
 			return false;
 		}
+
 		m_backing_buffer.m_capacity = m_allocation_size;
 		m_backing_buffer.m_free_space = 0;
 		m_backing_buffer.m_handle = ~0u;
-		CDeviceManager::ExtractBasePointer<BIND_FLAGS>(m_backing_buffer.m_buffer, m_backing_buffer.m_base_ptr);
+
+		CDeviceObjectFactory::ExtractBasePointer(m_backing_buffer.m_buffer->GetBuffer(), D3D11_MAP_WRITE_NO_OVERWRITE, m_backing_buffer.m_base_ptr);
+
 		return true;
 	}
-	bool FreeResources()
+	bool FreeResources() final
 	{
 		UnsetStreamSources(m_backing_buffer.m_buffer);
 		SAFE_RELEASE(m_backing_buffer.m_buffer);
@@ -2793,24 +2929,29 @@ public:
 		m_backing_buffer.m_handle = ~0u;
 		return true;
 	}
-	bool  GetStats(SDeviceBufferPoolStats&)                                           { return false; }
-	bool  DebugRender()                                                               { return false; }
-	void  Sync()                                                                      {}
-	void  Update(uint32 frameId, DeviceFenceHandle fence, bool allow_defragmentation) {}
-	void  ReleaseEmptyBanks()                                                         {}
-	void* BeginRead(SBufferPoolItem* item)                                            { return NULL; }
-	void* BeginWrite(SBufferPoolItem* item)
+	bool  GetStats(SDeviceBufferPoolStats&) final                                           { return false; }
+	bool  DebugRender() final                                                               { return false; }
+	void  Sync() final                                                                      {}
+	void  Update(uint32 frameId, DeviceFenceHandle fence, bool allow_defragmentation) final {}
+	void  ReleaseEmptyBanks() final                                                         {}
+	void* BeginWrite(SBufferPoolItem* item) final
 	{
 		return m_updater.BeginWrite(item->m_buffer, item->m_size, item->m_offset);
 	}
-	void EndReadWrite(SBufferPoolItem* item, bool requires_flush)
+	void EndReadWrite(SBufferPoolItem* item, bool requires_flush) final
 	{
-		m_updater.EndReadWrite();
+		m_updater.EndReadWrite(item->m_buffer, item->m_size, item->m_offset);
 	}
-	static SBufferPool* Create(SStagingResources& resources, size_t size)
-	{ return new CFreeBufferPoolImpl(resources, size); }
+	void Write(SBufferPoolItem* item, const void* src, buffer_size_t size, buffer_size_t offset) final
+	{
+		m_updater.Write(item->m_buffer, item->m_size, item->m_offset + offset, src);
+	}
+	static SBufferPool* Create(SStagingResources& resources, buffer_size_t size)
+	{
+		return new CFreeBufferPoolImpl(resources, size);
+	}
 };
-typedef SBufferPool* (* BufferCreateFnc)(SStagingResources&, size_t);
+typedef SBufferPool* (* BufferCreateFnc)(SStagingResources&, buffer_size_t);
 
 //////////////////////////////////////////////////////////////////////////////////////
 // A freestanding buffer for geometry that change infrequently and have a
@@ -2824,20 +2965,24 @@ typedef SBufferPool* (* BufferCreateFnc)(SStagingResources&, size_t);
 // Corresponding update strategy : d3d11 staging buffers (CopySubResource)
 //
 typedef CFreeBufferPoolImpl<
-    CDeviceManager::BIND_VERTEX_BUFFER
-    , CDeviceManager::USAGE_DEFAULT | CDeviceManager::USAGE_DIRECT_ACCESS_CPU_COHERENT
+    CDeviceObjectFactory::BIND_VERTEX_BUFFER
+    , CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT
     , CDynamicDefragAllocator
-#if BUFFER_USE_STAGED_UPDATES
+#if BUFFER_USE_STAGED_UPDATES && BUFFER_SUPPORT_TRANSIENT_POOLS
+	, CTransientStagingBufferUpdater
+#elif BUFFER_USE_STAGED_UPDATES
     , CStagingBufferUpdater
 #else
     , CDirectBufferUpdater
 #endif
     > SStaticFreeBufferVB;
 typedef CFreeBufferPoolImpl<
-    CDeviceManager::BIND_INDEX_BUFFER
-    , CDeviceManager::USAGE_DEFAULT
+    CDeviceObjectFactory::BIND_INDEX_BUFFER
+    , 0
     , CDynamicDefragAllocator
-#if BUFFER_USE_STAGED_UPDATES
+#if BUFFER_USE_STAGED_UPDATES && BUFFER_SUPPORT_TRANSIENT_POOLS
+	, CTransientStagingBufferUpdater
+#elif BUFFER_USE_STAGED_UPDATES
     , CStagingBufferUpdater
 #else
     , CDirectBufferUpdater
@@ -2855,34 +3000,32 @@ typedef CFreeBufferPoolImpl<
 // Corresponding D3D_USAGE : USAGE_DYNAMIC
 // Corresponding update strategy : NO_OVERWRITE direct map of the buffer
 typedef CFreeBufferPoolImpl<
-    CDeviceManager::BIND_VERTEX_BUFFER
-    , CDeviceManager::USAGE_DYNAMIC
-    | CDeviceManager::USAGE_CPU_WRITE
-    | CDeviceManager::USAGE_DIRECT_ACCESS_CPU_COHERENT
-    | CDeviceManager::USAGE_DIRECT_ACCESS_GPU_COHERENT
+    CDeviceObjectFactory::BIND_VERTEX_BUFFER
+    , CDeviceObjectFactory::USAGE_CPU_WRITE
+    | CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT
+    | CDeviceObjectFactory::USAGE_DIRECT_ACCESS_GPU_COHERENT
     , CDynamicDefragAllocator
 #if BUFFER_USE_STAGED_UPDATES
-    , CDynamicBufferUpdater
+	, CDynamicBufferUpdater
 #else
-    , CDirectBufferUpdater
+	, CDirectBufferUpdater
 #endif
     > SDynamicFreeBufferVB;
 typedef CFreeBufferPoolImpl<
-    CDeviceManager::BIND_INDEX_BUFFER
-    , CDeviceManager::USAGE_DYNAMIC
-    | CDeviceManager::USAGE_CPU_WRITE
-    | CDeviceManager::USAGE_DIRECT_ACCESS_CPU_COHERENT
-    | CDeviceManager::USAGE_DIRECT_ACCESS_GPU_COHERENT
+    CDeviceObjectFactory::BIND_INDEX_BUFFER
+    , CDeviceObjectFactory::USAGE_CPU_WRITE
+    | CDeviceObjectFactory::USAGE_DIRECT_ACCESS_CPU_COHERENT
+    | CDeviceObjectFactory::USAGE_DIRECT_ACCESS_GPU_COHERENT
     , CDynamicDefragAllocator
 #if BUFFER_USE_STAGED_UPDATES
-    , CDynamicBufferUpdater
+	, CDynamicBufferUpdater
 #else
-    , CDirectBufferUpdater
+	, CDirectBufferUpdater
 #endif
     > SDynamicFreeBufferIB;
 
 //===============================================================================
-#if defined(CRY_USE_DX12)
+#if (CRY_RENDERER_DIRECT3D >= 120)
 class CDescriptorPool
 {
 	struct SDescriptorBlockList
@@ -2918,7 +3061,7 @@ public:
 		m_fences.fill(0);
 	}
 
-	SDescriptorBlock* Allocate(size_t size)
+	SDescriptorBlock* Allocate(buffer_size_t size)
 	{
 		AUTO_LOCK(m_lock);
 
@@ -2954,7 +3097,7 @@ public:
 	{
 		for (int i = 0; i < SPoolConfig::POOL_FRAME_QUERY_COUNT; ++i)
 		{
-			if (m_fences[i] && gRenDev->m_DevMan.SyncFence(m_fences[i], false, false) == S_OK)
+			if (m_fences[i] && GetDeviceObjectFactory().SyncFence(m_fences[i], false, false) == S_OK)
 			{
 				for (auto& block : m_RetiredBlocks[i])
 					m_DescriptorBlocks[block.listIndex].items.Free(block.itemHandle);
@@ -2977,14 +3120,96 @@ public:
 };
 #endif
 
+#if (CRY_RENDERER_VULKAN >= 10)
+class CDescriptorPool
+{
+public:
+	CDescriptorPool()
+		: m_frameID(0)
+	{
+		m_fences.fill(0);
+	}
+
+	SDescriptorSet* Allocate(const VkDescriptorSetLayout& descriptorSetLayout)
+	{
+		AUTO_LOCK(m_lock);
+
+		NCryVulkan::CDevice* pDevice = GetDeviceObjectFactory().GetVKDevice();
+
+		VkDescriptorSetAllocateInfo descriptorSetAllocateInfo;
+		ZeroStruct(descriptorSetAllocateInfo);
+
+		descriptorSetAllocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		descriptorSetAllocateInfo.descriptorPool = pDevice->GetDescriptorPool();
+		descriptorSetAllocateInfo.descriptorSetCount = 1;
+		descriptorSetAllocateInfo.pSetLayouts = &descriptorSetLayout;
+
+		VkDescriptorSet vkDescriptorSet = VK_NULL_HANDLE;
+		VkResult result = vkAllocateDescriptorSets(pDevice->GetVkDevice(), &descriptorSetAllocateInfo, &vkDescriptorSet);
+		CRY_ASSERT_MESSAGE(result == VK_SUCCESS, "Vulkan fails to provide a descriptor set!");
+
+		if (result != VK_SUCCESS)
+			return nullptr;
+
+		SDescriptorSet *pDescriptorSet = new SDescriptorSet;
+		pDescriptorSet->vkDescriptorSet = vkDescriptorSet;
+
+		return pDescriptorSet;
+	}
+
+	void Free(SDescriptorSet* pDescriptorSet)
+	{
+		AUTO_LOCK(m_lock);
+		m_retiredDescriptorSets[m_frameID].push_back(pDescriptorSet);
+	}
+
+	void Update(uint32 frameId, DeviceFenceHandle fence)
+	{
+		NCryVulkan::CDevice* pDevice = GetDeviceObjectFactory().GetVKDevice();
+
+		for (int i = 0; i < SPoolConfig::POOL_FRAME_QUERY_COUNT; ++i)
+		{
+			if (m_fences[i] && GetDeviceObjectFactory().SyncFence(m_fences[i], false, false) == S_OK)
+			{
+				for (SDescriptorSet* pDescriptorSet : m_retiredDescriptorSets[i])
+				{
+					vkFreeDescriptorSets(pDevice->GetVkDevice(), pDevice->GetDescriptorPool(), 1, &pDescriptorSet->vkDescriptorSet);
+					SAFE_DELETE(pDescriptorSet);
+				}
+
+				m_retiredDescriptorSets[i].clear();
+			}
+		}
+
+		m_frameID = frameId & SPoolConfig::POOL_FRAME_QUERY_MASK;
+		m_fences[m_frameID] = fence;
+	}
+
+	void FreeResources()
+	{
+		for (auto& retiredDescriptorSetList : m_retiredDescriptorSets)
+			retiredDescriptorSetList.clear();
+	}
+
+private:
+	std::array<std::vector<SDescriptorSet*>, SPoolConfig::POOL_FRAME_QUERY_COUNT> m_retiredDescriptorSets;
+	std::array<DeviceFenceHandle, SPoolConfig::POOL_FRAME_QUERY_COUNT> m_fences;
+
+	uint32 m_frameID;
+	CryCriticalSection m_lock;
+};
+#endif
+
 //////////////////////////////////////////////////////////////////////////////////////
 // Manages all pool - in anonymous namespace to reduce recompiles
 struct SPoolManager
 {
+#if !DEVBUFFERMAN_DEBUG
 	// Storage for constant buffer wrapper instances
 	CPartitionTable<CConstantBuffer> m_constant_buffers[2];
+#endif
 
-#if defined(CRY_USE_DX12)
+#if (CRY_RENDERER_DIRECT3D >= 120) || (CRY_RENDERER_VULKAN >= 10)
 	CDescriptorPool m_ResourceDescriptorPool;
 #endif
 
@@ -3010,13 +3235,17 @@ struct SPoolManager
 
 	// Special debugging staging buffers if debug consistency check is enabled
 #if defined(CD3D9RENDERER_DEBUG_CONSISTENCY_CHECK) && BUFFER_USE_STAGED_UPDATES
-	CStagingBufferUpdater<CDeviceManager::BIND_VERTEX_BUFFER> m_debug_staging_vb;
-	CStagingBufferUpdater<CDeviceManager::BIND_INDEX_BUFFER>  m_debug_staging_ib;
+	CStagingBufferUpdater<CDeviceObjectFactory::BIND_VERTEX_BUFFER> m_debug_staging_vb;
+	CStagingBufferUpdater<CDeviceObjectFactory::BIND_INDEX_BUFFER>  m_debug_staging_ib;
 #endif
 
 #if ENABLE_STATOSCOPE
 	SStatoscopeData m_sdata[2];
 #endif
+
+	CConstantBufferPtr m_pNullConstantBuffer;
+	CGpuBuffer         m_nullBufferTyped;
+	CGpuBuffer         m_nullBufferStructured;
 
 	bool m_initialized;
 
@@ -3057,7 +3286,7 @@ struct SPoolManager
 			goto error;
 
 		for (size_t i = 0; i < SPoolConfig::POOL_FRAME_QUERY_COUNT; ++i)
-			if (gRenDev->m_DevMan.CreateFence(m_fences[i]) != S_OK)
+			if (GetDeviceObjectFactory().CreateFence(m_fences[i]) != S_OK)
 			{
 				CryLogAlways("SPoolManager::Initialize: could not create per-frame gpu fence");
 				goto error;
@@ -3114,6 +3343,15 @@ struct SPoolManager
 		memset(m_sdata, 0, sizeof(m_sdata));
 #endif
 
+		m_pNullConstantBuffer.Assign_NoAddRef(new CConstantBuffer(0));
+		m_pNullConstantBuffer->m_size = 0;
+		m_pNullConstantBuffer->m_dynamic = false;
+		m_pNullConstantBuffer->m_lock = true;
+		m_pNullConstantBuffer->m_buffer = CDeviceBuffer::Create({ DXGI_FORMAT_UNKNOWN, 0, 256, CDeviceObjectFactory::BIND_CONSTANT_BUFFER }, nullptr);
+
+		m_nullBufferTyped.Create(0, 0, DXGI_FORMAT_R32G32B32A32_FLOAT, CDeviceObjectFactory::BIND_UNORDERED_ACCESS | CDeviceObjectFactory::BIND_SHADER_RESOURCE, nullptr);
+		m_nullBufferStructured.Create(0, sizeof(Vec4), DXGI_FORMAT_UNKNOWN, CDeviceObjectFactory::BIND_SHADER_RESOURCE | CDeviceObjectFactory::USAGE_STRUCTURED, nullptr);
+
 		if (false)
 		{
 error:
@@ -3127,6 +3365,11 @@ error:
 	bool Shutdown()
 	{
 		bool success = true;
+
+		m_pNullConstantBuffer.reset();
+		m_nullBufferTyped.Release();
+		m_nullBufferStructured.Release();
+
 		for (size_t i = 0; i < BBT_MAX; ++i)
 			for (size_t j = 0; j < BU_MAX; ++j)
 			{
@@ -3145,13 +3388,13 @@ error:
 		m_constant_allocator[1].Shutdown();
 #endif
 
-#if defined(CRY_USE_DX12)
+#if (CRY_RENDERER_DIRECT3D >= 120) || (CRY_RENDERER_VULKAN >= 10)
 		m_ResourceDescriptorPool.FreeResources();
 #endif
 
 		for (size_t i = 0; i < SPoolConfig::POOL_FRAME_QUERY_COUNT; ++i)
 		{
-			if (gRenDev->m_DevMan.ReleaseFence(m_fences[i]) != S_OK)
+			if (GetDeviceObjectFactory().ReleaseFence(m_fences[i]) != S_OK)
 			{
 				CryLogAlways("SPoolManager::Initialize: could not releasefence");
 				success = false;
@@ -3166,6 +3409,9 @@ error:
 			success = false;
 		}
 #endif
+		m_pNullConstantBuffer.reset();
+		m_nullBufferTyped.Release();
+		m_nullBufferStructured.Release();
 
 		m_initialized = false;
 		return success;
@@ -3277,6 +3523,12 @@ CDeviceBufferManager::~CDeviceBufferManager()
 {
 }
 
+//////////////////////////////////////////////////////////////////////////
+CDeviceBufferManager* CDeviceBufferManager::Instance()
+{
+	return &gcpRendD3D->m_DevBufMan;
+}
+
 //////////////////////////////////////////////////////////////////////////////////////
 void CDeviceBufferManager::LockDevMan()
 {
@@ -3340,7 +3592,7 @@ void CDeviceBufferManager::Sync(uint32 frameId)
 	SREC_AUTO_LOCK(s_PoolManager.m_lock);
 
 	for (int i = 0; i < SPoolConfig::POOL_FRAME_QUERY_COUNT; ++i)
-		gRenDev->m_DevMan.SyncFence(s_PoolManager.m_fences[i], true);
+		GetDeviceObjectFactory().SyncFence(s_PoolManager.m_fences[i], true);
 
 	for (size_t i = 0; i < BBT_MAX; ++i)
 		for (size_t j = 0; j < BU_MAX; ++j)
@@ -3358,7 +3610,7 @@ void CDeviceBufferManager::Sync(uint32 frameId)
 
 	// Note: Issue the fence now for COPY_ON_WRITE. If the GPU has caught up to this point, no previous drawcall
 	// will be pending and therefore it is safe to just reuse the previous allocation.
-	gRenDev->m_DevMan.IssueFence(s_PoolManager.m_fences[frameId & SPoolConfig::POOL_FRAME_QUERY_MASK]);
+	GetDeviceObjectFactory().IssueFence(s_PoolManager.m_fences[frameId & SPoolConfig::POOL_FRAME_QUERY_MASK]);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -3386,7 +3638,7 @@ void CDeviceBufferManager::ReleaseEmptyBanks(uint32 frameId)
 	// Note: Issue the current fence for retiring allocations. This is the same fence shelled out
 	// to the pools during the update stage for COW, now we are reusing it to ensure the gpu caught
 	// up to this point and therefore give out reclaimed memory again.
-	gRenDev->m_DevMan.IssueFence(s_PoolManager.m_fences[frameId & SPoolConfig::POOL_FRAME_QUERY_MASK]);
+	GetDeviceObjectFactory().IssueFence(s_PoolManager.m_fences[frameId & SPoolConfig::POOL_FRAME_QUERY_MASK]);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -3407,7 +3659,7 @@ void CDeviceBufferManager::Update(uint32 frameId, bool called_during_loading)
 	memset(&s_PoolManager.m_sdata[0], 0, sizeof(s_PoolManager.m_sdata[0]));
 #endif
 
-	gRenDev->m_DevMan.SyncFence(s_PoolManager.m_fences[frameId & SPoolConfig::POOL_FRAME_QUERY_MASK], true);
+	GetDeviceObjectFactory().SyncFence(s_PoolManager.m_fences[frameId & SPoolConfig::POOL_FRAME_QUERY_MASK], true);
 
 	for (size_t i = 0; i < BBT_MAX; ++i)
 		for (size_t j = 0; j < BU_MAX; ++j)
@@ -3430,23 +3682,24 @@ void CDeviceBufferManager::Update(uint32 frameId, bool called_during_loading)
 	}
 #endif
 
-#if defined(CRY_USE_DX12)
+#if (CRY_RENDERER_DIRECT3D >= 120) || (CRY_RENDERER_VULKAN >= 10)
 	s_PoolManager.m_ResourceDescriptorPool.Update(frameId,
 	                                              s_PoolManager.m_fences[frameId & SPoolConfig::POOL_FRAME_QUERY_MASK]);
 #endif
 
 	// Note: Issue the fence now for COPY_ON_WRITE. If the GPU has caught up to this point, no previous drawcall
 	// will be pending and therefore it is safe to just reuse the previous allocation.
-	gRenDev->m_DevMan.IssueFence(s_PoolManager.m_fences[frameId & SPoolConfig::POOL_FRAME_QUERY_MASK]);
+	GetDeviceObjectFactory().IssueFence(s_PoolManager.m_fences[frameId & SPoolConfig::POOL_FRAME_QUERY_MASK]);
 }
 
 #if defined(CD3D9RENDERER_DEBUG_CONSISTENCY_CHECK)
+
 //////////////////////////////////////////////////////////////////////////////////////
-void* CDeviceBufferManager::BeginReadDirectIB(D3DIndexBuffer* pIB, size_t size, size_t offset)
+void* CDeviceBufferManager::BeginReadDirectIB(D3DIndexBuffer* pIB, buffer_size_t size, buffer_size_t offset)
 {
 	#if BUFFER_ENABLE_DIRECT_ACCESS
 	uint8* base_ptr = NULL;
-	CDeviceManager::ExtractBasePointer<CDeviceManager::BIND_INDEX_BUFFER>(pIB, base_ptr);
+	CDeviceObjectFactory::ExtractBasePointer(pIB, D3D11_MAP_READ, base_ptr);
 	return base_ptr + offset;
 	#elif BUFFER_USE_STAGED_UPDATES
 	return s_PoolManager.m_debug_staging_ib.BeginRead(pIB, size, offset);
@@ -3456,11 +3709,11 @@ void* CDeviceBufferManager::BeginReadDirectIB(D3DIndexBuffer* pIB, size_t size, 
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
-void* CDeviceBufferManager::BeginReadDirectVB(D3DVertexBuffer* pVB, size_t size, size_t offset)
+void* CDeviceBufferManager::BeginReadDirectVB(D3DVertexBuffer* pVB, buffer_size_t size, buffer_size_t offset)
 {
 	#if BUFFER_ENABLE_DIRECT_ACCESS
 	uint8* base_ptr = NULL;
-	CDeviceManager::ExtractBasePointer<CDeviceManager::BIND_VERTEX_BUFFER>(pVB, base_ptr);
+	CDeviceObjectFactory::ExtractBasePointer(pVB, D3D11_MAP_READ, base_ptr);
 	return base_ptr + offset;
 	#elif BUFFER_USE_STAGED_UPDATES
 	return s_PoolManager.m_debug_staging_vb.BeginRead(pVB, size, offset);
@@ -3470,49 +3723,57 @@ void* CDeviceBufferManager::BeginReadDirectVB(D3DVertexBuffer* pVB, size_t size,
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
-void CDeviceBufferManager::EndReadDirectIB(D3DIndexBuffer*)
+void CDeviceBufferManager::EndReadDirectIB(D3DIndexBuffer* pIB)
 {
 	#if BUFFER_USE_STAGED_UPDATES
-	s_PoolManager.m_debug_staging_ib.EndReadWrite();
+	s_PoolManager.m_debug_staging_ib.EndReadWrite(pIB, 0, 0);
 	#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
-void CDeviceBufferManager::EndReadDirectVB(D3DVertexBuffer*)
+void CDeviceBufferManager::EndReadDirectVB(D3DVertexBuffer* pVB)
 {
 	#if BUFFER_USE_STAGED_UPDATES
-	s_PoolManager.m_debug_staging_vb.EndReadWrite();
+	s_PoolManager.m_debug_staging_vb.EndReadWrite(pVB, 0, 0);
 	#endif
 }
 #endif
 
 //////////////////////////////////////////////////////////////////////////////////////
-CConstantBuffer* CDeviceBufferManager::CreateConstantBuffer(size_t size, bool dynamic, bool ts)
+CConstantBuffer* CDeviceBufferManager::CreateConstantBufferRaw(buffer_size_t size, bool dynamic, bool ts)
 {
 	STATOSCOPE_TIMER(s_PoolManager.m_sdata[0].m_creator_time);
-	size = (max(size, size_t(1u)) + (255)) & ~(255);
+	size = (max(size, buffer_size_t(1u)) + (255)) & ~(255);
 	CConditonalDevManLock lock(this, ts);
+#if !DEVBUFFERMAN_DEBUG
 	CConstantBuffer* buffer = &s_PoolManager.m_constant_buffers[ts][s_PoolManager.m_constant_buffers[ts].Allocate()];
+#else
+	CConstantBuffer* buffer = new CConstantBuffer(0xCACACACA);
+#endif
 	buffer->m_size = size;
 	buffer->m_dynamic = dynamic;
 	buffer->m_lock = ts;
 	return buffer;
 }
 
-CConstantBufferPtr CDeviceBufferManager::CreateNullConstantBuffer()
+CConstantBufferPtr CDeviceBufferManager::GetNullConstantBuffer()
 {
-	CConstantBufferPtr pBuffer;
-	pBuffer.Assign_NoAddRef(new CConstantBuffer(0));
-	pBuffer->m_size = 0;
-	pBuffer->m_dynamic = false;
-	pBuffer->m_lock = false;
-	pBuffer->m_intentionallyNull = 1;
-	pBuffer->m_buffer = static_cast<D3DBuffer*>(gRenDev->m_DevMan.AllocateNullResource(D3D11_RESOURCE_DIMENSION_BUFFER));
-	return pBuffer;
+	return s_PoolManager.m_pNullConstantBuffer;
 }
 
-#if defined(CRY_USE_DX12)
-SDescriptorBlock* CDeviceBufferManager::CreateDescriptorBlock(size_t size)
+CGpuBuffer* CDeviceBufferManager::GetNullBufferTyped()
+{
+	return &s_PoolManager.m_nullBufferTyped;
+}
+
+CGpuBuffer* CDeviceBufferManager::GetNullBufferStructured()
+{
+	return &s_PoolManager.m_nullBufferStructured;
+}
+
+
+#if (CRY_RENDERER_DIRECT3D >= 120)
+SDescriptorBlock* CDeviceBufferManager::CreateDescriptorBlock(buffer_size_t size)
 {
 	return s_PoolManager.m_ResourceDescriptorPool.Allocate(size);
 }
@@ -3524,15 +3785,33 @@ void CDeviceBufferManager::ReleaseDescriptorBlock(SDescriptorBlock* pBlock)
 }
 
 #else
-SDescriptorBlock* CDeviceBufferManager::CreateDescriptorBlock(size_t size)               { return NULL; }
+SDescriptorBlock* CDeviceBufferManager::CreateDescriptorBlock(buffer_size_t size)               { return NULL; }
 void              CDeviceBufferManager::ReleaseDescriptorBlock(SDescriptorBlock* pBlock) {}
 #endif
 
+#if (CRY_RENDERER_VULKAN >= 10)
+SDescriptorSet* CDeviceBufferManager::AllocateDescriptorSet(const VkDescriptorSetLayout& descriptorSetLayout)
+{
+	return s_PoolManager.m_ResourceDescriptorPool.Allocate(descriptorSetLayout);
+}
+
+void CDeviceBufferManager::ReleaseDescriptorSet(SDescriptorSet *pDescriptorSet)
+{
+	CRY_ASSERT(pDescriptorSet != NULL);
+	s_PoolManager.m_ResourceDescriptorPool.Free(pDescriptorSet);
+}
+#endif
+
+// PPOL_ALIGNMENT is 128 in general, which is a bit much, we use the smallest alignment necessary for fast mem-copies
+#if 0
+buffer_size_t CDeviceBufferManager::GetBufferAlignmentForStreaming()
+{
+	return SPoolConfig::POOL_ALIGNMENT;
+}
+#endif
+
 //////////////////////////////////////////////////////////////////////////////////////
-buffer_handle_t CDeviceBufferManager::Create_Locked(
-  BUFFER_BIND_TYPE type
-  , BUFFER_USAGE usage
-  , size_t size)
+buffer_handle_t CDeviceBufferManager::Create_Locked(BUFFER_BIND_TYPE type, BUFFER_USAGE usage, buffer_size_t size, bool bUsePool)
 {
 	MEMORY_SCOPE_CHECK_HEAP();
 	DEVBUFFERMAN_ASSERT((type >= BBT_VERTEX_BUFFER && type < BBT_MAX));
@@ -3553,7 +3832,7 @@ buffer_handle_t CDeviceBufferManager::Create_Locked(
 			  s_PoolManager.m_staging_resources[usage],
 			  size
 			  );
-			item_handle_t item_handle = pool->Allocate(size);
+			item_handle_t item_handle = pool->Allocate(size, bUsePool);
 			return item_handle == ~0u
 			       ? (buffer_handle_t) ~0u
 			       : (buffer_handle_t)pool->Resolve(item_handle);
@@ -3561,14 +3840,11 @@ buffer_handle_t CDeviceBufferManager::Create_Locked(
 	}
 #endif
 
-	item_handle_t item_handle = s_PoolManager.m_pools[type][usage]->Allocate(size);
+	item_handle_t item_handle = s_PoolManager.m_pools[type][usage]->Allocate(size, bUsePool);
 	return item_handle == ~0u ? (buffer_handle_t) ~0u : (buffer_handle_t)s_PoolManager.m_pools[type][usage]->Resolve(item_handle);
 }
 
-buffer_handle_t CDeviceBufferManager::Create(
-  BUFFER_BIND_TYPE type
-  , BUFFER_USAGE usage
-  , size_t size)
+buffer_handle_t CDeviceBufferManager::Create(BUFFER_BIND_TYPE type, BUFFER_USAGE usage, buffer_size_t size, bool bUsePool)
 {
 	FUNCTION_PROFILER(gEnv->pSystem, PROFILE_RENDERER);
 	STATOSCOPE_TIMER(s_PoolManager.m_sdata[0].m_creator_time);
@@ -3578,7 +3854,7 @@ buffer_handle_t CDeviceBufferManager::Create(
 	SRecursiveSpinLocker __lock(&s_PoolManager.m_lock);
 #endif
 	SREC_AUTO_LOCK(s_PoolManager.m_pools[type][usage]->m_lock);
-	return Create_Locked(type, usage, size);
+	return Create_Locked(type, usage, size, bUsePool);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -3661,12 +3937,12 @@ void* CDeviceBufferManager::BeginRead(buffer_handle_t handle)
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
-size_t CDeviceBufferManager::Size_Locked(buffer_handle_t handle)
+buffer_size_t CDeviceBufferManager::Size_Locked(buffer_handle_t handle)
 {
 	SBufferPoolItem& item = *reinterpret_cast<SBufferPoolItem*>(handle);
 	return item.m_size;
 }
-size_t CDeviceBufferManager::Size(buffer_handle_t handle)
+buffer_size_t CDeviceBufferManager::Size(buffer_handle_t handle)
 {
 	return Size_Locked(handle);
 }
@@ -3715,7 +3991,7 @@ void CDeviceBufferManager::EndReadWrite(buffer_handle_t handle)
 
 //////////////////////////////////////////////////////////////////////////////////////
 bool CDeviceBufferManager::UpdateBuffer_Locked(
-  buffer_handle_t handle, const void* src, size_t size)
+  buffer_handle_t handle, const void* src, buffer_size_t size, buffer_size_t offset)
 {
 	STATOSCOPE_TIMER(s_PoolManager.m_sdata[0].m_io_time);
 	STATOSCOPE_IO_WRITTEN(Size(handle));
@@ -3723,39 +3999,51 @@ bool CDeviceBufferManager::UpdateBuffer_Locked(
 	MEMORY_SCOPE_CHECK_HEAP();
 	DEVBUFFERMAN_ASSERT(handle != 0);
 	SBufferPoolItem& item = *reinterpret_cast<SBufferPoolItem*>(handle);
-	item.m_pool->Write(&item, src, size);
+	item.m_pool->Write(&item, src, size, offset);
 	return true;
 }
 bool CDeviceBufferManager::UpdateBuffer
-  (buffer_handle_t handle, const void* src, size_t size)
+  (buffer_handle_t handle, const void* src, buffer_size_t size, buffer_size_t offset)
 {
 #if CRY_PLATFORM_WINDOWS
 	SRecursiveSpinLocker __lock(&s_PoolManager.m_lock);
 #endif
 	SBufferPoolItem& item = *reinterpret_cast<SBufferPoolItem*>(handle);
 	SREC_AUTO_LOCK(item.m_pool->m_lock);
-	return UpdateBuffer_Locked(handle, src, size);
+	return UpdateBuffer_Locked(handle, src, size, offset);
 }
 //////////////////////////////////////////////////////////////////////////////////////
-D3DBuffer* CDeviceBufferManager::GetD3D(buffer_handle_t handle, size_t* offset)
+D3DBuffer* CDeviceBufferManager::GetD3D(buffer_handle_t handle, buffer_size_t* offset)
 {
 	MEMORY_SCOPE_CHECK_HEAP();
 	DEVBUFFERMAN_ASSERT(handle != 0);
 	SBufferPoolItem& item = *reinterpret_cast<SBufferPoolItem*>(handle);
 	*offset = item.m_offset;
 	DEVBUFFERMAN_ASSERT(item.m_buffer);
-	return item.m_buffer;
+	return item.m_buffer->GetBuffer();
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
-D3DVertexBuffer* CDeviceBufferManager::GetD3DVB(buffer_handle_t handle, size_t* offset)
+D3DBuffer* CDeviceBufferManager::GetD3D(buffer_handle_t handle, buffer_size_t* offset, buffer_size_t* size)
+{
+	MEMORY_SCOPE_CHECK_HEAP();
+	DEVBUFFERMAN_ASSERT(handle != 0);
+	SBufferPoolItem& item = *reinterpret_cast<SBufferPoolItem*>(handle);
+	*offset = item.m_offset;
+	*size = item.m_size;
+	DEVBUFFERMAN_ASSERT(item.m_buffer);
+	return item.m_buffer->GetBuffer();
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+D3DVertexBuffer* CDeviceBufferManager::GetD3DVB(buffer_handle_t handle, buffer_size_t* offset)
 {
 	MEMORY_SCOPE_CHECK_HEAP();
 	return static_cast<D3DVertexBuffer*>(GetD3D(handle, offset));
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
-D3DIndexBuffer* CDeviceBufferManager::GetD3DIB(buffer_handle_t handle, size_t* offset)
+D3DIndexBuffer* CDeviceBufferManager::GetD3DIB(buffer_handle_t handle, buffer_size_t* offset)
 {
 	MEMORY_SCOPE_CHECK_HEAP();
 	return static_cast<D3DIndexBuffer*>(GetD3D(handle, offset));
@@ -3783,55 +4071,6 @@ SStatoscopeData& GetStatoscopeData(uint32 nIndex)
 	return s_PoolManager.m_sdata[nIndex];
 }
 #endif
-/////////////////////////////////////////////////////////////
-// Legacy interface
-//
-// Use with care, can be removed at any point!
-//////////////////////////////////////////////////////////////////////////////////////
-void CDeviceBufferManager::ReleaseVBuffer(CVertexBuffer* pVB)
-{
-	MEMORY_SCOPE_CHECK_HEAP();
-	SAFE_DELETE(pVB);
-}
-//////////////////////////////////////////////////////////////////////////////////////
-void CDeviceBufferManager::ReleaseIBuffer(CIndexBuffer* pIB)
-{
-	MEMORY_SCOPE_CHECK_HEAP();
-	SAFE_DELETE(pIB);
-}
-//////////////////////////////////////////////////////////////////////////////////////
-CVertexBuffer* CDeviceBufferManager::CreateVBuffer(size_t nVerts, EVertexFormat eVF, const char* szName, BUFFER_USAGE usage)
-{
-	MEMORY_SCOPE_CHECK_HEAP();
-	CVertexBuffer* pVB = new CVertexBuffer(NULL, eVF);
-	pVB->m_nVerts = nVerts;
-	pVB->m_VS.m_BufferHdl = Create(BBT_VERTEX_BUFFER, usage, nVerts * CRenderMesh::m_cSizeVF[eVF]);
-
-	return pVB;
-}
-//////////////////////////////////////////////////////////////////////////////////////
-CIndexBuffer* CDeviceBufferManager::CreateIBuffer(size_t nInds, const char* szNam, BUFFER_USAGE usage)
-{
-	MEMORY_SCOPE_CHECK_HEAP();
-	CIndexBuffer* pIB = new CIndexBuffer(NULL);
-	pIB->m_nInds = nInds;
-	pIB->m_VS.m_BufferHdl = Create(BBT_INDEX_BUFFER, usage, nInds * sizeof(uint16));
-	return pIB;
-}
-//////////////////////////////////////////////////////////////////////////////////////
-bool CDeviceBufferManager::UpdateVBuffer(CVertexBuffer* pVB, void* pVerts, size_t nVerts)
-{
-	MEMORY_SCOPE_CHECK_HEAP();
-	DEVBUFFERMAN_ASSERT(pVB->m_VS.m_BufferHdl != ~0u);
-	return UpdateBuffer(pVB->m_VS.m_BufferHdl, pVerts, nVerts * CRenderMesh::m_cSizeVF[pVB->m_eVF]);
-}
-//////////////////////////////////////////////////////////////////////////////////////
-bool CDeviceBufferManager::UpdateIBuffer(CIndexBuffer* pIB, void* pInds, size_t nInds)
-{
-	MEMORY_SCOPE_CHECK_HEAP();
-	DEVBUFFERMAN_ASSERT(pIB->m_VS.m_BufferHdl != ~0u);
-	return UpdateBuffer(pIB->m_VS.m_BufferHdl, pInds, nInds * sizeof(uint16));
-}
 
 //////////////////////////////////////////////////////////////////////////////////////
 CConstantBuffer::CConstantBuffer(uint32 handle)
@@ -3857,37 +4096,24 @@ CConstantBuffer::~CConstantBuffer()
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
-void CConstantBuffer::AddRef()
+void CConstantBuffer::ReturnToPool()
 {
-	CryInterlockedIncrement(&m_nRefCount);
-}
+	assert(m_lock || gRenDev->m_pRT->IsRenderThread());
 
-//////////////////////////////////////////////////////////////////////////////////////
-void CConstantBuffer::Release()
-{
-	assert(gRenDev->m_pRT->IsRenderThread());
-
-	if (CryInterlockedDecrement(&m_nRefCount) == 0)
-	{
-		CConditonalDevManLock lock(&gcpRendD3D->m_DevBufMan, m_lock);
+	CConditonalDevManLock lock(&gcpRendD3D->m_DevBufMan, m_lock);
 #if CONSTANT_BUFFER_ENABLE_DIRECT_ACCESS
-		if (m_used)
-		{
-			s_PoolManager.m_constant_allocator[m_lock].Free(this);
-			m_used = 0;
-		}
-#endif
-		if (!m_intentionallyNull)
-		{
-			s_PoolManager.m_constant_buffers[m_lock].Free(m_handle);
-		}
-		else
-		{
-			SAFE_RELEASE(m_buffer);
-		}
-
+	if (m_used)
+	{
+		s_PoolManager.m_constant_allocator[m_lock].Free(this);
 		m_used = 0;
 	}
+#endif
+
+#if !DEVBUFFERMAN_DEBUG
+	s_PoolManager.m_constant_buffers[m_lock].Free(m_handle);
+#else
+	delete this;
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -3905,34 +4131,33 @@ void* CConstantBuffer::BeginWrite()
 	if (s_PoolManager.m_constant_allocator[m_lock].Allocate(this))
 	{
 		m_used = 1;
+
+		// Transfer sub-set of GPU resource to CPU, also allows graphics debugger and multi-gpu broadcaster to do the right thing
+		CDeviceObjectFactory::MarkReadRange(m_buffer->GetBuffer(), m_offset, 0, D3D11_MAP_WRITE);
+
 		return (void*)((uintptr_t)m_base_ptr + m_offset);
 	}
 #else
 	if (!m_used)
 	{
-		HRESULT hr;
-		D3D11_BUFFER_DESC bd;
-		ZeroStruct(bd);
-		bd.Usage = m_dynamic ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_DEFAULT;
-		bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-		bd.CPUAccessFlags = m_dynamic ? D3D11_CPU_ACCESS_WRITE : 0;
-		bd.MiscFlags = 0;
-	#if defined(OPENGL)
-		bd.MiscFlags |= m_no_streaming * D3D11_RESOURCE_MISC_DXGL_NO_STREAMING;
-	#endif
-		bd.ByteWidth = m_size;
-		hr = gcpRendD3D->GetDevice().CreateBuffer(&bd, NULL, &m_buffer);
-		CHECK_HRESULT(hr);
-		assert(m_buffer);
+		const SBufferLayout Layout =
+		{
+			DXGI_FORMAT_UNKNOWN, m_size, 1,
+			(m_dynamic ? CDeviceObjectFactory::USAGE_CPU_WRITE : 0) |
+			CDeviceObjectFactory::BIND_CONSTANT_BUFFER
+		};
+
+		if (!(m_buffer = CDeviceBuffer::Create(Layout, nullptr)))
+		{
+			CryLogAlways("CConstantBuffer::BeginWrite: could not allocate buffer of size %" PRISIZE_T, m_size);
+			return nullptr;
+		}
 
 		m_used = 1;
 	}
 	if (m_dynamic)
 	{
-		assert(m_buffer);
-		D3D11_MAPPED_SUBRESOURCE mappedResource;
-		gcpRendD3D->GetDeviceContext().Map(m_buffer, 0, D3D11_MAP_WRITE_DISCARD_CB, 0, &mappedResource);
-		return mappedResource.pData;
+		return CDeviceObjectFactory::Map(m_buffer->GetBuffer(), 0, m_offset, 0, D3D11_MAP_WRITE_DISCARD_CB);
 	}
 	else
 	{
@@ -3945,347 +4170,381 @@ void* CConstantBuffer::BeginWrite()
 //////////////////////////////////////////////////////////////////////////////////////
 void CConstantBuffer::EndWrite(bool requires_flush)
 {
-#if CONSTANT_BUFFER_ENABLE_DIRECT_ACCESS == 0
+#if CONSTANT_BUFFER_ENABLE_DIRECT_ACCESS
+	if (m_used)
+	{
+		// Transfer sub-set of GPU resource to CPU, also allows graphics debugger and multi-gpu broadcaster to do the right thing
+		CDeviceObjectFactory::MarkWriteRange(m_buffer->GetBuffer(), m_offset, m_size, D3D11_MAP_WRITE);
+	}
+#else
 	if (m_dynamic)
 	{
-		gcpRendD3D->GetDeviceContext().Unmap(m_buffer, 0);
+		CDeviceObjectFactory::Unmap(m_buffer->GetBuffer(), 0, m_offset, m_size, D3D11_MAP_WRITE_DISCARD_CB);
 	}
 	else
 	{
-		gcpRendD3D->GetDeviceContext().UpdateSubresource(m_buffer, 0, NULL, m_base_ptr, 0, 0);
+		const SResourceMemoryAlignment& layout = { sizeof(char), m_size, 0, 0 };
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(m_base_ptr, this, layout);
 		delete[] alias_cast<char*>(m_base_ptr);
-		m_base_ptr = NULL;
+		m_base_ptr = nullptr;
 	}
 #endif
 }
+
 //////////////////////////////////////////////////////////////////////////////////////
-void CConstantBuffer::UpdateBuffer(const void* src, size_t size)
+void CConstantBuffer::UpdateBuffer(const void* src, buffer_size_t size, buffer_size_t offset /*= 0*/, int numDataBlocks /*= 1*/)
 {
+	assert(m_dynamic || size == m_size);
+	
 	STATOSCOPE_TIMER(s_PoolManager.m_sdata[0].m_io_time);
 	STATOSCOPE_IO_WRITTEN(m_size);
-	if (void* dst = BeginWrite())
+	CConditonalDevManLock lock(&gcpRendD3D->m_DevBufMan, m_lock);
+	size = std::min((buffer_size_t)m_size, size);
+#if CONSTANT_BUFFER_ENABLE_DIRECT_ACCESS
+	if (m_used)
 	{
-		bool requires_flush = CopyData(dst, src, std::min((size_t)m_size, size));
-		EndWrite();
+		s_PoolManager.m_constant_allocator[m_lock].Free(this);
+		m_used = 0;
 	}
-}
-
-//////////////////////////////////////////////////////////////////////////////////////
-CVertexBuffer::~CVertexBuffer()
-{
-	MEMORY_SCOPE_CHECK_HEAP();
-	if (m_VS.m_BufferHdl != ~0u)
+	if (s_PoolManager.m_constant_allocator[m_lock].Allocate(this))
 	{
-		//STATIC UNINITIALISATION. This can be called after gRenDev has been released
-		if (gRenDev)
-			gRenDev->m_DevBufMan.Destroy(m_VS.m_BufferHdl);
-		m_VS.m_BufferHdl = ~0u;
+		m_used = 1;
+		CDeviceObjectFactory::UploadContents<true>(m_buffer->GetBuffer(), 0, m_offset + offset, size, D3D11_MAP_WRITE_NO_OVERWRITE_CB, src, reinterpret_cast<uint8*>(m_base_ptr) + m_offset + offset, numDataBlocks);
 	}
-}
-//////////////////////////////////////////////////////////////////////////////////////
-CIndexBuffer::~CIndexBuffer()
-{
-	MEMORY_SCOPE_CHECK_HEAP();
-	if (m_VS.m_BufferHdl != ~0u)
+#else
+	if (!m_used)
 	{
-		if (gRenDev)
-			gRenDev->m_DevBufMan.Destroy(m_VS.m_BufferHdl);
-		m_VS.m_BufferHdl = ~0u;
+		const SBufferLayout Layout =
+		{
+			DXGI_FORMAT_UNKNOWN, m_size, 1,
+			(m_dynamic ? CDeviceObjectFactory::USAGE_CPU_WRITE : 0) |
+			CDeviceObjectFactory::BIND_CONSTANT_BUFFER
+		};
+
+		if (!(m_buffer = CDeviceBuffer::Create(Layout, nullptr)))
+		{
+			CryLogAlways("CConstantBuffer::BeginWrite: could not allocate buffer of size %" PRISIZE_T, m_size);
+			return;
+		}
+
+		m_used = 1;
 	}
-}
-
-CGpuBuffer::STrackedBuffer::STrackedBuffer(const STrackedBuffer& other)
-{
-	m_pBuffer = other.m_pBuffer;
-	m_pSRV = other.m_pSRV;
-	m_pUAV = other.m_pUAV;
-
-	m_nLastWriteFrame = other.m_nLastWriteFrame;
-	m_nLastReadFrame = other.m_nLastReadFrame;
-	m_BufferPersistentMapMode = other.m_BufferPersistentMapMode;
-
-	EnablePersistentMap(true);
-}
-
-CGpuBuffer::STrackedBuffer::STrackedBuffer(STrackedBuffer&& other)
-{
-	m_pBuffer = std::move(other.m_pBuffer);
-	m_pSRV = std::move(other.m_pSRV);
-	m_pUAV = std::move(other.m_pUAV);
-
-	m_nLastWriteFrame = std::move(other.m_nLastWriteFrame);
-	m_nLastReadFrame = std::move(other.m_nLastReadFrame);
-	m_BufferPersistentMapMode = std::move(other.m_BufferPersistentMapMode);
-
-	other.m_nLastWriteFrame = 0;
-	other.m_nLastReadFrame = 0;
-	other.m_BufferPersistentMapMode = D3D11_MAP(0);
-}
-
-CGpuBuffer::STrackedBuffer::~STrackedBuffer()
-{
-	EnablePersistentMap(false);
-}
-
-void CGpuBuffer::STrackedBuffer::EnablePersistentMap(bool bEnable)
-{
-#if defined(CRY_USE_DX12)
-	if (!m_pBuffer || m_BufferPersistentMapMode == 0)
-		return;
-
-	if (bEnable)
+	// Transfer sub-set of GPU resource to CPU, also allows graphics debugger and multi-gpu broadcaster to do the right thing
+	if (m_dynamic)
 	{
-		D3D11_MAPPED_SUBRESOURCE mappedRes;
-		gcpRendD3D->GetDeviceContext().Map(m_pBuffer, 0, m_BufferPersistentMapMode, 0, &mappedRes);
+		CDeviceObjectFactory::UploadContents<false>(m_buffer->GetBuffer(), 0, offset, size, D3D11_MAP_WRITE_DISCARD_CB, src, nullptr, numDataBlocks);
 	}
 	else
 	{
-		gcpRendD3D->GetDeviceContext().Unmap(m_pBuffer, 0);
+		const SResourceMemoryMapping& mapping =
+		{
+			{ sizeof(char), m_size, m_size, m_size }, // src layout
+			{ offset, 0, 0, 0 },                      // dst position
+			{ size, 1, 1, 1 }                         // dst size
+		};
+
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(src, this, mapping);
 	}
 #endif
 }
 
-bool CGpuBuffer::operator==(const CGpuBuffer& other) const
+//////////////////////////////////////////////////////////////////////////////////////
+
+SResourceView SResourceView::ShaderResourceRawView(DXGI_FORMAT nFormat, int nFirstElement, int nElementCount, int nFlags)
 {
-	return m_pBuffersInUse == other.m_pBuffersInUse &&
-	       m_numElements == other.m_numElements &&
-	       m_flags == other.m_flags;
+	SResourceView result(0);
+
+	result.m_Desc.eViewType = eShaderResourceView;
+	result.m_Desc.nFormat = nFormat;
+	result.m_Desc.nOffsetBits = IntegerLog2_RoundUp(uint32(nFirstElement));
+	result.m_Desc.nOffsetAndSize = uint64(nFirstElement) << (46 - result.m_Desc.nOffsetBits);
+	result.m_Desc.nOffsetAndSize |= uint64(nElementCount) & MASK64(46 - result.m_Desc.nOffsetBits);
+	result.m_Desc.nFlags = nFlags;
+
+	CRY_ASSERT(nFirstElement == UINT(result.m_Desc.nOffsetAndSize >> (46 - result.m_Desc.nOffsetBits)));
+	CRY_ASSERT(nElementCount == UINT(result.m_Desc.nOffsetAndSize & MASK64(46 - result.m_Desc.nOffsetBits)));
+
+	return result;
+}
+
+SResourceView SResourceView::RenderTargetRawView(DXGI_FORMAT nFormat, int nFirstElement, int nElementCount)
+{
+	SResourceView result(0);
+
+	result.m_Desc.eViewType = eRenderTargetView;
+	result.m_Desc.nFormat = nFormat;
+	result.m_Desc.nOffsetBits = IntegerLog2_RoundUp(uint32(nFirstElement));
+	result.m_Desc.nOffsetAndSize = uint64(nFirstElement) << (46 - result.m_Desc.nOffsetBits);
+	result.m_Desc.nOffsetAndSize |= uint64(nElementCount) & MASK64(46 - result.m_Desc.nOffsetBits);
+
+	CRY_ASSERT(nFirstElement == UINT(result.m_Desc.nOffsetAndSize >> (46 - result.m_Desc.nOffsetBits)));
+	CRY_ASSERT(nElementCount == UINT(result.m_Desc.nOffsetAndSize & MASK64(46 - result.m_Desc.nOffsetBits)));
+
+	return result;
+}
+
+SResourceView SResourceView::DepthStencilRawView(DXGI_FORMAT nFormat, int nFirstElement, int nElementCount, int nFlags)
+{
+	SResourceView result(0);
+
+	result.m_Desc.eViewType = eDepthStencilView;
+	result.m_Desc.nFormat = nFormat;
+	result.m_Desc.nOffsetBits = IntegerLog2_RoundUp(uint32(nFirstElement));
+	result.m_Desc.nOffsetAndSize = uint64(nFirstElement) << (46 - result.m_Desc.nOffsetBits);
+	result.m_Desc.nOffsetAndSize |= uint64(nElementCount) & MASK64(46 - result.m_Desc.nOffsetBits);
+	result.m_Desc.nFlags = nFlags;
+
+	CRY_ASSERT(nFirstElement == UINT(result.m_Desc.nOffsetAndSize >> (46 - result.m_Desc.nOffsetBits)));
+	CRY_ASSERT(nElementCount == UINT(result.m_Desc.nOffsetAndSize & MASK64(46 - result.m_Desc.nOffsetBits)));
+
+	return result;
+}
+
+SResourceView SResourceView::UnorderedAccessRawView(DXGI_FORMAT nFormat, int nFirstElement, int nElementCount, int nFlags)
+{
+	SResourceView result(0);
+
+	result.m_Desc.eViewType = eUnorderedAccessView;
+	result.m_Desc.nFormat = nFormat;
+	result.m_Desc.nOffsetBits = IntegerLog2_RoundUp(uint32(nFirstElement));
+	result.m_Desc.nOffsetAndSize = uint64(nFirstElement) << (46 - result.m_Desc.nOffsetBits);
+	result.m_Desc.nOffsetAndSize |= uint64(nElementCount) & MASK64(46 - result.m_Desc.nOffsetBits);
+	result.m_Desc.nFlags = nFlags;
+
+	CRY_ASSERT(nFirstElement == UINT(result.m_Desc.nOffsetAndSize >> (46 - result.m_Desc.nOffsetBits)));
+	CRY_ASSERT(nElementCount == UINT(result.m_Desc.nOffsetAndSize & MASK64(46 - result.m_Desc.nOffsetBits)));
+
+	return result;
+}
+
+//============================================================
+void CGpuBuffer::OwnDevBuffer(CDeviceBuffer* pDeviceBuf)
+{
+	// TODO: not sure how to handle this
+	__debugbreak();
+
+#if 0
+	SAFE_RELEASE(m_pDevBuffer);
+
+	m_pDevBuffer = pDeviceBuf;
+	if (m_pDevBuffer)
+	{
+		const SBufferLayout Layput = m_pDevBuffer->GetLayout();
+
+		// *INDENT-OFF*
+		m_eMapMode = 
+			((m_eFlags & CDeviceObjectFactory::BIND_SHADER_RESOURCE ) ? D3D11_MAP_WRITE_NO_OVERWRITE_SR :
+			((m_eFlags & CDeviceObjectFactory::BIND_VERTEX_BUFFER   ) ? D3D11_MAP_WRITE_NO_OVERWRITE_VB :
+			((m_eFlags & CDeviceObjectFactory::BIND_INDEX_BUFFER    ) ? D3D11_MAP_WRITE_NO_OVERWRITE_IB :
+			((m_eFlags & CDeviceObjectFactory::BIND_UNORDERED_ACCESS) ? D3D11_MAP_WRITE_NO_OVERWRITE_UA : D3D11_MAP(0)))));
+		// *INDENT-ON*
+
+		m_elementSize  = Layput.m_nElementSize;
+		m_elementCount = Layput.m_nElementCount;
+		m_eFlags       = Layput.m_eFlags;
+		m_eFormat      = Layput.m_eFormat;
+
+		m_nPersistentSize = m_pDevBuffer->GetDeviceSize();
+//		CryInterlockedAdd(&CGpuBuffer::s_nStatsCurManagedNonStreamedBufMem, m_nBaseSize);
+	}
+
+	InvalidateDeviceResource(eDeviceResourceDirty);
+#endif
+}
+
+void CGpuBuffer::AddInvalidateCallback(void* listener, const SResourceBinding::InvalidateCallbackFunction& callback) const
+{
+	AUTO_LOCK_T(CryCriticalSectionNonRecursive, s_invalidationLock);
+
+#if !CRY_PLATFORM_ORBIS || defined(__GXX_RTTI)
+	CRY_ASSERT(callback.target<SResourceBinding::InvalidateCallbackSignature*>() != nullptr);
+#endif
+
+	auto insertResult = m_invalidateCallbacks.emplace(listener, callback);
+	++insertResult.first->second.refCount;
+
+	// We only allow one callback function per listener
+#if !CRY_PLATFORM_ORBIS || defined(__GXX_RTTI)
+	CRY_ASSERT(*callback.target<SResourceBinding::InvalidateCallbackSignature*>() == *insertResult.first->second.callback.target<SResourceBinding::InvalidateCallbackSignature*>());
+#endif
+}
+
+void CGpuBuffer::RemoveInvalidateCallbacks(void* listener) const
+{
+	AUTO_LOCK_T(CryCriticalSectionNonRecursive, s_invalidationLock);
+
+	auto it = m_invalidateCallbacks.find(listener);
+
+	if (it != m_invalidateCallbacks.end())
+	{
+		if (--it->second.refCount <= 0)
+			m_invalidateCallbacks.erase(listener);
+	}
+}
+
+void CGpuBuffer::InvalidateDeviceResource(uint32 dirtyFlags)
+{
+	AUTO_LOCK_T(CryCriticalSectionNonRecursive, s_invalidationLock);
+
+	for (auto it = m_invalidateCallbacks.begin(), end = m_invalidateCallbacks.end(); it != end;)
+	{
+		auto itCurrentCallback = it++;
+		if (itCurrentCallback->second.callback(itCurrentCallback->first, dirtyFlags) == false)
+			m_invalidateCallbacks.erase(itCurrentCallback);
+	}
 }
 
 CGpuBuffer::~CGpuBuffer()
 {
+	InvalidateDeviceResource(eResourceDestroyed);
+
 	Release();
+	CRY_ASSERT_MESSAGE(m_invalidateCallbacks.empty(), "Make sure any clients (e.g. Renderpasses, resource sets, etc..) are released before destroying this resource");
 }
 
 void CGpuBuffer::Release()
 {
 	MEMORY_SCOPE_CHECK_HEAP();
 
-	m_pBuffersInUse.reset();
-	m_numElements = 0;
-	m_flags = 0;
-	m_bLocked = false;
-	m_MapMode = D3D11_MAP(0);
+	if (m_pDeviceBuffer)
+	{
+		ReleaseDeviceBuffer(m_pDeviceBuffer);
+		while (!m_deviceBufferPool.empty())
+		{
+			ReleaseDeviceBuffer(m_deviceBufferPool.front().pDeviceBuffer);
+			m_deviceBufferPool.pop();
+		}
+	}
 
-	ZeroStruct(m_bufferDesc);
-	ZeroStruct(m_srvDesc);
-	ZeroStruct(m_uavDesc);
+	m_elementCount = 0;
+	m_eFlags = 0;
+	m_bLocked = false;
+	m_eMapMode = D3D11_MAP(0);
+
+	InvalidateDeviceResource(eDeviceResourceDirty);
 }
 
-void CGpuBuffer::Create(uint32 numElements, uint32 elementSize, DXGI_FORMAT elementFormat, uint32 flags, const void* pData)
+void CGpuBuffer::Create(uint32 elementCount, uint32 elementSize, DXGI_FORMAT elementFormat, uint32 eFlags, const void* pData)
 {
 	Release();
 
-	m_bufferDesc.BindFlags = ((flags & DX11BUF_BIND_VERTEX_BUFFER) ? D3D11_BIND_VERTEX_BUFFER : 0) |
-	                         ((flags & DX11BUF_BIND_INDEX_BUFFER) ? D3D11_BIND_INDEX_BUFFER : 0) |
-	                         ((flags & DX11BUF_BIND_SRV) ? D3D11_BIND_SHADER_RESOURCE : 0) |
-	                         ((flags & DX11BUF_BIND_UAV) ? D3D11_BIND_UNORDERED_ACCESS : 0);
-	m_bufferDesc.CPUAccessFlags = ((flags & DX11BUF_DYNAMIC) ? D3D11_CPU_ACCESS_WRITE : 0);
-	m_bufferDesc.MiscFlags = ((flags & DX11BUF_STRUCTURED) ? D3D11_RESOURCE_MISC_BUFFER_STRUCTURED : 0) |
-	                         ((flags & DX11BUF_DRAWINDIRECT) ? D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS : 0);
-	m_bufferDesc.ByteWidth = numElements * elementSize;
-	m_bufferDesc.StructureByteStride = elementSize;
+	// *INDENT-OFF*
+	m_eMapMode = 
+		((eFlags & CDeviceObjectFactory::BIND_SHADER_RESOURCE ) ? D3D11_MAP_WRITE_NO_OVERWRITE_SR :
+		((eFlags & CDeviceObjectFactory::BIND_VERTEX_BUFFER   ) ? D3D11_MAP_WRITE_NO_OVERWRITE_VB :
+		((eFlags & CDeviceObjectFactory::BIND_INDEX_BUFFER    ) ? D3D11_MAP_WRITE_NO_OVERWRITE_IB :
+		((eFlags & CDeviceObjectFactory::BIND_UNORDERED_ACCESS) ? D3D11_MAP_WRITE_NO_OVERWRITE_UA : D3D11_MAP(0)))));
+	// *INDENT-ON*
 
-	// D3D11_USAGE_IMMUTABLE
-	// A resource that can only be read by the GPU.It cannot be written by the GPU, and cannot be accessed
-	// at all by the CPU.This type of resource must be initialized when it is created, since it cannot be
-	// changed after creation.
-	//
-	// Buffers without initial data can't possibly IMMUTABLE, they would be buffers without defined content!
-	m_bufferDesc.Usage = (flags & DX11BUF_DYNAMIC) ? D3D11_USAGE_DYNAMIC : (flags & DX11BUF_BIND_UAV || !pData ? D3D11_USAGE_DEFAULT : D3D11_USAGE_IMMUTABLE);
+	m_elementSize  = elementFormat == DXGI_FORMAT_UNKNOWN ? elementSize : DeviceFormats::GetStride(elementFormat);
+	m_elementCount = elementCount;
+	m_eFlags       = eFlags;
+	m_eFormat      = elementFormat;
 
-	m_MapMode = ((flags & DX11BUF_BIND_SRV) ? D3D11_MAP_WRITE_NO_OVERWRITE_SR :
-	             ((flags & DX11BUF_BIND_VERTEX_BUFFER) ? D3D11_MAP_WRITE_NO_OVERWRITE_VB :
-	              ((flags & DX11BUF_BIND_INDEX_BUFFER) ? D3D11_MAP_WRITE_NO_OVERWRITE_IB :
-	               ((flags & DX11BUF_BIND_UAV) ? D3D11_MAP_WRITE_NO_OVERWRITE_UA : D3D11_MAP(0)))));
-
-	// SRV desc
-	m_srvDesc.Format = elementFormat;
-	m_srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-	m_srvDesc.Buffer.ElementOffset = 0;
-	m_srvDesc.Buffer.NumElements = numElements;
-
-	// UAV desc
-	m_uavDesc.Format = elementFormat;
-	m_uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-	m_uavDesc.Buffer.FirstElement = 0;
-	m_uavDesc.Buffer.Flags = (flags & DX11BUF_UAV_APPEND) ? D3D11_BUFFER_UAV_FLAG_APPEND | D3D11_BUFFER_UAV_FLAG_COUNTER : 0;
-	m_uavDesc.Buffer.Flags |= (flags & DX11BUF_UAV_COUNTER) ? D3D11_BUFFER_UAV_FLAG_COUNTER : 0;
-	m_uavDesc.Buffer.NumElements = numElements;
-
-	m_numElements = numElements;
-	m_flags = flags;
-
-	PrepareFreeBuffer(pData);
+	m_pDeviceBuffer = AllocateDeviceBuffer(pData);
 }
 
-void CGpuBuffer::PrepareFreeBuffer(const void* pInitialData)
+CDeviceBuffer* CGpuBuffer::AllocateDeviceBuffer(const void* pInitialData) const
 {
-	if (!m_pBuffersInUse)
+	const SBufferLayout Layout =
 	{
-		m_pBuffersInUse = std::make_shared<BufferQueue>();
+		m_eFormat,
+		m_elementCount,
+		m_elementSize,
+		m_eFlags
+	};
+
+	CDeviceBuffer* pResult = CDeviceBuffer::Create(Layout, pInitialData);
+
+	// persistent map on dx12
+#if (CRY_RENDERER_DIRECT3D >= 120)
+
+	if (m_eFlags & CDeviceObjectFactory::USAGE_CPU_WRITE)
+	{
+		uint8* base_ptr;
+		CDeviceObjectFactory::ExtractBasePointer(pResult->GetBuffer(), m_eMapMode, base_ptr);
+	}
+#endif
+
+	return  pResult;
+}
+
+void CGpuBuffer::ReleaseDeviceBuffer(CDeviceBuffer*& pDeviceBuffer) const
+{
+	// persistent map on dx12
+#if (CRY_RENDERER_DIRECT3D >= 120)
+	if (m_eFlags & CDeviceObjectFactory::USAGE_CPU_WRITE)
+	{
+		CDeviceObjectFactory::ReleaseBasePointer(pDeviceBuffer->GetBuffer());
+	}
+#endif
+
+	SAFE_RELEASE(pDeviceBuffer);
+}
+
+void CGpuBuffer::PrepareUnusedBuffer()
+{
+	CRY_ASSERT(m_pDeviceBuffer);
+
+	m_deviceBufferPool.emplace(m_pDeviceBuffer);
+
+	if (!m_deviceBufferPool.front().IsInUse())
+	{
+		m_pDeviceBuffer = m_deviceBufferPool.front().pDeviceBuffer;
+		m_deviceBufferPool.pop();
+	}
+	else
+	{
+		m_pDeviceBuffer = AllocateDeviceBuffer(nullptr);
 	}
 
-	if (m_pBuffersInUse->empty() || m_pBuffersInUse->front().m_nLastReadFrame > gcpRendD3D->GetCompletedFrameCounter())
+	InvalidateDeviceResource(eDeviceResourceDirty);
+
+	CRY_ASSERT(m_MaxBufferCopies < 0 || m_deviceBufferPool.size() <= m_MaxBufferCopies);
+}
+
+void CGpuBuffer::UpdateBufferContent(const void* pData, uint32 nSize)
+{
+	CRY_ASSERT(!m_bLocked);
+
+	PrepareUnusedBuffer();
+
+	if (nSize)
 	{
-		CRY_ASSERT(m_pBuffersInUse->size() < m_MaxBufferCopies);
-		m_pBuffersInUse->push(STrackedBuffer());
-
-		STrackedBuffer& curBuffer = m_pBuffersInUse->back();
-		ZeroStruct(curBuffer);
-
-		D3D11_SUBRESOURCE_DATA Data;
-		Data.pSysMem = pInitialData;
-		Data.SysMemPitch = m_bufferDesc.ByteWidth;
-		Data.SysMemSlicePitch = m_bufferDesc.ByteWidth;
-
-		HRESULT hr = S_OK;
-
-		if (m_flags & DX11BUF_NULL_RESOURCE)
+		if (m_eFlags & CDeviceObjectFactory::USAGE_CPU_WRITE)
 		{
-			D3DBuffer* pBuffer = static_cast<D3DBuffer*>(gRenDev->m_DevMan.AllocateNullResource(D3D11_RESOURCE_DIMENSION_BUFFER));
-			curBuffer.m_pBuffer.Assign_NoAddRef(pBuffer);
+			// Transfer sub-set of GPU resource to CPU, also allows graphics debugger and multi-gpu broadcaster to do the right thing
+			CDeviceObjectFactory::UploadContents<false>(m_pDeviceBuffer->GetBuffer(), 0, 0, nSize, D3D11_MAP(m_eMapMode), pData);
 		}
 		else
 		{
-			ID3D11Buffer* pBuffer = nullptr;
-			hr = gcpRendD3D->GetDevice().CreateBuffer(&m_bufferDesc, (pInitialData != nullptr) ? &Data : nullptr, &pBuffer);
-			curBuffer.m_pBuffer.Assign_NoAddRef(pBuffer);
+			// Asynchronous
+			const SResourceMemoryAlignment& layout = { m_elementSize, nSize, 0, 0 };
+			GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(pData, m_pDeviceBuffer, layout);
 		}
-
-		if (SUCCEEDED(hr) && curBuffer.m_pBuffer)
-		{
-			if (pInitialData)
-			{
-				curBuffer.m_nLastWriteFrame = gcpRendD3D->GetCurrentFrameCounter();
-			}
-
-			if (curBuffer.m_pBuffer && (m_flags & DX11BUF_DYNAMIC))
-			{
-				curBuffer.m_BufferPersistentMapMode = m_MapMode;
-				curBuffer.EnablePersistentMap(true);
-			}
-
-			if (m_flags & DX11BUF_BIND_SRV)
-			{
-				ID3D11ShaderResourceView* pSrv;
-				gcpRendD3D->GetDevice().CreateShaderResourceView(curBuffer.m_pBuffer, &m_srvDesc, &pSrv);
-				curBuffer.m_pSRV.Assign_NoAddRef(pSrv);
-			}
-
-			if (m_flags & DX11BUF_BIND_UAV)
-			{
-				ID3D11UnorderedAccessView* pUav;
-				gcpRendD3D->GetDevice().CreateUnorderedAccessView(curBuffer.m_pBuffer, &m_uavDesc, &pUav);
-				curBuffer.m_pUAV.Assign_NoAddRef(pUav);
-			}
-		}
-	}
-	else
-	{
-		CRY_ASSERT(!pInitialData);
-
-		STrackedBuffer oldestBuffer(std::move(m_pBuffersInUse->front()));
-		m_pBuffersInUse->pop();
-		m_pBuffersInUse->push(std::move(oldestBuffer));
-	}
-}
-
-CGpuBuffer::STrackedBuffer& CGpuBuffer::GetCurrentBuffer()
-{
-	CRY_ASSERT(m_pBuffersInUse && !m_pBuffersInUse->empty());
-	return m_pBuffersInUse->back();
-}
-
-const CGpuBuffer::STrackedBuffer& CGpuBuffer::GetCurrentBuffer() const
-{
-	CRY_ASSERT(m_pBuffersInUse && !m_pBuffersInUse->empty());
-	return m_pBuffersInUse->back();
-}
-
-void CGpuBuffer::UpdateBufferContent(const void* pData, size_t nSize)
-{
-	CRY_ASSERT(!m_pBuffersInUse->empty());
-	CRY_ASSERT(!m_bLocked);
-
-	PrepareFreeBuffer();
-
-	STrackedBuffer& curBuffer = GetCurrentBuffer();
-	curBuffer.m_nLastWriteFrame = gcpRendD3D->GetCurrentFrameCounter();
-
-	if (m_flags & DX11BUF_DYNAMIC)
-	{
-		// Synchronous
-		D3D11_MAPPED_SUBRESOURCE mappedRes;
-		gcpRendD3D->GetDeviceContext().Map(curBuffer.m_pBuffer, 0, m_MapMode, 0, &mappedRes);
-		memcpy(mappedRes.pData, pData, nSize);
-		gcpRendD3D->GetDeviceContext().Unmap(curBuffer.m_pBuffer, 0);
-	}
-	else
-	{
-		// Asynchronous
-		gcpRendD3D->GetDeviceContext().UpdateSubresource(curBuffer.m_pBuffer, 0, nullptr, pData, 0, 0);
 	}
 }
 
 void* CGpuBuffer::Lock()
 {
-	CRY_ASSERT(!m_pBuffersInUse->empty());
-	CRY_ASSERT(m_flags & DX11BUF_DYNAMIC);
+	CRY_ASSERT(m_eFlags & CDeviceObjectFactory::USAGE_CPU_WRITE);
 	CRY_ASSERT(!m_bLocked);
 
-	PrepareFreeBuffer();
-
-	STrackedBuffer& curBuffer = GetCurrentBuffer();
-	CRY_ASSERT(curBuffer.m_nLastReadFrame < gcpRendD3D->GetCurrentFrameCounter()); // read before write on same frame
-	curBuffer.m_nLastWriteFrame = gcpRendD3D->GetCurrentFrameCounter();
+	PrepareUnusedBuffer();
 
 	m_bLocked = true;
 
-	D3D11_MAPPED_SUBRESOURCE mappedResource;
-	gcpRendD3D->GetDeviceContext().Map(curBuffer.m_pBuffer, 0, D3D11_MAP(m_MapMode), 0, &mappedResource);
-	return mappedResource.pData;
+	return CDeviceObjectFactory::Map(m_pDeviceBuffer->GetBuffer(), 0, 0, 0, D3D11_MAP(m_eMapMode));
 }
 
-void CGpuBuffer::Unlock()
+void CGpuBuffer::Unlock(buffer_size_t nSize)
 {
-	CRY_ASSERT(!m_pBuffersInUse->empty());
-	CRY_ASSERT(m_flags & DX11BUF_DYNAMIC);
+	CRY_ASSERT(m_eFlags & CDeviceObjectFactory::USAGE_CPU_WRITE);
 	CRY_ASSERT(m_bLocked);
 
-	STrackedBuffer& curBuffer = GetCurrentBuffer();
-	CRY_ASSERT(curBuffer.m_nLastReadFrame < gcpRendD3D->GetCurrentFrameCounter()); // read before write on same frame
-
-	gcpRendD3D->GetDeviceContext().Unmap(curBuffer.m_pBuffer, 0);
 	m_bLocked = false;
-}
 
-ID3D11Buffer* CGpuBuffer::GetBuffer() const
-{
-	if (!m_pBuffersInUse)
-		return nullptr;
-
-	return GetCurrentBuffer().m_pBuffer;
-}
-
-ID3D11ShaderResourceView* CGpuBuffer::GetSRV() const
-{
-	if (!m_pBuffersInUse)
-		return nullptr;
-
-	const STrackedBuffer& curBuffer = GetCurrentBuffer();
-	curBuffer.m_nLastReadFrame = gcpRendD3D->GetCurrentFrameCounter();
-	return curBuffer.m_pSRV;
-}
-
-ID3D11UnorderedAccessView* CGpuBuffer::GetUAV() const
-{
-	if (!m_pBuffersInUse)
-		return nullptr;
-
-	const STrackedBuffer& curBuffer = GetCurrentBuffer();
-	curBuffer.m_nLastReadFrame = gcpRendD3D->GetCurrentFrameCounter();
-	return curBuffer.m_pUAV;
+	CDeviceObjectFactory::Unmap(m_pDeviceBuffer->GetBuffer(), 0, 0, nSize, D3D11_MAP(m_eMapMode));
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -4306,13 +4565,12 @@ CConstantBufferPtr CGraphicsDeviceConstantBuffer::GetConstantBuffer()
 	if (!m_pConstantBuffer)
 	{
 		m_pConstantBuffer = gRenDev->m_DevBufMan.CreateConstantBuffer(m_size);
-		// m_DevBufMan.CreateConstantBuffer creates a structure with a reference count already set to 1,
-		// to assign it to smart pointer properly we need to free one original reference.
-		m_pConstantBuffer->Release();
 	}
 	if (m_bDirty && m_data.size() > 0)
 	{
-		m_pConstantBuffer->UpdateBuffer(&m_data[0], m_data.size());
+		// NOTE: The pointer and the size is optimal aligned
+		const buffer_size_t dataSize = Align(m_data.size(), CRY_PLATFORM_ALIGNMENT);
+		m_pConstantBuffer->UpdateBuffer(&m_data[0], dataSize);
 	}
 	return m_pConstantBuffer;
 }
@@ -4323,7 +4581,7 @@ CConstantBufferPtr CGraphicsDeviceConstantBuffer::GetNullConstantBuffer()
 	CryAutoCriticalSection lock(s_accessLock);
 	if (!m_pConstantBuffer)
 	{
-		m_pConstantBuffer = gRenDev->m_DevBufMan.CreateNullConstantBuffer();
+		m_pConstantBuffer = gRenDev->m_DevBufMan.GetNullConstantBuffer();
 	}
 	if (m_bDirty && m_data.size() > 0)
 	{

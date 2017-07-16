@@ -23,15 +23,15 @@
 
 #include <CryNetwork/ISerialize.h> // <> required for Interfuscator
 #include <CrySystem/TimeValue.h>
-#include <CrySystem/ITimer.h>         // <> required for Interfuscator
-#include <CryLobby/ICryMatchMaking.h> // <> required for Interfuscator
+#include <CrySystem/ITimer.h>           // <> required for Interfuscator
+#include <CryLobby/CommonICryLobby.h>       // <> required for Interfuscator
+#include <CryLobby/CommonICryMatchMaking.h> // <> required for Interfuscator
 #include <CryNetwork/INetworkService.h>
+
+#include <CryEntitySystem/IEntity.h>
 
 #define SERVER_DEFAULT_PORT        64087
 #define SERVER_DEFAULT_PORT_STRING "64087"
-
-#define UNSAFE_NUM_ASPECTS         32         // 8,16 or 32
-#define NUM_ASPECTS                (UNSAFE_NUM_ASPECTS)
 
 #define NEW_BANDWIDTH_MANAGEMENT   1
 #if NEW_BANDWIDTH_MANAGEMENT
@@ -111,39 +111,6 @@ class CNetSerialize;
 typedef _smart_ptr<IRMIMessageBody> IRMIMessageBodyPtr;
 typedef uint32                      TPacketSize;
 
-//! This enum describes different reliability mechanisms for packet delivery.
-//! Do not change ordering here without updating ServerContextView, ClientContextView.
-//! \note This is pretty much deprecated; new code should use the message queue facilities
-//! to order messages, and be declared either ReliableUnordered or UnreliableUnordered.
-enum ENetReliabilityType
-{
-	eNRT_ReliableOrdered,
-	eNRT_ReliableUnordered,
-	eNRT_UnreliableOrdered,
-	eNRT_UnreliableUnordered,
-
-	// Must be last.
-	eNRT_NumReliabilityTypes
-};
-
-//! Implementation of CContextView relies on the first two values being as they are.
-enum ERMIAttachmentType
-{
-	eRAT_PreAttach  = 0,
-	eRAT_PostAttach = 1,
-	eRAT_NoAttach,
-
-	//! Urgent RMIs will be sent at the next sync with game.
-	//! \note Use with caution as this will increase bandwidth.
-	eRAT_Urgent,
-
-	//! If an RMI doesn't care about the object update, then use independent RMIs as they can be sent in the urgent RMI flush.
-	eRAT_Independent,
-
-	// Must be last.
-	eRAT_NumAttachmentTypes
-};
-
 enum EContextViewState
 {
 
@@ -188,10 +155,6 @@ enum EAspectFlags
 
 	//! Aspect has more than one profile (serialization format).
 	eAF_ServerManagedProfile = 0x20,
-
-	//! Client should periodically send a hash of what it thinks the current state of an aspect is.
-	//! This hash is compared to the server hash and forces a server update if there's a mismatch.
-	eAF_HashState = 0x40,
 
 	//! Aspect needs a timestamp to make sense (i.e. physics).
 	eAF_TimestampState = 0x80,
@@ -262,19 +225,8 @@ ILINE EMessageSendResult WorstMessageSendResult(EMessageSendResult r1, EMessageS
 		return r1;
 }
 
-#define _CRYNETWORK_CONCAT(x, y) x ## y
-#define CRYNETWORK_CONCAT(x, y)  _CRYNETWORK_CONCAT(x, y)
-#define ASPECT_TYPE CRYNETWORK_CONCAT(uint, UNSAFE_NUM_ASPECTS)
-
-#if NUM_ASPECTS > 32
-	#error Aspects > 32 Not supported at this time
-#endif
-
+#include "INetEntity.h"
 typedef uint8       ChannelMaskType;
-typedef ASPECT_TYPE NetworkAspectType;
-typedef uint8       NetworkAspectID;
-
-#define NET_ASPECT_ALL (NetworkAspectType(0xFFFFFFFF))
 
 typedef uint32 TNetChannelID;
 static const char* LOCAL_CONNECTION_STRING = "<local>";
@@ -294,8 +246,8 @@ struct SSendableHandle
 	{
 		return id == 0 && salt == 0;
 	}
-	typedef uint32 (SSendableHandle::* unknown_bool_type);
-	ILINE operator unknown_bool_type() const
+	typedef uint32 SSendableHandle::* safe_bool_idiom_type;
+	ILINE operator safe_bool_idiom_type() const
 	{
 		return !!(*this) ? &SSendableHandle::id : NULL;
 	}
@@ -333,6 +285,7 @@ struct SNetMessageDef
 	  TSerialize,
 	  uint32 curSeq,
 	  uint32 oldSeq,
+	  uint32 timeFraction32,
 	  EntityId* pRmiObject,
 	  INetChannel* pChannel
 	  );
@@ -463,36 +416,27 @@ struct SNetGameInfo
 #define HOST_MIGRATION_MAX_PLAYER_NAME_SIZE (32)
 #define HOST_MIGRATION_LISTENER_NAME_SIZE   (64)
 
-typedef uint32 HMStateType;
-
-struct SHostMigrationEventListenerInfo
+enum eHostMigrationState
 {
-	SHostMigrationEventListenerInfo(IHostMigrationEventListener* pListener, const char* pWho)
-		: m_pListener(pListener)
-	{
-		for (uint32 index = 0; index < MAX_MATCHMAKING_SESSIONS; ++index)
-		{
-			Reset(index);
-		}
-#if !defined(_RELEASE)
-		m_pWho = pWho;
-#endif
-	}
+	eHMS_Idle,
+	eHMS_Initiate,
+	eHMS_DisconnectClient,
+	eHMS_WaitForNewServer,
+	eHMS_DemoteToClient,
+	eHMS_PromoteToServer,
+	eHMS_ReconnectClient,
+	eHMS_Finalise,
+	eHMS_StateCheck,
+	eHMS_Terminate,
+	eHMS_Resetting,
+	eHMS_Unknown,
 
-	void Reset(uint32 sessionIndex)
-	{
-		CRY_ASSERT(sessionIndex < MAX_MATCHMAKING_SESSIONS);
-		m_done[sessionIndex] = false;
-		m_state[sessionIndex] = 0;
-	}
-
-	IHostMigrationEventListener*                       m_pListener;
-	bool                                               m_done[MAX_MATCHMAKING_SESSIONS];
-	HMStateType                                        m_state[MAX_MATCHMAKING_SESSIONS];
-#if !defined(_RELEASE)
-	CryFixedStringT<HOST_MIGRATION_LISTENER_NAME_SIZE> m_pWho;
-#endif
+	eHMS_NUM_STATES
 };
+
+#define MAX_MATCHMAKING_SESSIONS 4
+
+typedef uint32 HMStateType;
 
 struct SHostMigrationInfo
 {
@@ -565,6 +509,35 @@ struct IHostMigrationEventListener
 	virtual void                 OnComplete(SHostMigrationInfo& hostMigrationInfo) = 0;
 	virtual EHostMigrationReturn OnReset(SHostMigrationInfo& hostMigrationInfo, HMStateType& state) = 0;
 	// </interfuscator:shuffle>
+};
+
+struct SHostMigrationEventListenerInfo
+{
+	SHostMigrationEventListenerInfo(IHostMigrationEventListener* pListener, const char* pWho)
+		: m_pListener(pListener)
+	{
+		for (uint32 index = 0; index < MAX_MATCHMAKING_SESSIONS; ++index)
+		{
+			Reset(index);
+		}
+#if !defined(_RELEASE)
+		m_pWho = pWho;
+#endif
+	}
+
+	void Reset(uint32 sessionIndex)
+	{
+		CRY_ASSERT(sessionIndex < MAX_MATCHMAKING_SESSIONS);
+		m_done[sessionIndex] = false;
+		m_state[sessionIndex] = 0;
+	}
+
+	IHostMigrationEventListener*                       m_pListener;
+	bool                                               m_done[MAX_MATCHMAKING_SESSIONS];
+	HMStateType                                        m_state[MAX_MATCHMAKING_SESSIONS];
+#if !defined(_RELEASE)
+	CryFixedStringT<HOST_MIGRATION_LISTENER_NAME_SIZE> m_pWho;
+#endif
 };
 
 //! Must be at least the same as CMessageQueue::MAX_ACCOUNTING_GROUPS.
@@ -778,6 +751,11 @@ enum EListenerPriorityType
 	ELPT_PostEngine = 0x00020000,
 };
 
+struct INetworkEngineModule : public Cry::IDefaultModule
+{
+	CRYINTERFACE_DECLARE(INetworkEngineModule, 0xE608361742194054, 0x93FA3B2ADA514755);
+};
+
 //! Main access point for creating Network objects.
 struct INetwork
 {
@@ -880,19 +858,6 @@ struct INetwork
 	virtual void                   NpEndFunction() = 0;
 	virtual bool                   NpIsInitialised() = 0;
 	virtual SNetProfileStackEntry* NpGetNullProfile() = 0;
-
-	/////////////////////////////////////////////////////////////////////////////
-	// Rebroadcaster.
-
-	//! IsRebroadcasterEnabled.
-	//! Informs the caller if the rebroadcaster is enabled or not.
-	virtual bool IsRebroadcasterEnabled(void) const = 0;
-
-	//! Adds a connection to the rebroadcaster mesh.
-	//! \param pChannel   Pointer to the channel being added.
-	//! \param channelID  Game side channel ID associated with pChannel (if known).
-	virtual void AddRebroadcasterConnection(INetChannel* pChannel, TNetChannelID channelID) = 0;
-	/////////////////////////////////////////////////////////////////////////////
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Host Migration.
@@ -1174,11 +1139,12 @@ struct INetContext
 
 struct INetSender
 {
-	INetSender(TSerialize sr, uint32 nCurrentSeq, uint32 nBasisSeq, bool isServer) : ser(sr)
+	INetSender(TSerialize sr, uint32 nCurrentSeq, uint32 nBasisSeq, uint32 timeFraction32, bool isServer) : ser(sr)
 	{
 		this->nCurrentSeq = nCurrentSeq;
 		this->nBasisSeq = nBasisSeq;
 		this->isServer = isServer;
+		this->timeValue = timeFraction32;
 	}
 	// <interfuscator:shuffle>
 	virtual ~INetSender(){}
@@ -1191,6 +1157,7 @@ struct INetSender
 	bool           isServer;
 	uint32         nCurrentSeq;
 	uint32         nBasisSeq;
+	uint32         timeValue;
 };
 
 struct INetBaseSendable
@@ -1396,25 +1363,14 @@ struct IGameContext
 	//! \note nAspect will have exactly one bit set describing which aspect to synch.
 	virtual ESynchObjectResult SynchObject(EntityId id, NetworkAspectType nAspect, uint8 nCurrentProfile, TSerialize ser, bool verboseLogging) = 0;
 
-	//! Changes the current profile of an object.
-	//! \note Game code should ensure that things work out correctly.
-	//! Example: Change physicalization.
-	virtual bool SetAspectProfile(EntityId id, NetworkAspectType nAspect, uint8 nProfile) = 0;
-
 	//! An entity has been unbound (we may wish to destroy it).
 	virtual void UnboundObject(EntityId id) = 0;
-
-	//! An entity has been bound (we may wish to do something with that info).
-	virtual void BoundObject(EntityId id, NetworkAspectType nAspects) = 0;
 
 	//! Handles a remote method invocation.
 	virtual INetAtSyncItem* HandleRMI(bool bClient, EntityId objID, uint8 funcID, TSerialize ser, INetChannel* pChannel) = 0;
 
 	//! Passes current demo playback mapped entity ID of the original demo recording server (local) player.
 	virtual void PassDemoPlaybackMappedOriginalServerPlayer(EntityId id) = 0;
-
-	//! Fetches the default (spawned) profile for an aspect.
-	virtual uint8      GetDefaultProfileForAspect(EntityId id, NetworkAspectType aspectID) = 0;
 
 	virtual CTimeValue GetPhysicsTime() = 0;
 	virtual void       BeginUpdateObjects(CTimeValue physTime, INetChannel* pChannel) = 0;
@@ -1423,7 +1379,6 @@ struct IGameContext
 	virtual void       OnEndNetworkFrame() = 0;
 	virtual void       OnStartNetworkFrame() = 0;
 
-	virtual uint32     HashAspect(EntityId id, NetworkAspectType nAspect) = 0;
 	virtual void       PlaybackBreakage(int breakId, INetBreakagePlaybackPtr pBreakage) = 0;
 	virtual void*      ReceiveSimpleBreakage(TSerialize ser)                                           { return NULL; }
 	virtual void       PlaybackSimpleBreakage(void* userData, INetBreakageSimplePlaybackPtr pBreakage) {}
@@ -1514,6 +1469,25 @@ struct INetNub
 
 	virtual bool HasPendingConnections() = 0;
 	// </interfuscator:shuffle>
+};
+
+// Listener that allows for listening to client connection and disconnect events
+struct INetworkedClientListener
+{
+	// Sent to the local client on disconnect
+	virtual void OnLocalClientDisconnected(EDisconnectionCause cause, const char* description) = 0;
+
+	// Sent to the server when a new client has started connecting
+	// Return false to disallow the connection
+	virtual bool OnClientConnectionReceived(int channelId, bool bIsReset) = 0;
+	// Sent to the server when a new client has finished connecting and is ready for gameplay
+	// Return false to disallow the connection and kick the player
+	virtual bool OnClientReadyForGameplay(int channelId, bool bIsReset) = 0;
+	// Sent to the server when a client is disconnected
+	virtual void OnClientDisconnected(int channelId, EDisconnectionCause cause, const char* description, bool bKeepClient) = 0;
+	// Sent to the server when a client is timing out (no packets for X seconds)
+	// Return true to allow disconnection, otherwise false to keep client.
+	virtual bool OnClientTimingOut(int channelId, EDisconnectionCause cause, const char* description) = 0;
 };
 
 #if ENABLE_RMI_BENCHMARK
@@ -1672,7 +1646,6 @@ struct INetChannel : public INetMessageSink
 	virtual void            SetChannelMask(ChannelMaskType newMask) = 0;
 	virtual void            SetClient(INetContext* pNetContext) = 0;
 	virtual void            SetServer(INetContext* pNetContext) = 0;
-	virtual void            SetPeer(INetContext* pNetContext) = 0;
 
 	//! Sets/resets the server password.
 	//! \param password New password string; will be checked at every context change if the length > 0.
@@ -2222,7 +2195,7 @@ public:
 
 	size_t Size() const
 	{
-		return MIN(m_count, N);
+		return std::min(m_count, N);
 	}
 
 	size_t Capacity() const

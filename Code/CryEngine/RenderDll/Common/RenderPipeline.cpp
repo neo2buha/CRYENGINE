@@ -20,13 +20,14 @@ uint32 SRendItem::BatchFlags(int nList)
 
 CRenderObjectsPools* CPermanentRenderObject::s_pPools;
 
+SPipeStat* SPipeStat::s_pCurrentOutput = nullptr;
+
 //=================================================================
 
 SRenderPipeline::SRenderPipeline()
 	: m_pShader(0)
 	, m_nShaderTechnique(-1)
 	, m_pCurTechnique(NULL)
-	, m_pREPostProcess(NULL)
 	, m_CurDownscaleFactor(Vec2(1.0f, 1.0f))
 	, m_IndexStreamOffset(~0)
 	, m_IndexStreamType(Index16)
@@ -37,12 +38,6 @@ SRenderPipeline::SRenderPipeline()
 
 SRenderPipeline::~SRenderPipeline()
 {
-#if defined(DIRECT3D9) || defined(DIRECT3D10)
-	for (unsigned int i = 0, n = m_CustomVD.Num(); i < n; i++)
-	{
-		delete m_CustomVD[i];
-	}
-#endif
 }
 
 //////////////////////////////////////////////////////////////////////////

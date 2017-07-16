@@ -57,10 +57,10 @@ struct STextureAnimation
 			animPos = min(animPos, 1.f);
 			break;
 		case EAnimationCycle::Loop:
-			animPos = fmod(animPos, 1.f);
+			animPos = mod(animPos, 1.f);
 			break;
 		case EAnimationCycle::Mirror:
-			animPos = 1.f - abs(fmod(animPos, 2.f) - 1.f);
+			animPos = 1.f - abs(mod(animPos, 2.f) - 1.f);
 			break;
 		}
 		return animPos * m_animPosScale;
@@ -79,17 +79,44 @@ private:
 	void  Update();
 };
 
+SERIALIZATION_ENUM_DEFINE(EIndoorVisibility, ,
+	IndoorOnly,
+	OutdoorOnly,
+	Both
+	)
+
+SERIALIZATION_ENUM_DEFINE(EWaterVisibility, ,
+	AboveWaterOnly,
+	BelowWaterOnly,
+	Both
+	)
+
 struct SVisibilityParams
 {
 	UFloat m_viewDistanceMultiple;         // Multiply standard view distance calculated from max particle size and e_ParticlesMinDrawPixels
-	UFloat m_maxScreenSize;                // Override cvar e_ParticlesMaxDrawScreen, fade out near camera
+	UFloatInf m_maxScreenSize;             // Override cvar e_ParticlesMaxDrawScreen, fade out near camera
 	UFloat m_minCameraDistance;
-	UFloat m_maxCameraDistance;
+	UFloatInf m_maxCameraDistance;
+	EIndoorVisibility m_indoorVisibility;
+	EWaterVisibility  m_waterVisibility;
 
 	SVisibilityParams()
 		: m_viewDistanceMultiple(1.0f)
 		, m_maxScreenSize(2.0f)
+		, m_indoorVisibility(EIndoorVisibility::Both)
+		, m_waterVisibility(EWaterVisibility::Both)
 	{}
+	void Combine(const SVisibilityParams& o)  // Combination from multiple features chooses most restrictive values
+	{
+		m_viewDistanceMultiple = m_viewDistanceMultiple * o.m_viewDistanceMultiple;
+		m_maxScreenSize = min(m_maxScreenSize, o.m_maxScreenSize);
+		m_minCameraDistance = max(m_minCameraDistance, o.m_minCameraDistance);
+		m_maxCameraDistance = min(m_maxCameraDistance, o.m_maxCameraDistance);
+		if (m_indoorVisibility == EIndoorVisibility::Both)
+			m_indoorVisibility = o.m_indoorVisibility;
+		if (m_waterVisibility == EWaterVisibility::Both)
+			m_waterVisibility = o.m_waterVisibility;
+	}
 };
 
 struct SComponentParams
@@ -101,10 +128,10 @@ struct SComponentParams
 
 	void  Reset();
 	void  Validate(CParticleComponent* pComponent, Serialization::IArchive* ar = 0);
-	float GetPrimeTime() const;
 	bool  IsValid() const     { return m_isValid; }
 	bool  HasChildren() const { return !m_subComponentIds.empty(); }
 	bool  IsSecondGen() const { return m_parentId != gInvalidId; }
+	bool  IsImmortal() const  { return !std::isfinite(m_emitterLifeTime.end + m_maxParticleLifeTime); }
 	void  MakeMaterial(CParticleComponent* pComponent);
 
 	// PFX2_TODO : Reorder from larger to smaller
@@ -113,11 +140,12 @@ struct SComponentParams
 	_smart_ptr<IMaterial>     m_pMaterial;
 	_smart_ptr<IMeshObj>      m_pMesh;
 	string                    m_diffuseMap;
-	uint32                    m_renderObjectFlags;
+	uint64                    m_renderObjectFlags;
 	size_t                    m_instanceDataStride;
 	STextureAnimation         m_textureAnimation;
 	float                     m_scaleParticleCount;
-	float                     m_baseParticleLifeTime;
+	Range                     m_emitterLifeTime;
+	float                     m_maxParticleLifeTime;
 	float                     m_maxParticleSize;
 	float                     m_renderObjectSortBias;
 	SVisibilityParams         m_visibility;
@@ -166,35 +194,29 @@ public:
 	CParticleEffect*                      GetEffect() const             { return m_pEffect; }
 	uint                                  GetNumFeatures(EFeatureType type) const;
 	CParticleFeature*                     GetCFeature(size_t idx) const { return m_features[idx]; }
+	template<typename TFeatureType>
+	TFeatureType*                         GetCFeatureByType() const;
+	CParticleFeature*                     GetCFeatureByType(const SParticleFeatureParams* pSearchParams) const;
 
 	void                                  AddToUpdateList(EUpdateList list, CParticleFeature* pFeature);
 	TInstanceDataOffset                   AddInstanceData(size_t size);
 	void                                  AddParticleData(EParticleDataType type);
-	void                                  AddParticleData(EParticleVec3Field type);
-	void                                  AddParticleData(EParticleQuatField type);
-	const std::vector<CParticleFeature*>& GetUpdateList(EUpdateList list) const         { return m_updateLists[list]; }
+	const std::vector<CParticleFeature*>& GetUpdateList(EUpdateList list) const { return m_updateLists[list]; }
 
 	const SComponentParams& GetComponentParams() const                    { return m_componentParams; }
 	bool                    UseParticleData(EParticleDataType type) const { return m_useParticleData[type]; }
 
-	bool                    SetSecondGeneration(CParticleComponent* pParentComponent);
+	bool                    SetSecondGeneration(CParticleComponent* pParentComponent, bool delayed);
 	CParticleComponent*     GetParentComponent() const;
+	float                   GetEquilibriumTime(Range parentLife = Range()) const;
 
-	void                    Render(ICommonParticleComponentRuntime* pRuntime, const SRenderContext& renderContext, IRenderNode* pNode);
+	void                    PrepareRenderObjects(CParticleEmitter* pEmitter);
+	void                    ResetRenderObjects(CParticleEmitter* pEmitter);
+	void                    Render(CParticleEmitter* pEmitter, ICommonParticleComponentRuntime* pRuntime, const SRenderContext& renderContext);
+	void                    RenderDeferred(CParticleEmitter* pEmitter, ICommonParticleComponentRuntime* pRuntime, const SRenderContext& renderContext);
+	bool                    CanMakeRuntime(CParticleEmitter* pEmitter) const;
+
 private:
-	void                    AddRemoveParticles(const SUpdateContext& context);
-	void                    UpdateNewBorns(const SUpdateContext& context, const SUpdateRange& updateRange);
-	void                    UpdateFeatures(const SUpdateContext& context, const SUpdateRange& updateRange);
-	void                    Integrate(const SUpdateRange& updateRange, float deltaTime);
-	void                    PostUpdateFeatures(const SUpdateContext& context, const SUpdateRange& updateRange);
-
-	void                    AgeUpdate(const SUpdateRange& updateRange, float deltaTime);
-	void                    LinearIntegral(const SUpdateRange& updateRange, float deltaTime);
-	void                    QuadraticIntegral(const SUpdateRange& updateRange, float deltaTime);
-	void                    ExpDragIntegral(const SUpdateRange& updateRange, float deltaTime);
-
-	void                    DebugStabilityCheck();
-
 	friend class CParticleEffect;
 	Vec2                                                 m_nodePosition;
 	CParticleEffect*                                     m_pEffect;
@@ -204,13 +226,21 @@ private:
 	std::vector<TParticleFeaturePtr>                     m_features;
 	std::vector<CParticleFeature*>                       m_updateLists[EUL_Count];
 	std::vector<gpu_pfx2::IParticleFeatureGpuInterface*> m_gpuUpdateLists[EUL_Count];
-	bool                                                 m_useParticleData[EPDT_Count];
+	StaticEnumArray<bool, EParticleDataType>             m_useParticleData;
+	TParticleFeaturePtr                                  m_defaultMotionFeature;
 	SEnable                                              m_enabled;
 	SEnable                                              m_visible;
 	bool                                                 m_dirty;
 
 	SRuntimeInitializationParameters                     m_runtimeInitializationParameters;
 };
+
+template<typename TFeatureType>
+ILINE TFeatureType* CParticleComponent::GetCFeatureByType() const
+{
+	const SParticleFeatureParams* pSearchParams = &TFeatureType::GetStaticFeatureParams();
+	return static_cast<TFeatureType*>(GetCFeatureByType(pSearchParams));
+}
 
 }
 

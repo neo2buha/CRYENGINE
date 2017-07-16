@@ -13,10 +13,13 @@
 #include "RemoteConsole.h"
 
 #ifdef USE_REMOTE_CONSOLE
+<<<<<<< HEAD
 	#include <CryGame/IGame.h>
+=======
+>>>>>>> upstream/stabilisation
 	#include <CryGame/IGameFramework.h>
-	#include "ILevelSystem.h"
-	#if 0 // currently no stroboscope support
+	#include <../CryAction/ILevelSystem.h>
+	#if 0                       // currently no stroboscope support
 		#include "Stroboscope/Stroboscope.h"
 		#include "ThreadInfo.h"
 	#endif
@@ -36,7 +39,7 @@ CRemoteConsole::CRemoteConsole()
 	, m_running(false)
 #ifdef USE_REMOTE_CONSOLE
 	, m_pServer(new SRemoteServer())
-	, m_pLogEnableRemoteConsole(NULL)
+	, m_pLogEnableRemoteConsole(nullptr)
 #endif
 {
 }
@@ -62,7 +65,7 @@ void CRemoteConsole::RegisterConsoleVariables()
 void CRemoteConsole::UnregisterConsoleVariables()
 {
 #ifdef USE_REMOTE_CONSOLE
-	m_pLogEnableRemoteConsole = NULL;
+	m_pLogEnableRemoteConsole = nullptr;
 #endif
 }
 
@@ -96,8 +99,8 @@ void CRemoteConsole::AddLogMessage(const char* log)
 #ifdef USE_REMOTE_CONSOLE
 	if (!IsStarted()) return;
 
-	IRemoteEvent* pEvent = new SStringEvent<eCET_LogMessage>(log);
-	m_pServer->AddEvent(pEvent);
+	std::unique_ptr<IRemoteEvent> pEvent(new SStringEvent<eCET_LogMessage>(log));
+	m_pServer->AddEvent(std::move(pEvent));
 #endif
 }
 
@@ -107,8 +110,8 @@ void CRemoteConsole::AddLogWarning(const char* log)
 #ifdef USE_REMOTE_CONSOLE
 	if (!IsStarted()) return;
 
-	IRemoteEvent* pEvent = new SStringEvent<eCET_LogWarning>(log);
-	m_pServer->AddEvent(pEvent);
+	std::unique_ptr<IRemoteEvent> pEvent(new SStringEvent<eCET_LogWarning>(log));
+	m_pServer->AddEvent(std::move(pEvent));
 #endif
 }
 
@@ -118,8 +121,8 @@ void CRemoteConsole::AddLogError(const char* log)
 #ifdef USE_REMOTE_CONSOLE
 	if (!IsStarted()) return;
 
-	IRemoteEvent* pEvent = new SStringEvent<eCET_LogError>(log);
-	m_pServer->AddEvent(pEvent);
+	std::unique_ptr<IRemoteEvent> pEvent(new SStringEvent<eCET_LogError>(log));
+	m_pServer->AddEvent(std::move(pEvent));
 #endif
 }
 
@@ -139,18 +142,22 @@ void CRemoteConsole::Update()
 	m_pServer->GetEvents(events);
 	for (TEventBuffer::iterator it = events.begin(), end = events.end(); it != end; ++it)
 	{
-		IRemoteEvent* pEvent = *it;
+		std::unique_ptr<IRemoteEvent> pEvent = std::move(*it);
 		switch (pEvent->GetType())
 		{
 		case eCET_ConsoleCommand:
 			for (TListener::Notifier notifier(m_listener); notifier.IsValid(); notifier.Next())
-				notifier->OnConsoleCommand(((SStringEvent<eCET_ConsoleCommand>*)pEvent)->GetData());
+				notifier->OnConsoleCommand(static_cast<SStringEvent<eCET_ConsoleCommand>*>(pEvent.get())->GetData());
 			break;
 		case eCET_GameplayEvent:
 			for (TListener::Notifier notifier(m_listener); notifier.IsValid(); notifier.Next())
-				notifier->OnGameplayCommand(((SStringEvent<eCET_GameplayEvent>*)pEvent)->GetData());
+				notifier->OnGameplayCommand(static_cast<SStringEvent<eCET_GameplayEvent>*>(pEvent.get())->GetData());
 			break;
+<<<<<<< HEAD
 	#if 0 // currently no stroboscope support
+=======
+	#if 0              // currently no stroboscope support
+>>>>>>> upstream/stabilisation
 		case eCET_Strobo_GetThreads:
 			SendThreadData();
 			break;
@@ -161,7 +168,6 @@ void CRemoteConsole::Update()
 			assert(false); // NOT SUPPORTED FOR THE SERVER!!!
 	#endif
 		}
-		delete *it;
 	}
 #endif
 }
@@ -299,12 +305,10 @@ void SRemoteServer::ClientDone(SRemoteClient* pClient)
 	m_lock.Lock();
 	for (TClients::iterator it = m_clients.begin(); it != m_clients.end(); ++it)
 	{
-		if (it->pClient == pClient)
+		if (it->pClient.get() == pClient)
 		{
 			it->pClient->SignalStopWork();
-			gEnv->pThreadManager->JoinThread(it->pClient, eJM_Join);
-			delete it->pClient;
-			delete it->pEvents;
+			gEnv->pThreadManager->JoinThread(it->pClient.get(), eJM_Join);
 			m_clients.erase(it);
 			break;
 		}
@@ -389,9 +393,9 @@ void SRemoteServer::ThreadEntry()
 
 		m_lock.Lock();
 		m_stopEvent.Reset();
-		SRemoteClient* pClient = new SRemoteClient(this);
-		m_clients.push_back(SRemoteClientInfo(pClient));
+		std::unique_ptr<SRemoteClient> pClient(new SRemoteClient(this));
 		pClient->StartClient(sClient);
+		m_clients.emplace_back(std::move(pClient));
 		m_lock.Unlock();
 	}
 	if (m_socket != CRY_INVALID_SOCKET && m_socket != CRY_SOCKET_ERROR)
@@ -402,7 +406,7 @@ void SRemoteServer::ThreadEntry()
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////
-void SRemoteServer::AddEvent(IRemoteEvent* pEvent)
+void SRemoteServer::AddEvent(std::unique_ptr<IRemoteEvent> pEvent)
 {
 	m_lock.Lock();
 	for (TClients::iterator it = m_clients.begin(); it != m_clients.end(); ++it)
@@ -410,62 +414,61 @@ void SRemoteServer::AddEvent(IRemoteEvent* pEvent)
 		it->pEvents->push_back(pEvent->Clone());
 	}
 	m_lock.Unlock();
-	delete pEvent;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////
 void SRemoteServer::GetEvents(TEventBuffer& buffer)
 {
 	m_lock.Lock();
-	buffer = m_eventBuffer;
+	buffer.swap(m_eventBuffer);
 	m_eventBuffer.clear();
 	m_lock.Unlock();
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////
-bool SRemoteServer::WriteBuffer(SRemoteClient* pClient, char* buffer, int& size)
+bool SRemoteServer::WriteBuffer(SRemoteClient* pClient, char* buffer, size_t& size)
 {
 	m_lock.Lock();
-	IRemoteEvent* pEvent = NULL;
+	std::unique_ptr<IRemoteEvent> pEvent = nullptr;
 	for (TClients::iterator it = m_clients.begin(); it != m_clients.end(); ++it)
 	{
-		if (it->pClient == pClient)
+		if (it->pClient.get() == pClient)
 		{
-			TEventBuffer* pEvents = it->pEvents;
+			std::unique_ptr<TEventBuffer>& pEvents = it->pEvents;
 			if (!pEvents->empty())
 			{
-				pEvent = pEvents->front();
+				pEvent = std::move(pEvents->front());
 				pEvents->pop_front();
 			}
 			break;
 		}
 	}
 	m_lock.Unlock();
-	const bool res = pEvent != NULL;
+	const bool res = pEvent != nullptr;
 	if (pEvent)
 	{
-		SRemoteEventFactory::GetInst()->WriteToBuffer(pEvent, buffer, size);
-		delete pEvent;
+		SRemoteEventFactory::GetInst()->WriteToBuffer(pEvent.get(), buffer, size);
 	}
 	return res;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////
-bool SRemoteServer::ReadBuffer(const char* buffer, int data)
+bool SRemoteServer::ReadBuffer(const char* buffer, size_t data)
 {
+<<<<<<< HEAD
 	IRemoteEvent* pEvent = SRemoteEventFactory::GetInst()->CreateEventFromBuffer(buffer, data);
 	const bool res = pEvent != NULL;
+=======
+	std::unique_ptr<IRemoteEvent> pEvent = SRemoteEventFactory::GetInst()->CreateEventFromBuffer(buffer, data);
+	const bool res = pEvent != nullptr;
+>>>>>>> upstream/stabilisation
 	if (pEvent)
 	{
 		if (pEvent->GetType() != eCET_Noop)
 		{
 			m_lock.Lock();
-			m_eventBuffer.push_back(pEvent);
+			m_eventBuffer.push_back(std::move(pEvent));
 			m_lock.Unlock();
-		}
-		else
-		{
-			delete pEvent;
 		}
 	}
 
@@ -502,7 +505,11 @@ void SRemoteClient::SignalStopWork()
 void SRemoteClient::ThreadEntry()
 {
 	char szBuff[DEFAULT_BUFFER];
+<<<<<<< HEAD
 	int size;
+=======
+	size_t size;
+>>>>>>> upstream/stabilisation
 	SNoDataEvent<eCET_Req> reqEvt;
 
 	std::vector<string> autoCompleteList;
@@ -543,15 +550,14 @@ void SRemoteClient::ThreadEntry()
 		{
 			ok &= SendPackage(szBuff, size);
 			ok &= RecvPackage(szBuff, size);
-			IRemoteEvent* pEvt = SRemoteEventFactory::GetInst()->CreateEventFromBuffer(szBuff, size);
+			std::unique_ptr<IRemoteEvent> pEvt = SRemoteEventFactory::GetInst()->CreateEventFromBuffer(szBuff, size);
 			ok &= pEvt && pEvt->GetType() == eCET_Noop;
-			delete pEvt;
 		}
 	}
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////
-bool SRemoteClient::RecvPackage(char* buffer, int& size)
+bool SRemoteClient::RecvPackage(char* buffer, size_t& size)
 {
 	size = 0;
 	int ret, idx = 0;
@@ -568,7 +574,7 @@ bool SRemoteClient::RecvPackage(char* buffer, int& size)
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////
-bool SRemoteClient::SendPackage(const char* buffer, int size)
+bool SRemoteClient::SendPackage(const char* buffer, size_t size)
 {
 	int ret, idx = 0;
 	int left = size + 1;
@@ -588,16 +594,21 @@ bool SRemoteClient::SendPackage(const char* buffer, int size)
 void SRemoteClient::FillAutoCompleteList(std::vector<string>& list)
 {
 	std::vector<const char*> cmds;
-	size_t count = gEnv->pConsole->GetSortedVars(NULL, 0);
+	size_t count = gEnv->pConsole->GetNumVars();
 	cmds.resize(count);
 	count = gEnv->pConsole->GetSortedVars(&cmds[0], count);
+	cmds.resize(count); // We might have less CVars than we were expecting (invisible ones, etc.)
 	for (size_t i = 0; i < count; ++i)
 	{
 		list.push_back(cmds[i]);
 	}
-	for (int i = 0, end = gEnv->pGame->GetIGameFramework()->GetILevelSystem()->GetLevelCount(); i < end; ++i)
+	for (int i = 0, end = gEnv->pGameFramework->GetILevelSystem()->GetLevelCount(); i < end; ++i)
 	{
+<<<<<<< HEAD
 		ILevelInfo* pLevel = gEnv->pGame->GetIGameFramework()->GetILevelSystem()->GetLevelInfo(i);
+=======
+		ILevelInfo* pLevel = gEnv->pGameFramework->GetILevelSystem()->GetLevelInfo(i);
+>>>>>>> upstream/stabilisation
 		string item = "map ";
 		const char* levelName = pLevel->GetName();
 		int start = 0;
@@ -614,8 +625,13 @@ void SRemoteClient::FillAutoCompleteList(std::vector<string>& list)
 /////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////// Event factory ///////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////
+<<<<<<< HEAD
 	#define REGISTER_EVENT_NODATA(evt) RegisterEvent(new SNoDataEvent<evt>());
 	#define REGISTER_EVENT_STRING(evt) RegisterEvent(new SStringEvent<evt>(""));
+=======
+	#define REGISTER_EVENT_NODATA(evt) RegisterEvent(std::unique_ptr<IRemoteEvent>(new SNoDataEvent<evt>()));
+	#define REGISTER_EVENT_STRING(evt) RegisterEvent(std::unique_ptr<IRemoteEvent>(new SStringEvent<evt>("")));
+>>>>>>> upstream/stabilisation
 
 /////////////////////////////////////////////////////////////////////////////////////////////
 SRemoteEventFactory::SRemoteEventFactory()
@@ -652,16 +668,7 @@ SRemoteEventFactory::SRemoteEventFactory()
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////
-SRemoteEventFactory::~SRemoteEventFactory()
-{
-	for (TPrototypes::iterator it = m_prototypes.begin(), end = m_prototypes.end(); it != end; ++it)
-	{
-		delete it->second;
-	}
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////////
-IRemoteEvent* SRemoteEventFactory::CreateEventFromBuffer(const char* buffer, int size)
+std::unique_ptr<IRemoteEvent> SRemoteEventFactory::CreateEventFromBuffer(const char* buffer, size_t size)
 {
 	if (size > 1 && buffer[size - 1] == '\0')
 	{
@@ -669,15 +676,14 @@ IRemoteEvent* SRemoteEventFactory::CreateEventFromBuffer(const char* buffer, int
 		TPrototypes::const_iterator it = m_prototypes.find(type);
 		if (it != m_prototypes.end())
 		{
-			IRemoteEvent* pEvent = it->second->CreateFromBuffer(buffer + 1, size - 1);
-			return pEvent;
+			return it->second->CreateFromBuffer(buffer + 1, size - 1);
 		}
 	}
-	return NULL;
+	return nullptr;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////
-void SRemoteEventFactory::WriteToBuffer(IRemoteEvent* pEvent, char* buffer, int& size)
+void SRemoteEventFactory::WriteToBuffer(const IRemoteEvent* pEvent, char* buffer, size_t& size)
 {
 	assert(m_prototypes.find(pEvent->GetType()) != m_prototypes.end());
 	buffer[0] = '0' + (char)pEvent->GetType();
@@ -686,10 +692,10 @@ void SRemoteEventFactory::WriteToBuffer(IRemoteEvent* pEvent, char* buffer, int&
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////
-void SRemoteEventFactory::RegisterEvent(IRemoteEvent* pEvent)
+void SRemoteEventFactory::RegisterEvent(std::unique_ptr<IRemoteEvent> pEvent)
 {
 	assert(m_prototypes.find(pEvent->GetType()) == m_prototypes.end());
-	m_prototypes[pEvent->GetType()] = pEvent;
+	m_prototypes[pEvent->GetType()] = std::move(pEvent);
 }
 /////////////////////////////////////////////////////////////////////////////////////////////
 

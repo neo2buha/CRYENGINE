@@ -100,7 +100,7 @@ size_t ITextureStreamer::StatsComputeRequiredMipMemUsage()
 			int nMips = tp->GetNumMipsNonVirtual();
 			nReqMip = min(nReqMip, nPersMip);
 
-			int nWantedSize = tp->StreamComputeDevDataSize(nReqMip);
+			int nWantedSize = tp->StreamComputeSysDataSize(nReqMip);
 
 			nSizeToLoad += nWantedSize;
 			if (nWantedSize && pList)
@@ -161,7 +161,7 @@ void ITextureStreamer::SyncTextureList()
 	{
 		std::sort(m_pendingRelinks.begin(), m_pendingRelinks.end());
 		m_pendingRelinks.resize((int)(std::unique(m_pendingRelinks.begin(), m_pendingRelinks.end()) - m_pendingRelinks.begin()));
-		memcpy(m_textures.grow_raw(m_pendingRelinks.size()), &m_pendingRelinks[0], sizeof(m_pendingRelinks[0]) * m_pendingRelinks.size());
+		m_textures.append(m_pendingRelinks);
 
 		m_pendingRelinks.resize(0);
 	}

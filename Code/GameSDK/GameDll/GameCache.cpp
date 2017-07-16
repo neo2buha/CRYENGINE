@@ -32,10 +32,6 @@ CGameCache::CGameCache()
 //////////////////////////////////////////////////////////////////////////
 CGameCache::~CGameCache()
 {
-	IEntityPoolManager *pEntityPoolManager = gEnv->pEntitySystem->GetIEntityPoolManager();
-	assert(pEntityPoolManager);
-
-	pEntityPoolManager->RemoveListener(this);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -53,7 +49,7 @@ bool CGameCache::IsLuaCacheEnabled()
 //////////////////////////////////////////////////////////////////////////
 bool CGameCache::IsClient(EntityId entityId)
 {
-	const EntityId localClientId = gEnv->pGame->GetIGameFramework()->GetClientActorId();
+	const EntityId localClientId = gEnv->pGameFramework->GetClientActorId();
 	return (localClientId == entityId);
 }
 
@@ -77,11 +73,6 @@ SmartScriptTable CGameCache::GetProperties(SmartScriptTable pEntityScript, Smart
 //////////////////////////////////////////////////////////////////////////
 void CGameCache::Init()
 {
-	IEntityPoolManager *pEntityPoolManager = gEnv->pEntitySystem->GetIEntityPoolManager();
-	assert(pEntityPoolManager);
-
-	pEntityPoolManager->AddListener(this, "GameCache", IEntityPoolListener::PoolBookmarkCreated);
-
 	IGameFramework *pGameFramework = g_pGame->GetIGameFramework();
 	assert(pGameFramework);
 
@@ -258,41 +249,6 @@ SLuaCache_ActorPropertiesPtr CGameCache::GetActorProperties(EntityId entityId) c
 	}
 
 	return pResult;
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CGameCache::OnPoolBookmarkCreated(EntityId entityId, const SEntitySpawnParams& params, XmlNodeRef entityNode)
-{
-	if (IsCacheEnabled())
-	{
-		IScriptTable *pScriptTable = params.pClass->GetScriptTable();
-		IScriptTable *pArchetypeProperties = params.pArchetype ? params.pArchetype->GetProperties() : NULL;
-
-		if (m_pActorSystem && m_pActorSystem->IsActorClass(params.pClass))
-		{
-			CacheActorClass(params.pClass, pScriptTable);
-
-			int modelVariation = 0;
-			if (entityNode)
-			{
-				XmlNodeRef propertiesInstance = entityNode->findChild("Properties2");
-				if (propertiesInstance)
-				{
-					propertiesInstance->getAttr("nVariation", modelVariation);
-				}
-			}
-
-			CacheActorInstance(entityId, pScriptTable, pArchetypeProperties, modelVariation);
-
-			stack_string modularBehaviorTreeName("");
-			GetInstancePropertyValue("esModularBehaviorTree", modularBehaviorTreeName, entityNode, pScriptTable, pArchetypeProperties);
-			if (!modularBehaviorTreeName.empty())
-			{
-				gEnv->pAISystem->GetIBehaviorTreeManager()->LoadFromDiskIntoCache(modularBehaviorTreeName.c_str());
-			}
-		}
-		// Other classes to follow...
-	}
 }
 
 void CGameCache::GetInstancePropertyValue(const char* szPropertyName, stack_string& propertyValue, const XmlNodeRef& entityNode, 
@@ -665,7 +621,7 @@ void CGameCache::GenerateModelVariation( const string& inputName, TCachedModelNa
 
 			// modelName_01 => modelName_XX where XX == nVariation, preserving original path and extension
 			outputName.Format("%s%02d", sFileName.substr(0, size-2).c_str(), desiredVariation);
-			outputName = PathUtil::Make(PathUtil::GetPath(inputName), string(outputName.c_str()), PathUtil::GetExt(inputName)).c_str();
+			outputName = PathUtil::Make(PathUtil::GetPathWithoutFilename(inputName), string(outputName.c_str()), PathUtil::GetExt(inputName)).c_str();
 		}
 	}
 }
@@ -1029,9 +985,9 @@ void CGameCharacterDBAs::Debug()
 		float posY = 50.f;
 		float posX = 50.f;
 
-		gEnv->pRenderer->Draw2dLabel(posX, posY, 1.5f, white, false, "Currently locked Character DBAs");
+		IRenderAuxText::Draw2dLabel(posX, posY, 1.5f, white, false, "Currently locked Character DBAs");
 		posY += 15.0f;
-		gEnv->pRenderer->Draw2dLabel(posX, posY, 1.5f, white, false, "======================================");
+		IRenderAuxText::Draw2dLabel(posX, posY, 1.5f, white, false, "======================================");
 		posY += 15.0f;
 
 		for (size_t i = 0; i < m_dbaGroups.size(); ++i)
@@ -1039,12 +995,12 @@ void CGameCharacterDBAs::Debug()
 			if (m_dbaGroups[i].m_userCount == 0)
 				continue;
 
-			gEnv->pRenderer->Draw2dLabel(posX, posY, 1.5f, white, false, "Group: '%s' - Users: '%d'", m_dbaGroups[i].m_groupId.GetDebugName(), m_dbaGroups[i].m_userCount);
+			IRenderAuxText::Draw2dLabel(posX, posY, 1.5f, white, false, "Group: '%s' - Users: '%d'", m_dbaGroups[i].m_groupId.GetDebugName(), m_dbaGroups[i].m_userCount);
 			posY += 15.0f;
 
 			for (size_t j = 0; j < m_dbaGroups[i].m_dbas.size(); ++j)
 			{
-				gEnv->pRenderer->Draw2dLabel(posX + 50.0f, posY, 1.5f, grey, false, "DBA Name: '%s'", m_dbaGroups[i].m_dbas[j].c_str());
+				IRenderAuxText::Draw2dLabel(posX + 50.0f, posY, 1.5f, grey, false, "DBA Name: '%s'", m_dbaGroups[i].m_dbas[j].c_str());
 				posY += 15.0f;
 			}
 
@@ -1053,7 +1009,7 @@ void CGameCharacterDBAs::Debug()
 	}
 	else
 	{
-		gEnv->pRenderer->Draw2dLabel(50.0f, 50.0f, 1.5f, white, false, "Game DBA management for characters disabled");
+		IRenderAuxText::Draw2dLabel(50.0f, 50.0f, 1.5f, white, false, "Game DBA management for characters disabled");
 	}
 }
 #endif

@@ -18,14 +18,14 @@
 
 // Do not add any headers here!
 #include "CryEngineDecalInfo.h"
-#include <Cry3DEngine/IStatObj.h> // <> required for Interfuscator
+#include <Cry3DEngine/IStatObj.h>
 #include <CryRenderer/IRenderer.h>
-#include <CrySystem/IProcess.h>                 // <> required for Interfuscator
-#include <Cry3DEngine/IMaterial.h>              // <> required for Interfuscator
-#include <Cry3DEngine/ISurfaceType.h>           // <> required for Interfuscator
-#include <CryEntitySystem/IEntityRenderState.h> // <> required for Interfuscator
+#include <CrySystem/IProcess.h>
+#include <Cry3DEngine/IMaterial.h>
+#include <Cry3DEngine/ISurfaceType.h>
+#include <Cry3DEngine/IRenderNode.h>
 #include <CryCore/Containers/CryArray.h>
-#include <CryMemory/IMemory.h> // <> required for Interfuscator
+#include <CryMemory/IMemory.h>
 //Do not add any headers here!
 
 struct ISystem;
@@ -184,9 +184,9 @@ struct SGeometryDebugDrawInfo
 	ColorB   lineColor; //!< Optional color of the lines.
 
 	//! Optional flags controlling how to render debug draw information.
-	uint32 bNoCull  : 1;
-	uint32 bNoLines : 1;
-	uint32 bExtrude : 1;   //!< Extrude debug draw geometry alittle bit so it is over real geometry.
+	uint32 bNoCull      : 1;
+	uint32 bNoLines     : 1;
+	uint32 bDrawInFront : 1;   //!< Draw debug draw geometry on top of real geometry.
 
 	SGeometryDebugDrawInfo() : color(255, 0, 255, 255), lineColor(255, 255, 0, 255), bNoLines(0), bNoCull(0) { tm.SetIdentity(); }
 };
@@ -302,13 +302,11 @@ struct IStatInstGroup
 		szFileName[0] = 0;
 		bHideability = 0;
 		bHideabilitySecondary = 0;
-
 		bPickable = 0;
 		fBending = 0;
 		nCastShadowMinSpec = 0;
-		bRecvShadow = 0;
 		bDynamicDistanceShadows = false;
-		bUseAlphaBlending = 0;
+		bGIMode = true;
 		fSpriteDistRatio = 1.f;
 		fShadowDistRatio = 1.f;
 		fMaxViewDistRatio = 1.f;
@@ -316,7 +314,6 @@ struct IStatInstGroup
 		fBrightness = 1.f;
 		pMaterial = 0;
 		bUseSprites = true;
-
 		fDensity = 1;
 		fElevationMax = 4096;
 		fElevationMin = 8;
@@ -347,11 +344,9 @@ struct IStatInstGroup
 	bool                 bHideabilitySecondary;
 	bool                 bPickable;
 	float                fBending;
-	//bool	bCastShadow;
 	uint8                nCastShadowMinSpec;
-	bool                 bRecvShadow;
 	bool                 bDynamicDistanceShadows;
-	bool                 bUseAlphaBlending;
+	bool                 bGIMode;
 	float                fSpriteDistRatio;
 	float                fLodDistRatio;
 	float                fShadowDistRatio;
@@ -360,12 +355,10 @@ struct IStatInstGroup
 	bool                 bUseSprites;
 	bool                 bRandomRotation;
 	int32                nRotationRangeToTerrainNormal;
-	//bool bAlignToTerrain;
 	float                fAlignToTerrainCoefficient;
 	bool                 bUseTerrainColor;
 	bool                 bAllowIndoor;
 	bool                 bAutoMerged;
-
 	float                fDensity;
 	float                fElevationMax;
 	float                fElevationMin;
@@ -377,11 +370,9 @@ struct IStatInstGroup
 	float                fDamping;
 	float                fVariance;
 	float                fAirResistance;
-
 	float                fVegRadius;
 	float                fVegRadiusVert;
 	float                fVegRadiusHor;
-
 	int                  nPlayerHideable;
 	int                  nID;
 
@@ -675,23 +666,6 @@ struct IGetLayerIdAtCallback
 	// </interfuscator:shuffle>
 };
 
-//! Interface to terrain engine.
-struct IVoxTerrain
-{
-	// <interfuscator:shuffle>
-	virtual ~IVoxTerrain(){}
-	virtual bool                    SetCompiledData(byte* pData, int nDataSize, bool bUpdateMesh, EEndian eEndian, AABB* pAreaBox, int nSID = 0) = 0;
-	virtual IMemoryBlock*           GetCompiledData(bool bSaveMesh, EEndian eEndian, bool bSaveForEditing, AABB* pAreaBox, int nSID = 0) = 0;
-	virtual void                    DrawEditingHelper(const Sphere& sp, EVoxelEditOperation eOperation, IMaterial* pHelperMat) = 0;
-	virtual void                    OnMouse(bool bUp) = 0;
-	virtual PodArray<IRenderNode*>* GetNodesForUpdate() = 0;
-	virtual void                    PaintLayerId(const float fpx, const float fpy, const float radius, const float hardness, const uint32 dwLayerId) = 0;
-	virtual void                    SetLayerData(void* pData, int nDataSize) = 0;
-	virtual void                    GetLayerData(void** pData, int& nDataSize) = 0;
-	virtual void                    SetTextureArea(Vec3* pPoints, int nPointsCount, int nShapePartId) = 0;
-	// </interfuscator:shuffle>
-};
-
 #define TERRAIN_DEFORMATION_MAX_DEPTH 3.f
 
 struct SHotUpdateInfo
@@ -777,7 +751,7 @@ struct ITerrain
 	virtual int GetTerrainLightmapTexId(Vec4& vTexGenInfo, int nSID = 0) = 0;
 
 	//! Return terrain texture atlas texture id's.
-	virtual void GetAtlasTexId(int& nTex0, int& nTex1, int nSID = 0) = 0;
+	virtual void GetAtlasTexId(int& nTex0, int& nTex1, int& nTex2, int nSID = 0) = 0;
 
 	//! \return object and material table for Exporting.
 	virtual void GetStatObjAndMatTables(DynArray<IStatObj*>* pStatObjTable, DynArray<IMaterial*>* pMatTable, DynArray<IStatInstGroup*>* pStatInstGroupTable, uint32 nObjTypeMask, int nSID) = 0;
@@ -863,6 +837,10 @@ struct ITerrain
 
 	//! Changes the ocean material
 	virtual void ChangeOceanMaterial(IMaterial* pMat) = 0;
+
+	//! Request heightmap mesh update in specified area
+	//! if pBox == 0 update entire heightmap
+	virtual void ResetTerrainVertBuffers(const AABB* pBox, int nSID = 0) = 0;
 };
 
 //! Callbacks interface for higher level segments management.
@@ -899,6 +877,11 @@ struct IVisAreaCallback
 	virtual ~IVisAreaCallback(){}
 	virtual void OnVisAreaDeleted(IVisArea* pVisArea) = 0;
 	// </interfuscator:shuffle>
+};
+
+struct IVisAreaTestCallback
+{
+	virtual bool TestVisArea(IVisArea* pVisArea) const = 0;
 };
 
 struct IVisAreaManager
@@ -1163,7 +1146,7 @@ struct SDebugFPSInfo
 };
 
 //! Common scene rain parameters shared across engine and editor.
-struct SRainParams
+struct CRY_ALIGN(16) SRainParams
 {
 	SRainParams()
 		: fAmount(0.f), fCurrentAmount(0.f), fRadius(0.f), nUpdateFrameID(-1), bIgnoreVisareas(false), bDisableOcclusion(false)
@@ -1260,6 +1243,13 @@ protected:
 	virtual ~IStreamedObjectListener() {}
 };
 
+struct IRenderNodeStatusListener
+{
+	virtual void OnEntityDeleted(IRenderNode* pRenderNode) = 0;
+protected:
+	virtual ~IRenderNodeStatusListener() {}
+};
+
 #pragma pack(push, 16)
 
 //     Light volumes data
@@ -1297,6 +1287,11 @@ struct SLightVolume
 };
 
 #pragma pack(pop)
+
+struct I3DEngineModule : public Cry::IDefaultModule
+{
+	CRYINTERFACE_DECLARE(I3DEngineModule, 0x31BD20FF13474F02, 0xB923C3F83BA73D84);
+};
 
 //! Interface to the 3d Engine.
 struct I3DEngine : public IProcess
@@ -1469,6 +1464,9 @@ struct I3DEngine : public IProcess
 	virtual void UnRegisterEntityDirect(IRenderNode* pEntity) = 0;
 	virtual void UnRegisterEntityAsJob(IRenderNode* pEnt) = 0;
 
+	//! Add a water ripple to the scene.
+	virtual void AddWaterRipple(const Vec3& vPos, float scale, float strength) = 0;
+
 	//! \return whether a world pos is under water.
 	virtual bool IsUnderWater(const Vec3& vPos) const = 0;
 
@@ -1527,9 +1525,8 @@ struct I3DEngine : public IProcess
 
 	//! Gets ocean animation parameters.
 	//! \return 2 Vec4s which constain:
-	//!         0: x = ocean wind direction, y = wind speed, z = waves speed, w = waves amount
+	//!         0: x = ocean wind direction, y = wind speed, z = free, w = waves amount
 	//!         1: x = waves size, y = free, z = free, w = free
-
 	virtual void GetOceanAnimationParams(Vec4& pParams0, Vec4& pParams1) const = 0;
 
 	//! Gets HDR setup parameters.
@@ -1851,6 +1848,7 @@ struct I3DEngine : public IProcess
 	//! \param bActivate Set to true in order to enable the portal, or to false to disable
 	//! \param szEntityName
 	virtual void ActivatePortal(const Vec3& vPos, bool bActivate, const char* szEntityName) = 0;
+	virtual void ActivateOcclusionAreas(IVisAreaTestCallback* pTest, bool bActivate) = 0;
 
 	//! \internal
 	//! Counts memory usage
@@ -2010,15 +2008,6 @@ struct I3DEngine : public IProcess
 	//! Creates the instance of the indexed mesh.
 	virtual IIndexedMesh* CreateIndexedMesh() = 0;
 
-	//! Paints voxel shape.
-	virtual void Voxel_Paint(Vec3 vPos, float fRadius, int nSurfaceTypeId, Vec3 vBaseColor, EVoxelEditOperation eOperation, EVoxelBrushShape eShape, EVoxelEditTarget eTarget, PodArray<IRenderNode*>* pBrushes, float fMinVoxelSize) = 0;
-
-	//! Gets list of voxel objects that will be affected by paint operation, IMemoryBlock will contain array of IVoxelObject pointers.
-	virtual IMemoryBlock* Voxel_GetObjects(Vec3 vPos, float fRadius, int nSurfaceTypeId, EVoxelEditOperation eOperation, EVoxelBrushShape eShape, EVoxelEditTarget eTarget) = 0;
-
-	//! Setups voxel flags.
-	virtual void Voxel_SetFlags(bool bPhysics, bool bSimplify, bool bShadows, bool bMaterials) = 0;
-
 	//! Updates rendering mesh in the stat obj associated with pPhysGeom.
 	//! \note Creates or clones the object if necessary.
 	virtual IStatObj* UpdateDeformableStatObj(IGeometry* pPhysGeom, bop_meshupdate* pLastUpdate = 0, IFoliage* pSrcFoliage = 0) = 0;
@@ -2078,9 +2067,6 @@ struct I3DEngine : public IProcess
 	//! Deletes terrain.
 	virtual void DeleteTerrain() = 0;
 
-	//! Deprecated.
-	virtual IVoxTerrain* GetIVoxTerrain() = 0;
-
 	//! \return Interface to visarea manager.
 	virtual IVisAreaManager* GetIVisAreaManager() = 0;
 
@@ -2128,11 +2114,11 @@ struct I3DEngine : public IProcess
 	//! Loads statobj from a stream
 	virtual IStatObj* LoadStatObj(TSerialize ser) = 0;
 
-	//! \return true if input line segment intersect clouds sprites.
-	virtual bool CheckIntersectClouds(const Vec3& p1, const Vec3& p2) = 0;
-
 	//! Removes references to RenderMesh
 	virtual void OnRenderMeshDeleted(IRenderMesh* pRenderMesh) = 0;
+
+	//! Removes references to IEntity
+	virtual void OnEntityDeleted(struct IEntity* pEntity) = 0;
 
 	//! Used to highlight an object under the reticule.
 	virtual void DebugDraw_UpdateDebugNode() = 0;
@@ -2142,9 +2128,6 @@ struct I3DEngine : public IProcess
 
 	//! Used by editor during object alignment
 	virtual bool RenderMeshRayIntersection(IRenderMesh* pRenderMesh, SRayHitInfo& hitInfo, IMaterial* pCustomMtl = 0) = 0;
-
-	//! Frees lod transition state
-	virtual void FreeRenderNodeTempData(SRenderNodeTempData** ppInfo) = 0;
 
 	// pointer to ISegmentsManager interface
 	virtual ISegmentsManager* GetSegmentsManager() = 0;
@@ -2158,15 +2141,12 @@ struct I3DEngine : public IProcess
 	//! \param pObjects 0 if only the count is required
 	//! \return Count returned.
 	virtual uint32 GetObjectsByType(EERType objType, IRenderNode** pObjects = 0) = 0;
-	virtual uint32 GetObjectsByTypeInBox(EERType objType, const AABB& bbox, IRenderNode** pObjects = 0) = 0;
+	virtual uint32 GetObjectsByTypeInBox(EERType objType, const AABB& bbox, IRenderNode** pObjects = 0, uint64 dwFlags = ~0) = 0;
 	virtual uint32 GetObjectsInBox(const AABB& bbox, IRenderNode** pObjects = 0) = 0;
 	virtual uint32 GetObjectsByFlags(uint dwFlag, IRenderNode** pObjects = 0) = 0;
 
-	//! Variant which takes a POD array which is resized in the function itself.
-	virtual void GetObjectsByTypeInBox(EERType objType, const AABB& bbox, PodArray<IRenderNode*>* pLstObjects) = 0;
-
 	//! Called from editor whenever an object is modified by the user.
-	virtual void        OnObjectModified(IRenderNode* pRenderNode, uint dwFlags) = 0;
+	virtual void        OnObjectModified(IRenderNode* pRenderNode, IRenderNode::RenderFlagsType dwFlags) = 0;
 
 	virtual void        FillDebugFPSInfo(SDebugFPSInfo&) = 0;
 
@@ -2192,6 +2172,10 @@ struct I3DEngine : public IProcess
 
 	//! Set Callback for Editor to store additional information in Minimap tool.
 	virtual void SetScreenshotCallback(IScreenshotCallback* pCallback) = 0;
+
+	//! Register or unregister a call back for render node status updates
+	virtual void RegisterRenderNodeStatusListener(IRenderNodeStatusListener* pListener, EERType renderNodeType) = 0;
+	virtual void UnregisterRenderNodeStatusListener(IRenderNodeStatusListener* pListener, EERType renderNodeType) = 0;
 
 	//! Show/Hide objects by layer (useful for streaming and performance).
 	virtual void ActivateObjectsLayer(uint16 nLayerId, bool bActivate, bool bPhys, bool bObjects, bool bStaticLights, const char* pLayerName, IGeneralMemoryHeap* pHeap = NULL, bool bCheckLayerActivation = true) = 0;
@@ -2241,13 +2225,25 @@ struct I3DEngine : public IProcess
 		enum AnalyticalOccluderType
 		{
 			eCapsule = 0,
-			eSphere,
-			eBox
+			eOBB,
+			eCylinder,
+			eOBB_Hard,
+			eCylinder_Hard
 		};
 
-		Vec3  v0;
-		float radius;
+		Vec3 v0;
+
+		union
+		{
+			float e0;
+			float radius;
+		};
+
 		Vec3  v1;
+		float e1;
+		Vec3  v2;
+		float e2;
+		Vec3  c;
 		float type;
 	};
 
@@ -2259,25 +2255,25 @@ struct I3DEngine : public IProcess
 		}
 
 		// SVO data pools
-		ITexture* pTexTree;
-		ITexture* pTexOpac;
+		_smart_ptr<ITexture> pTexTree;
+		_smart_ptr<ITexture> pTexOpac;
 	#ifdef FEATURE_SVO_GI_ALLOW_HQ
-		ITexture* pTexTris;
-		ITexture* pTexRgb0;
-		ITexture* pTexRgb1;
-		ITexture* pTexDynl;
-		ITexture* pTexRgb2;
-		ITexture* pTexRgb3;
-		ITexture* pTexRgb4;
-		ITexture* pTexNorm;
-		ITexture* pTexAldi;
+		_smart_ptr<ITexture> pTexTris;
+		_smart_ptr<ITexture> pTexRgb0;
+		_smart_ptr<ITexture> pTexRgb1;
+		_smart_ptr<ITexture> pTexDynl;
+		_smart_ptr<ITexture> pTexRgb2;
+		_smart_ptr<ITexture> pTexRgb3;
+		_smart_ptr<ITexture> pTexRgb4;
+		_smart_ptr<ITexture> pTexNorm;
+		_smart_ptr<ITexture> pTexAldi;
 
 		// mesh tracing data atlases
-		ITexture* pTexTriA;
-		ITexture* pTexTexA;
-		ITexture* pTexIndA;
+		_smart_ptr<ITexture> pTexTriA;
+		_smart_ptr<ITexture> pTexTexA;
+		_smart_ptr<ITexture> pTexIndA;
 
-		ITexture* pGlobalSpecCM;
+		_smart_ptr<ITexture> pGlobalSpecCM;
 	#endif
 
 		float  fGlobalSpecCM_Mult;
@@ -2288,15 +2284,16 @@ struct I3DEngine : public IProcess
 		bool   bSvoFreeze;
 		Sphere helperInfo;
 
-	#define SVO_MAX_PORTALS 16
+	#define SVO_MAX_PORTALS 8
 		Vec4 arrPortalsPos[SVO_MAX_PORTALS];
 		Vec4 arrPortalsDir[SVO_MAX_PORTALS];
 
 	#define SVO_MAX_ANALYTICAL_OCCLUDERS 32
-		SAnalyticalOccluder arrAnalyticalOccluders[SVO_MAX_ANALYTICAL_OCCLUDERS];
+		SAnalyticalOccluder arrAnalyticalOccluders[2][SVO_MAX_ANALYTICAL_OCCLUDERS];
 
 		Vec3                vSkyColorTop;
 		Vec3                vSkyColorBottom;
+		Vec4                vSvoOriginAndSize;
 	};
 
 	struct SLightTI
@@ -2414,7 +2411,6 @@ struct SRendItemSorter
 	//! to ensure the deferred shading pass is after all LPV objects.
 	enum EDeferredPreprocess
 	{
-		eLPVPass             = 0,
 		eDeferredShadingPass = BIT(30)
 	};
 	void   IncreaseOctreeCounter()   { nValue += eOctreeNodeCounter; }
@@ -2474,7 +2470,6 @@ struct SRenderingPassInfo
 		SHADOW_MAP_NONE = 0,
 		SHADOW_MAP_GSM,
 		SHADOW_MAP_LOCAL,
-		SHADOW_MAP_REFLECTIVE,
 		SHADOW_MAP_CACHED,
 		SHADOW_MAP_CACHED_MGPU_COPY
 	};
@@ -2512,6 +2507,7 @@ struct SRenderingPassInfo
 	static SRenderingPassInfo CreateGeneralPassRenderingInfo(const CCamera& rCamera, uint32 nRenderingFlags = DEFAULT_FLAGS, bool bAuxWindow = false);
 	static SRenderingPassInfo CreateRecursivePassRenderingInfo(const CCamera& rCamera, uint32 nRenderingFlags = DEFAULT_RECURSIVE_FLAGS);
 	static SRenderingPassInfo CreateShadowPassRenderingInfo(CRenderView* pRenderView, const CCamera& rCamera, int nLightFlags, int nShadowMapLod, bool bExtendedLod, bool bIsMGPUCopy, uint32* pShadowGenMask, uint32 nSide, uint32 nShadowFrustumID, uint32 nRenderingFlags = DEFAULT_SHADOWS_FLAGS);
+	static SRenderingPassInfo CreateBillBoardGenPassRenderingInfo(const CCamera& rCamera, uint32 nRenderingFlags = DEFAULT_FLAGS);
 	static SRenderingPassInfo CreateTempRenderingInfo(const CCamera& rCamera, const SRenderingPassInfo& rPassInfo);
 	static SRenderingPassInfo CreateTempRenderingInfo(uint32 nRenderingFlags, const SRenderingPassInfo& rPassInfo);
 
@@ -2576,9 +2572,8 @@ struct SRenderingPassInfo
 	void  SetWriteMutex(void* jobState) { m_pJobState = jobState; }
 	void* WriteMutex() const            { return m_pJobState; };
 
-	SRenderingPassInfo(threadID id)
+	SRenderingPassInfo(threadID id) : SRenderingPassInfo()
 	{
-		SRenderingPassInfo();
 		SetThreadID(id);
 	}
 
@@ -2954,6 +2949,23 @@ inline void SRenderingPassInfo::SetRenderView(CRenderView* pRenderView)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+inline SRenderingPassInfo SRenderingPassInfo::CreateBillBoardGenPassRenderingInfo(const CCamera& rCamera, uint32 nRenderingFlags)
+{
+	const CCamera& rCameraToSet = rCamera;
+
+	SRenderingPassInfo passInfo;
+	passInfo.SetCamera(rCameraToSet);
+	passInfo.InitRenderingFlags(nRenderingFlags);
+	passInfo.m_bAuxWindow = false;
+
+	passInfo.m_renderItemSorter.nValue = 0;
+
+	passInfo.SetRenderView(gEnv->pRenderer->GetRenderViewForThread(passInfo.ThreadID(), IRenderView::eViewType_BillboardGen));
+
+	return passInfo;
+}
+
+////////////////////////////////////////////////////////////////////////////////
 inline SRenderingPassInfo SRenderingPassInfo::CreateGeneralPassRenderingInfo(const CCamera& rCamera, uint32 nRenderingFlags, bool bAuxWindow)
 {
 	static ICVar* pCameraFreeze = gEnv->pConsole->GetCVar("e_CameraFreeze");
@@ -2988,7 +3000,7 @@ inline SRenderingPassInfo SRenderingPassInfo::CreateGeneralPassRenderingInfo(con
 
 	passInfo.m_renderItemSorter.nValue = 0;
 
-	passInfo.SetRenderView(gEnv->pRenderer->GetRenderViewForThread(passInfo.ThreadID(), false));
+	passInfo.SetRenderView(gEnv->pRenderer->GetRenderViewForThread(passInfo.ThreadID(), IRenderView::eViewType_Default));
 
 	return passInfo;
 }
@@ -3007,7 +3019,7 @@ inline SRenderingPassInfo SRenderingPassInfo::CreateRecursivePassRenderingInfo(c
 
 	passInfo.InitRenderingFlags(nRenderingFlags);
 
-	passInfo.SetRenderView(gEnv->pRenderer->GetRenderViewForThread(passInfo.ThreadID(), true));
+	passInfo.SetRenderView(gEnv->pRenderer->GetRenderViewForThread(passInfo.ThreadID(), IRenderView::eViewType_Recursive));
 
 	passInfo.m_renderItemSorter.nValue = SRendItemSorter::eRecursivePassMask;
 
@@ -3031,8 +3043,6 @@ inline SRenderingPassInfo SRenderingPassInfo::CreateShadowPassRenderingInfo(CRen
 		else
 			passInfo.m_eShadowMapRendering = SHADOW_MAP_GSM;
 	}
-	else if (nLightFlags & DLF_REFLECTIVE_SHADOWMAP)
-		passInfo.m_eShadowMapRendering = static_cast<uint8>(SHADOW_MAP_REFLECTIVE);
 	else if (nLightFlags & (DLF_POINT | DLF_PROJECT | DLF_AREA_LIGHT))
 		passInfo.m_eShadowMapRendering = static_cast<uint8>(SHADOW_MAP_LOCAL);
 	else

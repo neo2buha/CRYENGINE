@@ -14,10 +14,14 @@
 
 CRY_PFX2_DBG
 
-volatile bool gFeatureRenderRibbon = false;
-
 namespace pfx2
 {
+
+
+EParticleDataType PDT(EPDT_RibbonId, TParticleId);
+
+extern EParticleDataType EPDT_Alpha, EPDT_Color;
+
 
 SERIALIZATION_DECLARE_ENUM(ERibbonMode,
                            Camera,
@@ -25,9 +29,15 @@ SERIALIZATION_DECLARE_ENUM(ERibbonMode,
                            )
 
 SERIALIZATION_DECLARE_ENUM(ERibbonStreamSource,
-                           Age = EPDT_NormalAge,
-                           Spawn = EPDT_SpawnFraction
+                           Age,
+                           Spawn
                            )
+
+
+EParticleDataType DataType(ERibbonStreamSource source)
+{
+	return source == ERibbonStreamSource::Spawn ? EPDT_SpawnFraction : EPDT_NormalAge;
+}
 
 class CFeatureRenderRibbon : public CParticleRenderBase
 {
@@ -66,10 +76,11 @@ private:
 	ERibbonMode         m_ribbonMode;
 	ERibbonStreamSource m_streamSource;
 	UFloat10            m_frequency;
+	UFloat10            m_offset;
 	bool                m_connectToOrigin;
 };
 
-CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureRenderRibbon, "Render", "Ribbon", "Editor/Icons/Particles/ribbons.png", renderFeatureColor);
+CRY_PFX2_IMPLEMENT_FEATURE(CParticleFeature, CFeatureRenderRibbon, "Render", "Ribbon", colorRender);
 
 CFeatureRenderRibbon::CFeatureRenderRibbon()
 	: m_ribbonMode(ERibbonMode::Camera)
@@ -77,6 +88,7 @@ CFeatureRenderRibbon::CFeatureRenderRibbon()
 	, m_connectToOrigin(false)
 	, m_frequency(1.0f)
 	, m_sortBias(0.0f)
+	, m_offset(0.0f)
 {
 }
 
@@ -97,7 +109,7 @@ void CFeatureRenderRibbon::AddToComponent(CParticleComponent* pComponent, SCompo
 	pParams->m_renderObjectSortBias = m_sortBias;
 	if (m_ribbonMode == ERibbonMode::Free)
 		pComponent->AddParticleData(EPQF_Orientation);
-	pComponent->AddParticleData(EParticleDataType(m_streamSource));
+	pComponent->AddParticleData(DataType(m_streamSource));
 	pParams->m_shaderData.m_textureFrequency = m_frequency;
 }
 
@@ -109,6 +121,7 @@ void CFeatureRenderRibbon::Serialize(Serialization::IArchive& ar)
 	ar(m_sortBias, "SortBias", "Sort Bias");
 	ar(m_connectToOrigin, "ConnectToOrigin", "Connect To Origin");
 	ar(m_frequency, "TextureFrequency", "Texture Frequency");
+	ar(m_offset, "Offset", "Offset");
 }
 
 void CFeatureRenderRibbon::InitParticles(const SUpdateContext& context)
@@ -172,7 +185,7 @@ void CFeatureRenderRibbon::MakeRibbons(CParticleComponentRuntime* pComponentRunt
 
 	{
 		const uint64 noKey = uint64(-1);
-		TParticleHeap::Array<uint64, uint, CRY_PFX2_PARTICLES_ALIGNMENT> sortEntries(memHep, lastParticleId);
+		THeapArray<uint64> sortEntries(memHep, lastParticleId);
 		CRY_PFX2_FOR_ACTIVE_PARTICLES(context)
 		{
 			const TParticleId ribbonId = ribbonIds.Load(particleId);
@@ -279,9 +292,13 @@ public:
 		SParticleAxes axes;
 		const float size = m_sizes.Load(particleId);
 		const Quat orientation = m_orientations.Load(particleId);
+		const Vec3 dir0 = movingPositions[0] - movingPositions[1];
+		const Vec3 dir1 = movingPositions[1] - movingPositions[2];
+		const Vec3 up = -orientation.GetColumn0();
+		const Vec3 right = (dir0 + dir1).GetNormalized();
 
-		axes.xAxis = orientation.GetColumn0() * size;
-		axes.yAxis = -orientation.GetColumn1() * size;
+		axes.xAxis = up * size;
+		axes.yAxis = right * size;
 
 		return axes;
 	}
@@ -296,7 +313,7 @@ class CRibbonColorSTs
 public:
 	CRibbonColorSTs(const CParticleContainer& container, ERibbonStreamSource streamSource)
 		: m_colors(container.GetIColorStream(EPDT_Color))
-		, m_stream(container.GetIFStream(EParticleDataType(streamSource)))
+		, m_stream(container.GetIFStream(DataType(streamSource)))
 		, m_sizes(container.GetIFStream(EPDT_Size))
 		, m_alphas(container.GetIFStream(EPDT_Alpha, 1.0f))
 		, m_hasColors(container.HasData(EPDT_Color)) {}
@@ -355,6 +372,7 @@ ILINE void CFeatureRenderRibbon::WriteToGPUMem(CParticleComponentRuntime* pCompo
 	const IFStream parentAges = parentContainer.GetIFStream(EPDT_NormalAge);
 	const uint extraVertices = m_connectToOrigin ? 2 : 1;
 	const CRibbonColorSTs colorSTsSampler = CRibbonColorSTs(container, m_streamSource);
+	const bool hasOffset = m_offset != 0.0f;
 
 	SRenderVertices* pRenderVertices = pRE->AllocPullVertices(numVertices);
 	CWriteCombinedBuffer<Vec3, vertexBufferSize, vertexChunckSize> localPositions(pRenderVertices->aPositions);
@@ -393,6 +411,12 @@ ILINE void CFeatureRenderRibbon::WriteToGPUMem(CParticleComponentRuntime* pCompo
 
 			axes = axesSampler.Sample(particleId, movingPositions);
 			colorST = colorSTsSampler.Sample(particleId, frameId, animPos);
+
+			if (hasOffset)
+			{
+				const Vec3 zAxis = axes.xAxis.Cross(axes.yAxis).GetNormalized();
+				position -= zAxis * m_offset;
+			}
 
 			localPositions.Array().push_back(position);
 			localAxes.Array().push_back(axes);

@@ -57,6 +57,7 @@ def load_gcc_common_settings(conf):
 		'-Wall',					# Generate more warnings
 		'-Werror',					# Tread Warnings as Errors
 		'-ffast-math',				# Enable fast math
+		'-flax-vector-conversions', # Enable automatic casting between SIMD vector types
 		
 		'-fvisibility=hidden',			
 		
@@ -68,6 +69,7 @@ def load_gcc_common_settings(conf):
 		'-Wno-parentheses',
 		'-Wno-switch',
 		'-Wno-unused-function',
+		'-Wno-unused-result',
 		'-Wno-multichar',
 		'-Wno-format-security',
 		'-Wno-empty-body',
@@ -76,7 +78,7 @@ def load_gcc_common_settings(conf):
 		'-Wno-sign-compare',	
 		'-Wno-narrowing',
 		'-Wno-write-strings',
-		'-Wno-format',								
+		'-Wno-format',		
 		
 		'-Wno-strict-aliasing',
 		'-Wno-unused-but-set-variable',
@@ -195,6 +197,7 @@ def load_profile_gcc_settings(conf):
 	
 	COMPILER_FLAGS = [
 		'-O2',
+		'-fno-strict-aliasing'
 		]
 	
 	v['CFLAGS'] += COMPILER_FLAGS

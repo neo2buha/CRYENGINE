@@ -396,7 +396,7 @@ bool CAnimationManager::CreateGlobalHeaderDBA(DynArray<string>& arrFilePathDBA)
 bool CAnimationManager::DBA_PreLoad(const char* pFilePathDBA, bool highPriority)
 {
 	stack_string strPath = pFilePathDBA;
-	CryStringUtils::UnifyFilePath(strPath);
+	PathUtil::UnifyFilePath(strPath);
 
 	uint32 numHeaders = m_arrGlobalHeaderDBA.size();
 	for (uint32 dba = 0; dba < numHeaders; dba++)
@@ -430,7 +430,7 @@ bool CAnimationManager::DBA_PreLoad(const char* pFilePathDBA, bool highPriority)
 bool CAnimationManager::DBA_LockStatus(const char* pFilePathDBA, uint32 status, bool highPriority)
 {
 	stack_string strPath = pFilePathDBA;
-	CryStringUtils::UnifyFilePath(strPath);
+	PathUtil::UnifyFilePath(strPath);
 
 	uint32 numHeaders = m_arrGlobalHeaderDBA.size();
 	for (uint32 dba = 0; dba < numHeaders; dba++)
@@ -456,7 +456,7 @@ bool CAnimationManager::DBA_LockStatus(const char* pFilePathDBA, uint32 status, 
 bool CAnimationManager::DBA_Unload(const char* pFilePathDBA)
 {
 	stack_string strPath = pFilePathDBA;
-	CryStringUtils::UnifyFilePath(strPath);
+	PathUtil::UnifyFilePath(strPath);
 
 	uint32 numHeadersDBA = m_arrGlobalHeaderDBA.size();
 	if (numHeadersDBA == 0)
@@ -872,7 +872,7 @@ bool AnimSearchHelper::AddAnimation(uint32 crc, uint32 gahIndex)
 
 void AnimSearchHelper::AddAnimation(const string& path, uint32 gahIndex)
 {
-	stack_string pathDir = PathUtil::GetPath(path);
+	stack_string pathDir = PathUtil::GetPathWithoutFilename(path);
 	PathUtil::ToUnixPath(pathDir);
 	if (strcmp(pathDir, "animations/human/male/behavior/fear/") == 0)
 		int A = 0;
@@ -884,7 +884,7 @@ void AnimSearchHelper::AddAnimation(const string& path, uint32 gahIndex)
 	{
 		for (int32 lastSlashPos = pathDir.rfind('/'); lastSlashPos >= 0; lastSlashPos = pathDir.rfind('/', lastSlashPos - 1))
 		{
-			uint32 parentDirCRC = CCrc32::ComputeLowercase(pathDir, lastSlashPos + 1);
+			uint32 parentDirCRC = CCrc32::ComputeLowercase(pathDir, size_t(lastSlashPos + 1), 0);
 			TSubFolderCrCVector* pSubFolderVec = NULL;
 			TSubFoldersMap::iterator parentFolderIter = m_SubFoldersMap.find(parentDirCRC);
 			if (parentFolderIter == m_SubFoldersMap.end())

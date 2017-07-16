@@ -15,7 +15,7 @@
 
 #if defined(USE_GEOM_CACHES)
 
-class CREGeomCache : public CRendElementBase
+class CREGeomCache : public CRenderElement
 {
 public:
 	struct SMeshInstance
@@ -38,8 +38,8 @@ public:
 	bool        Update(const int flags, const bool bTesselation);
 	static void UpdateModified();
 
-	// CRendElementBase interface
-	virtual bool mfUpdate(EVertexFormat eVertFormat, int Flags, bool bTessellation) override;
+	// CRenderElement interface
+	virtual bool mfUpdate(InputLayoutHandle eVertFormat, int Flags, bool bTessellation) override;
 	virtual void mfPrepare(bool bCheckOverflow) override;
 	virtual bool mfDraw(CShader* ef, SShaderPass* sfm) override;
 
@@ -53,9 +53,9 @@ public:
 	virtual void                       DisplayFilledBuffer(const int threadId);
 
 	// accessors for new render pipeline
-	virtual EVertexFormat GetVertexFormat() const override;
+	virtual InputLayoutHandle GetVertexFormat() const override;
 	virtual bool          GetGeometryInfo(SGeometryInfo& streams, bool bSupportTessellation = false) override;
-	virtual void          Draw(CRenderObject* pObj, const SGraphicsPipelinePassContext& ctx) override;
+	virtual void          DrawToCommandList(CRenderObject* pObj, const SGraphicsPipelinePassContext& ctx) override;
 
 private:
 	uint16        m_materialId;

@@ -36,13 +36,11 @@ namespace pfx2
 
 CParticleContainer::CParticleContainer()
 {
-	memset(m_pData, 0, sizeof(m_pData));
 	Clear();
 }
 
 CParticleContainer::CParticleContainer(const CParticleContainer& copy)
 {
-	memset(m_pData, 0, sizeof(m_pData));
 	Clear();
 }
 
@@ -60,30 +58,26 @@ void CParticleContainer::Resize(size_t newSize)
 
 	const size_t newMaxParticles = CRY_PFX2_PARTICLESGROUP_UPPER(newSize + (newSize >> 1)) + 1;
 
-	void* prevBuffers[EPDT_Count];
-	for (size_t type = 0; type < EPDT_Count; ++type)
+	auto prevBuffers = m_pData;
+	for (auto type : EParticleDataType::indices())
 	{
-		const size_t stride = gParticleDataStrides[type];
-		prevBuffers[type] = m_pData[type];
-		m_pData[type] = 0;
+		const size_t stride = type.info().typeSize();
 		if (m_useData[type] && newMaxParticles > 0)
-			m_pData[type] = ParticleAlloc(newMaxParticles * stride);
-	}
-
-	for (size_t type = 0; type < EPDT_Count; ++type)
-	{
-		if (!m_useData[type] && newMaxParticles > 0)
-			continue;
-		const size_t stride = gParticleDataStrides[type];
-		const byte* pSource = reinterpret_cast<byte*>(prevBuffers[type]);
-		byte* pDest = reinterpret_cast<byte*>(m_pData[type]);
-		memcpy(pDest, pSource, m_lastId * stride);
-	}
-
-	for (size_t type = 0; type < EPDT_Count; ++type)
-	{
-		if (prevBuffers[type])
-			ParticleFree(prevBuffers[type]);
+		{
+			void* pNew = ParticleAlloc(newMaxParticles * stride);
+			if (m_pData[type])
+			{
+				memcpy(pNew, m_pData[type], m_lastId * stride);
+				ParticleFree(m_pData[type]);
+			}
+			m_pData[type] = pNew;
+		}
+		else
+		{
+			if (m_pData[type])
+				ParticleFree(m_pData[type]);
+			m_pData[type] = 0;
+		}
 	}
 
 	m_maxParticles = newMaxParticles;
@@ -91,44 +85,26 @@ void CParticleContainer::Resize(size_t newSize)
 
 void CParticleContainer::ResetUsedData()
 {
-	for (size_t type = 0; type < EPDT_Count; ++type)
-		m_useData[type] = false;
+	m_useData.fill(false);
 }
 
 void CParticleContainer::AddParticleData(EParticleDataType type)
 {
 	CRY_PFX2_PROFILE_DETAIL;
 
-	m_useData[type] = true;
-	if (m_pData[type] == 0)
-		m_pData[type] = ParticleAlloc(m_maxParticles * gParticleDataStrides[type]);
-}
-
-void CParticleContainer::AddParticleData(EParticleVec3Field type)
-{
-	EParticleDataType xType = EParticleDataType(type);
-	EParticleDataType yType = EParticleDataType(type + 1);
-	EParticleDataType zType = EParticleDataType(type + 2);
-	AddParticleData(xType);
-	AddParticleData(yType);
-	AddParticleData(zType);
-}
-
-void CParticleContainer::AddParticleData(EParticleQuatField type)
-{
-	EParticleDataType xType = EParticleDataType(type);
-	EParticleDataType yType = EParticleDataType(type + 1);
-	EParticleDataType zType = EParticleDataType(type + 2);
-	EParticleDataType wType = EParticleDataType(type + 3);
-	AddParticleData(xType);
-	AddParticleData(yType);
-	AddParticleData(zType);
-	AddParticleData(wType);
+	const size_t allocSize = m_maxParticles * type.info().typeSize();
+	uint dim = type.info().dimension;
+	for (uint i = 0; i < dim; ++i)
+	{
+		m_useData[type + i] = true;
+		if (!m_pData[type + i])
+			m_pData[type + i] = ParticleAlloc(allocSize);
+	}
 }
 
 void CParticleContainer::Trim()
 {
-	for (size_t type = 0; type < EPDT_Count; ++type)
+	for (auto type : EParticleDataType::indices())
 	{
 		if (!m_useData[type] && m_pData[type] != 0)
 		{
@@ -142,7 +118,7 @@ void CParticleContainer::Clear()
 {
 	CRY_PFX2_PROFILE_DETAIL;
 
-	for (size_t i = 0; i < EPDT_Count; ++i)
+	for (auto i : EParticleDataType::indices())
 	{
 		if (m_pData[i] != 0)
 			ParticleFree(m_pData[i]);
@@ -218,165 +194,137 @@ void SwapToEndRemoveStride8(TParticleId lastParticleId, const TParticleId* toRem
 void CParticleContainer::AddParticle()
 {
 	SSpawnEntry entry = { 1 };
-	AddRemoveParticles(&entry, 1, 0, 0);
+	AddRemoveParticles({&entry, 1}, {}, {});
 }
 
-void CParticleContainer::AddRemoveParticles(const SSpawnEntry* pSpawnEntries, size_t numSpawnEntries, const TParticleIdArray* pToRemove, TParticleIdArray* pSwapIds)
+void CParticleContainer::AddRemoveParticles(TConstArray<SSpawnEntry> spawnEntries, TVarArray<TParticleId> toRemove, TVarArray<TParticleId> swapIds)
 {
 	CRY_PFX2_PROFILE_DETAIL;
 
-	//////////////////////////////////////////////////////////////////////////
-
-	size_t newSize = m_lastId;
-	if (pToRemove)
-		newSize -= pToRemove->size();
-	if (pSpawnEntries)
-	{
-		for (size_t entryIdx = 0; entryIdx < numSpawnEntries; ++entryIdx)
-		{
-			const SSpawnEntry& spawnEntry = pSpawnEntries[entryIdx];
-			newSize += spawnEntry.m_count;
-		}
-	}
+	size_t newSize = m_lastId - toRemove.size();
+	for (const auto& spawnEntry : spawnEntries)
+		newSize += spawnEntry.m_count;
 	newSize = CRY_PFX2_PARTICLESGROUP_UPPER(newSize) + CRY_PFX2_PARTICLESGROUP_STRIDE + 1;
 	Resize(newSize);
 
-	//////////////////////////////////////////////////////////////////////////
-
-	if (pToRemove && !pToRemove->empty())
+	if (!toRemove.empty())
 	{
-		const auto& toRemove = *pToRemove;
-		const TParticleId lastParticleId = GetLastParticleId();
-		const size_t toRemoveCount = toRemove.size();
-		const uint finalSize = lastParticleId - toRemoveCount;
-
-		for (size_t dataTypeId = 0; dataTypeId < EPDT_Count; ++dataTypeId)
-		{
-			const size_t stride = gParticleDataStrides[dataTypeId];
-			void* pData = m_pData[dataTypeId];
-			if (!m_useData[dataTypeId])
-				continue;
-			switch (stride)
-			{
-			case 1:
-				SwapToEndRemoveStride1(lastParticleId, &toRemove[0], toRemoveCount, m_pData[dataTypeId]);
-				break;
-			case 4:
-				SwapToEndRemoveStride4(lastParticleId, &toRemove[0], toRemoveCount, m_pData[dataTypeId]);
-				break;
-			case 8:
-				SwapToEndRemoveStride8(lastParticleId, &toRemove[0], toRemoveCount, m_pData[dataTypeId]);
-				break;
-			default:
-				SwapToEndRemove(lastParticleId, &toRemove[0], toRemoveCount, m_pData[dataTypeId], stride);
-			}
-		}
-
-		if (pSwapIds && !pSwapIds->empty())
-		{
-			auto& swapIds = *pSwapIds;
-			CRY_PFX2_ASSERT(uint(swapIds.size()) >= lastParticleId);    // swapIds not big enough
-
-			for (size_t j = 0; j < lastParticleId; ++j)
-				swapIds[j] = j;
-
-			SwapToEndRemoveStride4(lastParticleId, &toRemove[0], toRemoveCount, swapIds.data());
-			for (uint i = finalSize; i < lastParticleId; ++i)
-				swapIds[i] = gInvalidId;
-
-			for (uint i = 0; i < finalSize; ++i)
-			{
-				TParticleId v0 = swapIds[i];
-				TParticleId v1 = swapIds[v0];
-				swapIds[i] = v1;
-				swapIds[v0] = i;
-			}
-		}
-		m_lastId -= toRemoveCount;
+		if (!swapIds.empty())
+			MakeSwapIds(toRemove, swapIds);
+		RemoveParticles(toRemove);
 	}
 
-	//////////////////////////////////////////////////////////////////////////
-
-	if (pSpawnEntries && numSpawnEntries)
-	{
-		m_firstSpawnId = m_lastSpawnId = CRY_PFX2_PARTICLESGROUP_UPPER(m_lastId) + 1;
-		uint32 currentId = m_firstSpawnId;
-		for (size_t entryIdx = 0; entryIdx < numSpawnEntries; ++entryIdx)
-		{
-			const SSpawnEntry& spawnEntry = pSpawnEntries[entryIdx];
-			const size_t toAddCount = spawnEntry.m_count;
-
-			if (HasData(EPDT_ParentId))
-			{
-				TParticleId* pParentIds = reinterpret_cast<TParticleId*>(m_pData[EPDT_ParentId]);
-				for (uint32 i = currentId; i < currentId + toAddCount; ++i)
-					pParentIds[i] = spawnEntry.m_parentId;
-			}
-
-			if (HasData(EPDT_SpawnId))
-			{
-				uint32* pSpawnIds = reinterpret_cast<TParticleId*>(m_pData[EPDT_SpawnId]);
-				for (uint32 i = currentId; i < currentId + toAddCount; ++i)
-					pSpawnIds[i] = m_nextSpawnId++;
-			}
-
-			if (HasData(EPDT_NormalAge))
-			{
-				// Store newborn ages
-				float age = spawnEntry.m_ageBegin;
-				float* pNormalAges = reinterpret_cast<float*>(m_pData[EPDT_NormalAge]);
-				for (uint32 i = currentId; i < currentId + toAddCount; ++i, age += spawnEntry.m_ageIncrement)
-					pNormalAges[i] = age;
-			}
-
-			if (HasData(EPDT_SpawnFraction))
-			{
-				float fraction = spawnEntry.m_fractionBegin;
-				float* pSpawnFractions = reinterpret_cast<float*>(m_pData[EPDT_SpawnFraction]);
-				for (uint32 i = currentId; i < currentId + toAddCount; ++i, fraction += spawnEntry.m_fractionCounter)
-					pSpawnFractions[i] = fraction - uint(fraction);
-			}
-
-			currentId += toAddCount;
-			m_lastSpawnId += toAddCount;
-		}
-	}
+	if (!spawnEntries.empty())
+		AddParticles(spawnEntries);
 	else
-	{
 		m_firstSpawnId = m_lastSpawnId = m_lastId;
-	}
-
-	DebugParticleCounters();
 }
 
-void CParticleContainer::DebugRemoveParticlesStability(const TParticleIdArray& toRemove, const TParticleIdArray& swapIds) const
+void CParticleContainer::AddParticles(TConstArray<SSpawnEntry> spawnEntries)
 {
-#ifdef CRY_DEBUG_PARTICLE_SYSTEM
-	for (size_t i = 0; i < swapIds.size(); ++i)
+	CRY_PFX2_PROFILE_DETAIL;
+
+	m_firstSpawnId = m_lastSpawnId = CRY_PFX2_PARTICLESGROUP_UPPER(m_lastId) + 1;
+	uint32 currentId = m_firstSpawnId;
+	for (const auto& spawnEntry : spawnEntries)
 	{
-		TParticleId id = swapIds[i];
-		CRY_PFX2_ASSERT(id < m_maxParticles || id == gInvalidId);   // algorithm robustnesses failure
+		const size_t toAddCount = spawnEntry.m_count;
+
+		if (HasData(EPDT_ParentId))
+		{
+			TParticleId* pParentIds = GetData<TParticleId>(EPDT_ParentId);
+			for (uint32 i = currentId; i < currentId + toAddCount; ++i)
+				pParentIds[i] = spawnEntry.m_parentId;
+		}
+
+		if (HasData(EPDT_SpawnId))
+		{
+			uint32* pSpawnIds = GetData<TParticleId>(EPDT_SpawnId);
+			for (uint32 i = currentId; i < currentId + toAddCount; ++i)
+				pSpawnIds[i] = m_nextSpawnId++;
+		}
+		else
+		{
+			m_nextSpawnId += toAddCount;
+		}
+
+		if (HasData(EPDT_NormalAge))
+		{
+			// Store newborn ages
+			float age = spawnEntry.m_ageBegin;
+			float* pNormalAges = GetData<float>(EPDT_NormalAge);
+			for (uint32 i = currentId; i < currentId + toAddCount; ++i, age += spawnEntry.m_ageIncrement)
+				pNormalAges[i] = age;
+		}
+
+		if (HasData(EPDT_SpawnFraction))
+		{
+			float fraction = spawnEntry.m_fractionBegin;
+			float* pSpawnFractions = GetData<float>(EPDT_SpawnFraction);
+			for (uint32 i = currentId; i < currentId + toAddCount; ++i, fraction += spawnEntry.m_fractionCounter)
+				pSpawnFractions[i] = min(fraction, 1.0f);
+		}
+
+		currentId += toAddCount;
+		m_lastSpawnId += toAddCount;
 	}
-#endif
 }
 
-void CParticleContainer::DebugParticleCounters() const
+void CParticleContainer::RemoveParticles(TConstArray<TParticleId> toRemove)
 {
-#ifdef CRY_DEBUG_PARTICLE_SYSTEM
-	#if 0
-	size_t totalCount = 0;
-	size_t spawncount = 0;
-	for (auto& range : m_ranges)
+	CRY_PFX2_PROFILE_DETAIL;
+
+	const TParticleId lastParticleId = GetLastParticleId();
+	const uint toRemoveCount = toRemove.size();
+
+	for (auto dataTypeId : EParticleDataType::indices())
 	{
-		CRY_PFX2_ASSERT(range.m_firstSpawnedParticle >= range.m_firstParticle);
-		CRY_PFX2_ASSERT(range.m_firstSpawnedParticle <= range.m_lastParticle);  // first spawned particles is not within the correct range somehow
-		totalCount += range.m_lastParticle - range.m_firstParticle;
-		spawncount += range.m_lastParticle - range.m_firstSpawnedParticle;
+		const uint stride = dataTypeId.info().typeSize();
+		void* pData = m_pData[dataTypeId];
+		if (!m_useData[dataTypeId])
+			continue;
+		switch (stride)
+		{
+		case 1:
+			SwapToEndRemoveStride1(lastParticleId, &toRemove[0], toRemoveCount, m_pData[dataTypeId]);
+			break;
+		case 4:
+			SwapToEndRemoveStride4(lastParticleId, &toRemove[0], toRemoveCount, m_pData[dataTypeId]);
+			break;
+		case 8:
+			SwapToEndRemoveStride8(lastParticleId, &toRemove[0], toRemoveCount, m_pData[dataTypeId]);
+			break;
+		default:
+			SwapToEndRemove(lastParticleId, &toRemove[0], toRemoveCount, m_pData[dataTypeId], stride);
+		}
 	}
-	CRY_PFX2_ASSERT(totalCount == m_numParticles);          // m_numParticles and ranges particle counts got inconsistent somehow
-	CRY_PFX2_ASSERT(spawncount == m_numSpawnedParticles);   // m_numSpawnedParticles and ranges particle counts got inconsistent somehow
-	#endif
-#endif
+
+	m_lastId -= toRemoveCount;
+}
+
+void CParticleContainer::MakeSwapIds(TVarArray<TParticleId> toRemove, TVarArray<TParticleId> swapIds)
+{
+	CRY_PFX2_PROFILE_DETAIL;
+
+	const TParticleId lastParticleId = GetLastParticleId();
+	const uint toRemoveCount = toRemove.size();
+	const uint finalSize = lastParticleId - toRemoveCount;
+	CRY_PFX2_ASSERT(uint(swapIds.size()) >= lastParticleId);    // swapIds not big enough
+
+	for (size_t j = 0; j < lastParticleId; ++j)
+		swapIds[j] = j;
+
+	SwapToEndRemoveStride4(lastParticleId, &toRemove[0], toRemoveCount, swapIds.data());
+	for (uint i = finalSize; i < lastParticleId; ++i)
+		swapIds[i] = gInvalidId;
+
+	for (uint i = 0; i < finalSize; ++i)
+	{
+		TParticleId v0 = swapIds[i];
+		TParticleId v1 = swapIds[v0];
+		swapIds[i] = v1;
+		swapIds[v0] = i;
+	}
 }
 
 void CParticleContainer::ResetSpawnedParticles()
@@ -390,9 +338,9 @@ void CParticleContainer::ResetSpawnedParticles()
 	const uint movingId = m_lastSpawnId - min(gapSize, numSpawn);
 	if (gapSize != 0)
 	{
-		for (size_t dataTypeId = 0; dataTypeId < EPDT_Count; ++dataTypeId)
+		for (auto dataTypeId : EParticleDataType::indices())
 		{
-			const size_t stride = gParticleDataStrides[dataTypeId];
+			const size_t stride = dataTypeId.info().typeSize();
 			byte* pBytes = reinterpret_cast<byte*>(m_pData[dataTypeId]);
 			if (!pBytes)
 				continue;
@@ -409,17 +357,17 @@ void CParticleContainer::RemoveNewBornFlags()
 	void* pBegin = m_pData[EPDT_State];
 	void* pCursor = pBegin;
 
+	const uint8 mask = ~ESB_NewBorn;
+	const uint32 flag32 = (mask << 24) | (mask << 16) | (mask << 8) | mask;
 #ifdef CRY_PFX2_USE_SSE
-	const __m128i flag128 = _mm_set1_epi8(~ESB_NewBorn);
-	__m128i* pBegin128 = static_cast<__m128i*>(pCursor);
-	__m128i* pEnd128 = static_cast<__m128i*>(pBegin) + m_lastId / sizeof(__m128i);
+	const u32v4 flag128 = convert<u32v4>(flag32);
+	u32v4* pBegin128 = static_cast<u32v4*>(pCursor);
+	u32v4* pEnd128 = static_cast<u32v4*>(pBegin) + m_lastId / sizeof(u32v4);
 	for (; pBegin128 != pEnd128; ++pBegin128)
-		*pBegin128 = _mm_and_si128(*pBegin128, flag128);
+		*pBegin128 &= flag128;
 	pCursor = pEnd128;
 #endif
 
-	const uint8 mask = ~ESB_NewBorn;
-	const uint32 flag32 = (mask << 24) | (mask << 16) | (mask << 8) | mask;
 	uint32* pBegin32 = static_cast<uint32*>(pCursor);
 	uint32* pEnd32 = static_cast<uint32*>(pBegin) + m_lastId / sizeof(uint32);
 	for (; pBegin32 != pEnd32; ++pBegin32)

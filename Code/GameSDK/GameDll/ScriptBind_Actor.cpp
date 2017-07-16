@@ -46,8 +46,8 @@
 
 //------------------------------------------------------------------------
 CScriptBind_Actor::CScriptBind_Actor(ISystem *pSystem)
-: m_pSystem(pSystem),
-	m_pGameFW(pSystem->GetIGame()->GetIGameFramework())
+	: m_pSystem(pSystem)
+	, m_pGameFW(gEnv->pGameFramework)
 {
 	Init(pSystem->GetIScriptSystem(), pSystem, 1);
 
@@ -1515,7 +1515,7 @@ int CScriptBind_Actor::SvGiveAmmoClips( IFunctionHandler* pH, int numClips )
 					{
 						int clipSize = pFireMode->GetClipSize();
 						int finalAmmoCount = ammoTypeCount + (clipSize * numClips);
-						finalAmmoCount = MIN(finalAmmoCount, ammoTypeCapacity);
+						finalAmmoCount = std::min(finalAmmoCount, ammoTypeCapacity);
 
 						pWeapon->SetInventoryAmmoCount(pAmmoTypeClass, finalAmmoCount);
 						ammoCollected = 1;

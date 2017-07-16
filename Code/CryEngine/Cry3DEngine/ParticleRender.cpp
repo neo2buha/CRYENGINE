@@ -165,7 +165,7 @@ struct SBufferedWriter
 
 		// Set final count of elems written to dest buffer.
 		assert(m_nWrittenDestBytes % sizeof(T) == 0);
-		m_pDestMem->resize_raw(m_nWrittenDestBytes / sizeof(T));
+		m_pDestMem->resize(m_nWrittenDestBytes / sizeof(T), eNoInit);
 	}
 
 	ILINE FixedDynArray<T>& Array()
@@ -247,13 +247,13 @@ struct CRY_ALIGN(128) SLocalRenderVertices
 		return aVertices.CheckAvailable(nVertices) && aIndices.CheckAvailable(nIndices);
 	}
 
-	ILINE static void DuplicateVertices(Array<SVF_Particle> aDest, const SVF_Particle& Src)
+	ILINE static void DuplicateVertices(SVF_Particle* pDest, int nCount, const SVF_Particle& Src)
 	{
 		static const uint nStride = sizeof(SVF_Particle) / sizeof(uint);
-		CryPrefetch(aDest.end());
+		CryPrefetch(pDest + nCount);
 		const uint* ps = reinterpret_cast<const uint*>(&Src);
-		uint* pd = reinterpret_cast<uint*>(aDest.begin());
-		for (uint n = aDest.size(); n > 0; n--)
+		uint* pd = reinterpret_cast<uint*>(pDest);
+		while (nCount-- > 0)
 		{
 			for (uint i = 0; i < nStride; i++)
 				*pd++ = ps[i];
@@ -282,7 +282,7 @@ struct CRY_ALIGN(128) SLocalRenderVertices
 	ILINE void ExpandQuadVertices()
 	{
 		SVF_Particle& vert = aVertices.Array().back();
-		DuplicateVertices(aVertices.Array().append_raw(3), vert);
+		DuplicateVertices(aVertices.Array().append(3, eNoInit), 3, vert);
 		SetQuadVertices(&vert);
 	}
 
@@ -305,13 +305,13 @@ struct CRY_ALIGN(128) SLocalRenderVertices
 	ILINE void ExpandOctVertices()
 	{
 		SVF_Particle& vert = aVertices.Array().back();
-		DuplicateVertices(aVertices.Array().append_raw(7), vert);
+		DuplicateVertices(aVertices.Array().append(7, eNoInit), 7, vert);
 		SetOctVertices(&vert);
 	}
 
 	ILINE void AddQuadIndices(int nVertAdvance = 4, int bStrip = 0)
 	{
-		uint16* pIndices = aIndices.Array().grow(bStrip ? 4 : 6);
+		uint16* pIndices = aIndices.Array().append(bStrip ? 4 : 6, eNoInit);
 
 		pIndices[0] = 0 + nBaseVertexIndex;
 		pIndices[1] = 1 + nBaseVertexIndex;
@@ -329,7 +329,7 @@ struct CRY_ALIGN(128) SLocalRenderVertices
 
 	ILINE void AddOctIndices()
 	{
-		uint16* pIndices = aIndices.Array().grow(18);
+		uint16* pIndices = aIndices.Array().append(18, eNoInit);
 
 		pIndices[0] = 0 + nBaseVertexIndex;
 		pIndices[1] = 1 + nBaseVertexIndex;
@@ -455,7 +455,6 @@ bool CParticle::RenderGeometry(SRendParams& RenParamsShared, SParticleVertexCont
 	}
 
 	// Render separate draw call.
-	SaveRestore<SInstancingInfo*> SaveInst(RenParamsShared.pInstInfo, 0);
 	SaveRestore<ColorF> SaveColor(RenParamsShared.AmbientColor);
 	SaveRestore<float> SaveAlpha(RenParamsShared.fAlpha);
 
@@ -631,8 +630,7 @@ void CParticle::AddLight(const SRendParams& RenParams, const SRenderingPassInfo&
 		const float fMinRadiusThreshold = GetFloatCVar(e_ParticlesLightMinRadiusThreshold);
 
 		const ColorF& cColor = dl.m_Color;
-		const Vec4* vLight = (Vec4*) &dl.m_Origin.x;
-		if ((cColor.r + cColor.g + cColor.b) > fMinColorThreshold && vLight->w > fMinRadiusThreshold)
+		if ((cColor.r + cColor.g + cColor.b) > fMinColorThreshold && dl.m_fRadius > fMinRadiusThreshold)
 		{
 			Get3DEngine()->SetupLightScissors(&dl, passInfo);
 			dl.m_n3DEngineUpdateFrameID = passInfo.GetMainFrameID();
@@ -1254,7 +1252,6 @@ void SParticleVertexContext::Init(float fMaxContainerPixels, CParticleContainer*
 	m_vCamPos -= m_vRenderOffset;
 
 	const float fAngularRes = m_CamInfo.pCamera->GetAngularResolution();
-	m_fInvMinPix = sqr(emitterMain.GetViewDistRatioFloat() * params.fViewDistanceAdjust / max(cvars.e_ParticlesMinDrawPixels, 0.125f));
 	m_fMaxPixFactor = params.nEnvFlags & REN_SPRITE ?
 	                  -2.f * params.fFillRateCost / sqr(max(cvars.e_ParticlesMaxDrawScreen * fAngularRes, 1.f))
 	                  : 0.f;
@@ -1276,6 +1273,9 @@ void SParticleVertexContext::Init(float fMaxContainerPixels, CParticleContainer*
 	if (m_uVertexFlags & FOB_OCTAGONAL)
 		m_fFillFactor *= 0.8285f;
 	m_fFillFade = 2.f / fMaxContainerPixels;
+
+	m_fInvMinPix = sqr(CParticleManager::Instance()->GetMaxAngularDensity(*m_CamInfo.pCamera) * emitterMain.GetViewDistRatioFloat() * params.fViewDistanceAdjust)
+		/ m_fFillFactor;
 
 	m_fDistFuncCoefs[0] = 1.f;
 	m_fDistFuncCoefs[1] = m_fDistFuncCoefs[2] = 0.f;

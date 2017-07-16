@@ -189,7 +189,7 @@ struct ICryPakFileAcesssSink
 };
 
 //! This special flag is used for findfirst/findnext routines to mark the files that were actually found in Archive.
-enum {_A_IN_CRYPAK = 0x80000000};
+enum  : uint32 {_A_IN_CRYPAK = 0x80000000};
 
 //! Interface to the Pak file system.
 //! \see CryPak.
@@ -627,6 +627,8 @@ struct IResourceList : public _reference_target_t
 	// </interfuscator:shuffle>
 };
 
+#include <CryString/CryPath.h>
+
 //! Everybody should use fxopen instead of fopen so it will work both on PC and XBox.
 inline FILE* fxopen(const char* file, const char* mode, bool bGameRelativePath = false)
 {
@@ -642,7 +644,6 @@ inline FILE* fxopen(const char* file, const char* mode, bool bGameRelativePath =
 			bWriteAccess = true;
 			break;
 		}
-		;
 	}
 
 	// This is on windows/xbox/Linux/Mac
@@ -662,7 +663,7 @@ inline FILE* fxopen(const char* file, const char* mode, bool bGameRelativePath =
 		if (bWriteAccess)
 		{
 			// Make sure folder is created.
-			gEnv->pCryPak->MakeDir(szAdjustedPath);
+			gEnv->pCryPak->MakeDir(PathUtil::GetParentDirectory(szAdjustedPath).c_str());
 		}
 #endif
 		return fopen(szAdjustedPath, mode);
@@ -671,20 +672,20 @@ inline FILE* fxopen(const char* file, const char* mode, bool bGameRelativePath =
 		return 0;
 }
 
-class CDebugAllowFileAccess
+class CScopedAllowFileAccessFromThisThread
 {
 public:
 #if defined(_RELEASE)
-	ILINE CDebugAllowFileAccess() {}
-	ILINE void End() {}
+	CScopedAllowFileAccessFromThisThread() = default;
+	void End() {}
 #else
-	CDebugAllowFileAccess()
+	CScopedAllowFileAccessFromThisThread()
 	{
 		m_threadId = CryGetCurrentThreadId();
 		m_oldDisable = gEnv->pCryPak ? gEnv->pCryPak->DisableRuntimeFileAccess(false, m_threadId) : false;
 		m_active = true;
 	}
-	ILINE ~CDebugAllowFileAccess()
+	~CScopedAllowFileAccessFromThisThread()
 	{
 		End();
 	}
@@ -705,6 +706,12 @@ protected:
 	bool     m_active;
 #endif
 };
+
+#if defined(_RELEASE)
+	#define SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD()
+#else
+	#define SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD() CScopedAllowFileAccessFromThisThread allowFileAccess
+#endif
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -871,7 +878,6 @@ private:
 #if !defined(RESOURCE_COMPILER)
 
 // Include File helpers.
-	#include <CryString/CryPath.h>
 	#include "CryFile.h"
 
 //! Helper class that can be used to recusrively scan the directory.

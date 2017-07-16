@@ -63,7 +63,6 @@ v2f_sh Common_SG_VS(app2vertSGGeneral IN_common)
 		_TCModify(baseTC, baseTC, vertPassPos.Position, OUT.Normal, TS_DIFFUSE);
 		OUT.baseTC = baseTC.xy;
 	#endif
-	OUT.Depth2 = HPosition.zw;
 #endif
 
 #if !%_RT_CUBEMAP0 
@@ -71,8 +70,7 @@ v2f_sh Common_SG_VS(app2vertSGGeneral IN_common)
 		HPosition.z /= CP_ShadowGen_FrustumInfo.y;	//use linear z-buffer
 
 	#if %TEMP_TERRAIN
-		HPosition.z *= 1.005f;
-		HPosition.z += .001;
+		HPosition.z += .002;
 		HPosition.z = max(HPosition.z, 0.001);
 	#endif
 
@@ -125,21 +123,15 @@ half4 AmbientOpPB        : PB_AmbientOpacity;
 
 struct pixout_shadow
 {
-#if %_RT_SAMPLE4
+#if (!ENABLE_TESSELLATION || %_RT_NO_TESSELLATION) && %_RT_SAMPLE4
   float4 Color   : COLOR0;
   half4  Normal	 : COLOR1;
-  float4 Depth2  : COLOR2;
 #endif
 
-#if !OPENGL
 #if %_RT_SAMPLE0
   float Depth    : SV_DepthGreaterEqual;
 #elif %_RT_HW_PCF_COMPARE && %_RT_CUBEMAP0
   float Depth    : SV_Depth;
-#endif
-#else
-  // Otherwise HLSLcc compiler crashes for OpenGL (currently shadows won't work)
-  float Depth    : COLOR3;
 #endif
 };
 
@@ -148,25 +140,13 @@ pixout_shadow Common_SG_PS(v2f_sh IN)
 {
 	pixout_shadow OUT = (pixout_shadow)0;
 
-#if !%_RT_HW_PCF_COMPARE
-	OUT.Color.rgba = IN.Depth; //FIX: depth output should be here for precision
-#else
-	#if %_RT_SAMPLE0
+#if %_RT_SAMPLE0 // Sun shadows with emulated slope bias
 		float fSlopeScale = CP_ShadowGen_FrustumInfo.z;
 		float fSlopeClamp = 0.001;
 		OUT.Depth = IN.Depth + min( fSlopeScale * max( abs(ddx(IN.Depth)), abs(ddy(IN.Depth)) ), fSlopeClamp);
-	#elif %_RT_CUBEMAP0
-		//output linear depth
+#elif %_RT_CUBEMAP0 // Local light shadows: linear depth
 		OUT.Depth = IN.Depth;
 	#endif
-#endif
-
-
-#if (!ENABLE_TESSELLATION || %_RT_NO_TESSELLATION) && %_RT_SAMPLE4
-	OUT.Depth2 = IN.Depth2.x / IN.Depth2.y;
-	OUT.Normal.xyz = normalize(half3(IN.Normal.xyz))*.5h+.5h;
-	OUT.Normal.w = 1;
-#endif
 
 #if %_RT_ALPHATEST || %_RT_ALPHABLEND || %_RT_SAMPLE4
 	#if !%TEMP_TERRAIN
@@ -174,14 +154,16 @@ pixout_shadow Common_SG_PS(v2f_sh IN)
 	#else
 		half4 baseColor = GetTerrainTex(terrainBaseTex, IN.baseTC.xy);	
 	#endif
+#endif
 
-	clip(baseColor.a - Get_SPI_AlphaTest(0).w);
+#if %_RT_ALPHATEST || %_RT_ALPHABLEND
+	clip(baseColor.a - Get_MaterialAlphaTest());
+#endif
 
 	#if (!ENABLE_TESSELLATION || %_RT_NO_TESSELLATION) && %_RT_SAMPLE4
 		// output RSM color component
 		#if !%TEMP_TERRAIN
-			half3 vFinalIndirectColor = MatDifColor.rgb; 
-			OUT.Color.rgb = baseColor.rgb * vFinalIndirectColor;
+		OUT.Color.rgb = baseColor.rgb * MatDifColor.rgb;
 		#else
 			OUT.Color.rgb = baseColor.rgb;
 		#endif
@@ -192,12 +174,13 @@ pixout_shadow Common_SG_PS(v2f_sh IN)
 			OUT.Color.a = 1.f;
 		#endif
 
-	#endif
+	OUT.Normal.xyz = normalize(half3(IN.Normal.xyz))*.5h+.5h;
+	OUT.Normal.w = 1;
 #endif
 
 #if %_RT_DISSOLVE
     half fNoise = GetDissolveTex(dissolveNoiseTex, IN.baseTC.xy*6.h).x;
-    clip(  fNoise - Get_SPI_AlphaTest(0).x );
+	clip(fNoise - Get_SPI_Dissolve());
 #endif
 
 	return OUT;

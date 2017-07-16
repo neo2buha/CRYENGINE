@@ -13,11 +13,7 @@ CInputExtension::CInputExtension()
 {
 }
 
-CInputExtension::~CInputExtension()
-{
-}
-
-void CInputExtension::Release()
+void CInputExtension::OnShutDown()
 {
 	GetGameObject()->ReleaseActions(this);
 
@@ -28,15 +24,13 @@ void CInputExtension::Release()
 
 	gEnv->pConsole->UnregisterVariable("gamezero_mouse_sensitivity", true);
 	gEnv->pConsole->UnregisterVariable("gamezero_controller_sensitivity", true);
-
-	ISimpleExtension::Release();
 }
 
 void CInputExtension::PostInit(IGameObject* pGameObject)
 {
 	RegisterInputHandler();
 
-	IActionMapManager* pActionMapManager = gEnv->pGame->GetIGameFramework()->GetIActionMapManager();
+	IActionMapManager* pActionMapManager = gEnv->pGameFramework->GetIActionMapManager();
 	if (pActionMapManager)
 	{
 		pActionMapManager->InitActionMaps("libs/config/defaultprofile.xml");
@@ -49,7 +43,7 @@ void CInputExtension::PostInit(IGameObject* pGameObject)
 
 	if (gEnv->IsEditor())
 	{
-		gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this);
+		gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this,"CInputExtension");
 	}
 
 	REGISTER_CVAR2("gamezero_mouse_sensitivity", &m_mouseSensitivity, 0.002f, VF_NULL, "Mouse Sensitivity.");

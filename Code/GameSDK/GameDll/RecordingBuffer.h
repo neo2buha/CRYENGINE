@@ -20,7 +20,7 @@ struct CRY_ALIGN(4) SRecording_Packet
 		: size(0)
 		, type(eRBPT_Invalid)
 	{
-		COMPILE_TIME_ASSERT( alignof(SRecording_Packet) == 4 );
+		static_assert(alignof(SRecording_Packet) == 4, "Invalid type alignment!");
 	}
 	uint16 size;
 	uint8 type;
@@ -48,7 +48,7 @@ public:
 	public:
 		iterator(CRecordingBuffer* pBuffer, size_t offset) : m_pRecordingBuffer(pBuffer), m_offset(offset)
 		{
-			size_t prefetchOffset = MIN(m_offset + 128, pBuffer->size());
+			size_t prefetchOffset = std::min(m_offset + 128, pBuffer->size());
 			PrefetchLine(pBuffer, prefetchOffset);
 		}
 
@@ -58,7 +58,7 @@ public:
 		{
 			m_offset += ((SRecording_Packet*)m_pRecordingBuffer->at(m_offset))->size;
 
-			size_t prefetchOffset = MIN(m_offset + 256, m_pRecordingBuffer->size());
+			size_t prefetchOffset = std::min(m_offset + 256, m_pRecordingBuffer->size());
 			PrefetchLine(m_pRecordingBuffer, prefetchOffset);
 			return *this;
 		}

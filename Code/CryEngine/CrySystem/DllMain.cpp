@@ -20,6 +20,14 @@
 	#include "DurangoDebugCallstack.h"
 #endif
 
+<<<<<<< HEAD
+=======
+#ifdef CRY_USE_CRASHRPT
+	#include <CrashRpt.h>
+extern bool g_bCrashRptInstalled;
+#endif // CRY_USE_CRASHRPT
+
+>>>>>>> upstream/stabilisation
 #if defined(INCLUDE_SCALEFORM_SDK) || defined(CRY_FEATURE_SCALEFORM_HELPER)
 	#include <CrySystem/Scaleform/IScaleformHelper.h>
 #endif
@@ -60,12 +68,29 @@ BOOL APIENTRY DllMain(HANDLE hModule,
 	{
 	case DLL_PROCESS_ATTACH:
 		break;
-	case DLL_THREAD_ATTACH:
-
-		break;
-	case DLL_THREAD_DETACH:
 	case DLL_PROCESS_DETACH:
 		break;
+
+	//////////////////////////////////////////////////////////////////////////
+	case DLL_THREAD_ATTACH:
+	#ifdef CRY_USE_CRASHRPT
+		if (g_bCrashRptInstalled)
+		{
+			crInstallToCurrentThread2(0);
+		}
+	#endif //CRY_USE_CRASHRPT
+		break;
+
+	//////////////////////////////////////////////////////////////////////////
+	case DLL_THREAD_DETACH:
+	#ifdef CRY_USE_CRASHRPT
+		if (g_bCrashRptInstalled)
+		{
+			crUninstallFromCurrentThread();
+		}
+	#endif //CRY_USE_CRASHRPT
+		break;
+
 	}
 	//	int sbh = _set_sbh_threshold(1016);
 
@@ -126,6 +151,19 @@ public:
 				gEnv->pSystem->SetThreadState(ESubsys_Physics, true);
 				break;
 			}
+		case ESYSTEM_EVENT_FULL_SHUTDOWN:
+		case ESYSTEM_EVENT_FAST_SHUTDOWN:
+			{
+				if (gEnv && gEnv->pSystem)
+				{
+					ISystemEventDispatcher* pSystemEventDispatcher = gEnv->pSystem->GetISystemEventDispatcher();
+					if (pSystemEventDispatcher)
+					{
+						pSystemEventDispatcher->RemoveListener(this);
+					}
+				} 
+			}
+			break;
 		}
 	}
 };
@@ -138,7 +176,8 @@ extern "C"
 	{
 		CSystem* pSystem = NULL;
 
-		pSystem = new CSystem;
+		pSystem = new CSystem(startupParams);
+		LOADING_TIME_PROFILE_SECTION_NAMED("CreateSystemInterface");
 		ModuleInitISystem(pSystem, "CrySystem");
 #if CRY_PLATFORM_DURANGO
 	#if !defined(_LIB)
@@ -147,9 +186,14 @@ extern "C"
 		gEnv->pWindow = startupParams.hWnd;
 #endif
 
+		gEnv->pGameFramework = startupParams.pGameFramework;
+
+<<<<<<< HEAD
+=======
 		ICryFactoryRegistryImpl* pCryFactoryImpl = static_cast<ICryFactoryRegistryImpl*>(pSystem->GetCryFactoryRegistry());
 		pCryFactoryImpl->RegisterFactories(g_pHeadToRegFactories);
 
+>>>>>>> upstream/stabilisation
 		// the earliest point the system exists - w2e tell the callback
 		if (startupParams.pUserCallback)
 			startupParams.pUserCallback->OnSystemConnect(pSystem);
@@ -160,7 +204,7 @@ extern "C"
 #elif CRY_PLATFORM_DURANGO && defined(ENABLE_PROFILING_CODE)
 		DurangoDebugCallStack::InstallExceptionHandler();
 #endif
-		if (!pSystem->Init(startupParams))
+		if (!pSystem->Init())
 		{
 			delete pSystem;
 
@@ -168,7 +212,7 @@ extern "C"
 		}
 
 		pSystem->GetISystemEventDispatcher()->OnSystemEvent(ESYSTEM_EVENT_CRYSYSTEM_INIT_DONE, 0, 0);
-		pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_system);
+		pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_system,"CSystemEventListner_System");
 
 		return pSystem;
 	}

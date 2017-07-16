@@ -8,7 +8,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 11:8:2004   11:39 : Created by Márcio Martins
+   - 11:8:2004   11:39 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #ifndef __GAMESERVERCHANNEL_H__
@@ -100,6 +100,7 @@ public:
 	// IConsoleVarSink
 	virtual bool OnBeforeVarChange(ICVar* pVar, const char* sNewValue) override;
 	virtual void OnAfterVarChange(ICVar* pVar) override;
+	virtual void OnVarUnregister(ICVar* pVar) override {}
 	// ~IConsoleVarSink
 
 	void SetChannelId(uint16 channelId)

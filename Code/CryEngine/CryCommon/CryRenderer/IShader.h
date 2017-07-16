@@ -23,15 +23,15 @@
 #include <CryCore/BitMask.h>
 
 struct IMaterial;
-class CRendElementBase;
+class CRenderElement;
 class CRenderObject;
 class CREMesh;
 struct IRenderMesh;
 struct IShader;
 struct IVisArea;
 class CShader;
-class CRendElement;
-class CRendElementBase;
+class CRenderElement;
+class CRenderElement;
 struct STexAnim;
 struct SShaderPass;
 struct SShaderItem;
@@ -667,21 +667,6 @@ struct SSkyInfo
 	}
 };
 
-struct SBending
-{
-	Vec2       m_vBending;
-	float      m_fMainBendingScale;
-	SWaveForm2 m_Waves[2];
-
-	SBending()
-	{
-		m_vBending.zero();
-		m_fMainBendingScale = 1.f;
-	}
-
-	Vec4 GetShaderConstants(float realTime) const;
-};
-
 enum EResClassName
 {
 	eRCN_Texture,
@@ -925,119 +910,6 @@ struct SEfTexModificator
 };
 
 //////////////////////////////////////////////////////////////////////
-#define FILTER_NONE      -1
-#define FILTER_POINT     0
-#define FILTER_LINEAR    1
-#define FILTER_BILINEAR  2
-#define FILTER_TRILINEAR 3
-#define FILTER_ANISO2X   4
-#define FILTER_ANISO4X   5
-#define FILTER_ANISO8X   6
-#define FILTER_ANISO16X  7
-
-//////////////////////////////////////////////////////////////////////
-#define TADDR_WRAP   0
-#define TADDR_CLAMP  1
-#define TADDR_MIRROR 2
-#define TADDR_BORDER 3
-
-struct STexState
-{
-	struct
-	{
-		signed char m_nMinFilter  : 8;
-		signed char m_nMagFilter  : 8;
-		signed char m_nMipFilter  : 8;
-		signed char m_nAddressU   : 8;
-		signed char m_nAddressV   : 8;
-		signed char m_nAddressW   : 8;
-		signed char m_nAnisotropy : 8;
-		signed char padding       : 8;
-	};
-	DWORD m_dwBorderColor;
-	void* m_pDeviceState;
-	bool  m_bActive;
-	bool  m_bComparison;
-	bool  m_bSRGBLookup;
-	byte  m_bPAD;
-
-	STexState()
-	{
-		m_nMinFilter = 0;
-		m_nMagFilter = 0;
-		m_nMipFilter = 0;
-		m_nAnisotropy = 0;
-		m_nAddressU = 0;
-		m_nAddressV = 0;
-		m_nAddressW = 0;
-		m_dwBorderColor = 0;
-		padding = 0;
-		m_bSRGBLookup = false;
-		m_bActive = false;
-		m_bComparison = false;
-		m_pDeviceState = NULL;
-		m_bPAD = 0;
-	}
-	STexState(int nFilter, bool bClamp)
-	{
-		m_pDeviceState = NULL;
-		int nAddress = bClamp ? TADDR_CLAMP : TADDR_WRAP;
-		SetFilterMode(nFilter);
-		SetClampMode(nAddress, nAddress, nAddress);
-		SetBorderColor(0);
-		m_bSRGBLookup = false;
-		m_bActive = false;
-		m_bComparison = false;
-		padding = 0;
-		m_bPAD = 0;
-	}
-	STexState(int nFilter, int nAddressU, int nAddressV, int nAddressW, unsigned int borderColor)
-	{
-		m_pDeviceState = NULL;
-		SetFilterMode(nFilter);
-		SetClampMode(nAddressU, nAddressV, nAddressW);
-		SetBorderColor(borderColor);
-		m_bSRGBLookup = false;
-		m_bActive = false;
-		m_bComparison = false;
-		padding = 0;
-		m_bPAD = 0;
-	}
-#ifdef _RENDERER
-	~STexState();
-	STexState(const STexState& src);
-#else
-	~STexState(){}
-	STexState(const STexState& src)
-	{
-		memcpy(this, &src, sizeof(STexState));
-	}
-#endif
-	STexState& operator=(const STexState& src)
-	{
-		this->~STexState();
-		new(this)STexState(src);
-		return *this;
-	}
-	inline friend bool operator==(const STexState& m1, const STexState& m2)
-	{
-		if (*(uint64*)&m1 == *(uint64*)&m2 && m1.m_dwBorderColor == m2.m_dwBorderColor &&
-		    m1.m_bActive == m2.m_bActive && m1.m_bComparison == m2.m_bComparison && m1.m_bSRGBLookup == m2.m_bSRGBLookup)
-			return true;
-		return false;
-	}
-	void Release()
-	{
-		delete this;
-	}
-
-	bool SetFilterMode(int nFilter);
-	bool SetClampMode(int nAddressU, int nAddressV, int nAddressW);
-	void SetBorderColor(DWORD dwColor);
-	void SetComparisonFilter(bool bEnable);
-	void PostCreate();
-};
-
 struct IRenderTarget
 {
 	virtual ~IRenderTarget(){}
@@ -1064,13 +936,14 @@ struct STexSamplerFX
 		IRenderTarget*         m_pITarget;
 	};
 
-	int16  m_nTexState;
-	byte   m_eTexType; //!< ETEX_Type e.g. eTT_2D or eTT_Cube.
-	byte   m_nSlotId;  //!< EFTT_ index if it references one of the material texture slots, EFTT_MAX otherwise.
-	uint32 m_nTexFlags;
+	SamplerStateHandle m_nTexState;
+	byte          m_eTexType; //!< ETEX_Type e.g. eTT_2D or eTT_Cube.
+	byte          m_nSlotId;  //!< EFTT_ index if it references one of the material texture slots, EFTT_MAX otherwise.
+	uint32        m_nTexFlags;
+
 	STexSamplerFX()
 	{
-		m_nTexState = -1;
+		m_nTexState = SamplerStateHandle::Unspecified;
 		m_eTexType = eTT_2D;
 		m_nSlotId = EFTT_MAX;
 		m_nTexFlags = 0;
@@ -1157,7 +1030,7 @@ struct STexSamplerRT
 	IDynTextureSource* m_pDynTexSource;
 
 	uint32             m_nTexFlags;
-	int16              m_nTexState;
+	SamplerStateHandle m_nTexState;
 
 	uint8              m_eTexType; //!< ETEX_Type e.g. eTT_2D or eTT_Cube.
 	int8               m_nSamplerSlot;
@@ -1166,7 +1039,7 @@ struct STexSamplerRT
 
 	STexSamplerRT()
 	{
-		m_nTexState = -1;
+		m_nTexState = SamplerStateHandle::Unspecified;
 		m_pTex = NULL;
 		m_eTexType = eTT_2D;
 		m_nTexFlags = 0;
@@ -1201,7 +1074,7 @@ struct STexSamplerRT
 	}
 
 	uint32 GetTexFlags() const { return m_nTexFlags; }
-	void   Update();
+	bool   Update();
 	void   PostLoad();
 	NO_INLINE STexSamplerRT(const STexSamplerRT& src)
 	{
@@ -1732,7 +1605,7 @@ typedef _smart_ptr<SInputShaderResources> SInputShaderResourcesPtr;
 #define SHGD_HW_GLES3             0x20000
 #define SHGD_USER_ENABLED         0x40000
 // 0x80000
-// 0x100000
+#define SHGD_HW_VULKAN             0x100000
 #define SHGD_HW_DX10               0x200000
 #define SHGD_HW_DX11               0x400000
 #define SHGD_HW_GL4                0x800000
@@ -1967,9 +1840,7 @@ enum ERenderListID
 	EFSLIST_WATER_VOLUMES,           //!< After decals.
 	EFSLIST_TRANSP,                  //!< Sorted by distance under-water render items.
 	EFSLIST_WATER,                   //!< Water-ocean render items.
-	EFSLIST_HDRPOSTPROCESS,          //!< Hdr post-processing screen effects.
 	EFSLIST_AFTER_HDRPOSTPROCESS,    //!< After hdr post-processing screen effects.
-	EFSLIST_POSTPROCESS,             //!< Post-processing screen effects.
 	EFSLIST_AFTER_POSTPROCESS,       //!< After post-processing screen effects.
 	EFSLIST_SHADOW_PASS,             //!< Shadow mask generation (usually from from shadow maps).
 	EFSLIST_DEFERRED_PREPROCESS,     //!< Pre-process before deferred passes.
@@ -1982,6 +1853,10 @@ enum ERenderListID
 	EFSLIST_FOG_VOLUME,              //!< Fog density injection passes.
 	EFSLIST_NEAREST_OBJECTS,         //!< Nearest objects.
 	EFSLIST_FORWARD_OPAQUE,          //!< Forward opaque pass objects.
+	EFSLIST_FORWARD_OPAQUE_NEAREST,  //!< Nearest forward opaque pass objects.
+	EFSLIST_CUSTOM,                  //!< Custom scene pass.
+	EFSLIST_HIGHLIGHT,               //!< Candidate for selection objects
+	EFSLIST_DEBUG_HELPER,            //!< Debug helper render items.
 
 	EFSLIST_NUM
 };
@@ -1998,8 +1873,6 @@ enum ERenderListID
 #define  FSPR_GENSPRITES     (1 << SPRID_GENSPRITES)
 #define  SPRID_CUSTOMTEXTURE 30
 #define  FSPR_CUSTOMTEXTURE  (1 << SPRID_CUSTOMTEXTURE)
-#define  SPRID_GENCLOUDS     31
-#define  FSPR_GENCLOUDS      (1 << SPRID_GENCLOUDS)
 
 #define  FSPR_MASK           0xfff00000
 #define  FSPR_MAX            (1 << 31)
@@ -2050,7 +1923,6 @@ enum ERenderListID
 // Additional Different useful flags
 
 #define EF2_PREPR_GENSPRITES     0x1
-#define EF2_PREPR_GENCLOUDS      0x2
 #define EF2_PREPR_SCANWATER      0x4
 #define EF2_NOCASTSHADOWS        0x8
 #define EF2_NODRAW               0x10
@@ -2068,7 +1940,7 @@ enum ERenderListID
 #define EF2_FORCE_ZPASS          0x10000
 #define EF2_FORCE_DRAWLAST       0x20000
 #define EF2_FORCE_DRAWAFTERWATER 0x40000
-// free 0x80000
+#define EF2_BILLBOARD            0x80000
 #define EF2_DEPTH_FIXUP          0x100000
 #define EF2_SINGLELIGHTPASS      0x200000
 #define EF2_FORCE_DRAWFIRST      0x400000
@@ -2099,7 +1971,7 @@ public:
 	virtual void                       SetFlags2(int Flags) = 0;
 	virtual void                       ClearFlags2(int Flags) = 0;
 	virtual bool                       Reload(int nFlags, const char* szShaderName) = 0;
-	virtual TArray<CRendElementBase*>* GetREs(int nTech) = 0;
+	virtual TArray<CRenderElement*>*     GetREs(int nTech) = 0;
 	virtual DynArrayRef<SShaderParam>& GetPublicParams() = 0;
 	virtual void                       CopyPublicParamsTo(SInputShaderResources& copyToResource) = 0;
 	virtual int                        GetTexId() = 0;
@@ -2111,7 +1983,7 @@ public:
 	virtual uint64                     GetGenerationMask() = 0;
 	virtual SShaderGen*                GetGenerationParams() = 0;
 	virtual int                        GetTechniqueID(int nTechnique, int nRegisteredTechnique) = 0;
-	virtual EVertexFormat              GetVertexFormat(void) = 0;
+	virtual InputLayoutHandle          GetVertexFormat(void) = 0;
 
 	virtual EShaderType                GetShaderType() = 0;
 	virtual uint32                     GetVertexModificator() = 0;
@@ -2262,8 +2134,8 @@ enum eDynamicLightFlags
 	DLF_CASTSHADOW_MAPS         = BIT(5),
 	DLF_POINT                   = BIT(6),
 	DLF_PROJECT                 = BIT(7),
-	DLF_LIGHT_BEAM              = BIT(8),
-	DLF_REFLECTIVE_SHADOWMAP    = BIT(9),
+	// UNUSED                   = BIT(8),
+	//	UNUSED										= BIT(9),
 	DLF_IGNORES_VISAREAS        = BIT(10),
 	DLF_DEFERRED_CUBEMAPS       = BIT(11),
 	DLF_HAS_CLIP_VOLUME         = BIT(12),
@@ -2278,7 +2150,7 @@ enum eDynamicLightFlags
 	DLF_AMBIENT                 = BIT(21),   //!< Ambient light (has name indicates, used for replacing ambient).
 	DLF_INDOOR_ONLY             = BIT(22),   //!< Do not affect height map.
 	DLF_VOLUMETRIC_FOG          = BIT(23),   //!< Affects volumetric fog.
-	DLF_ALLOW_LPV               = BIT(24),   //!< Add only to  Light Propagation Volume if it's possible.
+	//	UNUSED										= BIT(24),   //!< Add only to  Light Propagation Volume if it's possible.
 	DLF_ATTACH_TO_SUN           = BIT(25),   //!< Add only to  Light Propagation Volume if it's possible.
 	DLF_TRACKVIEW_TIMESCRUBBING = BIT(26),   //!< Add only to  Light Propagation Volume if it's possible.
 	DLF_VOLUMETRIC_FOG_ONLY     = BIT(27),   //!< Affects only volumetric fog.
@@ -2359,6 +2231,8 @@ struct SRenderLight
 		m_LensOpticsFrustumAngle = 255;
 		m_nAttenFalloffMax = 255;
 		m_fAttenuationBulbSize = 0.1f;
+		m_ProbeExtents = Vec3(10);
+		m_nSortPriority = 0;
 	}
 
 	const Vec3& GetPosition() const
@@ -2506,8 +2380,7 @@ struct SRenderLight
 	float                m_fShadowUpdateMinRadius;
 	uint16               m_nShadowMinResolution;
 	uint16               m_nShadowUpdateRatio;
-	uint8                m_ShadowChanMask  : 4;
-	uint8                m_ShadowMaskIndex : 4;
+	uint8                m_ShadowMaskIndex;
 
 	// Projector.
 	ITexture*          m_pLightAttenMap;     //!< User can specify custom light attenuation gradient.
@@ -2568,9 +2441,9 @@ public:
 	{
 		for (int i = 0; i < 3; ++i)
 		{
-			if (m_Color[i] < 0 || m_Color[i] > 100.0f || _isnan(m_Color[i]))
+			if (m_Color[i] < 0 || m_Color[i] > 1000.0f || _isnan(m_Color[i]))
 				return false;
-			if (m_BaseColor[i] < 0 || m_BaseColor[i] > 100.0f || _isnan(m_BaseColor[i]))
+			if (m_BaseColor[i] < 0 || m_BaseColor[i] > 1000.0f || _isnan(m_BaseColor[i]))
 				return false;
 		}
 		return true;
@@ -2627,7 +2500,6 @@ public:
 		m_sHeight = dl.m_sHeight;
 		m_nLightStyle = dl.m_nLightStyle;
 		m_nLightPhase = dl.m_nLightPhase;
-		m_ShadowChanMask = dl.m_ShadowChanMask;
 		m_pLightAnim = dl.m_pLightAnim;
 		m_fAreaWidth = dl.m_fAreaWidth;
 		m_fAreaHeight = dl.m_fAreaHeight;
@@ -2755,11 +2627,71 @@ struct SDeferredClipVolume
 	} blendInfo[MaxBlendInfoCount];
 };
 
+struct SFogVolumeInfo
+{
+	Vec3     m_center;
+	uint32   m_viewerInsideVolume : 1;
+	uint32   m_affectsThisAreaOnly : 1;
+	uint32   m_stencilRef : 8;
+	uint32   m_volumeType : 1;
+	uint32   m_reserved : 21;
+	AABB     m_localAABB;
+	Matrix34 m_matWSInv;
+	float    m_globalDensity;
+	float    m_densityOffset;
+	Vec2     m_softEdgesLerp;
+	ColorF   m_fogColor;
+	Vec3     m_heightFallOffDirScaled;
+	Vec3     m_heightFallOffBasePoint;
+	Vec3     m_eyePosInOS;
+	Vec3     m_rampParams;
+	Vec3     m_windOffset;
+	float    m_noiseScale;
+	Vec3     m_noiseFreq;
+	float    m_noiseOffset;
+	float    m_noiseElapsedTime;
+	Vec3     m_emission;
+};
+
+struct SCloudBlocker
+{
+	Vec3  position;
+	Vec3  param;
+	int32 flags;
+};
+
+struct SWaterRippleInfo
+{
+	static const int32 MaxWaterRipplesInScene = 128;
+	static const int32 WaveSimulationGridSize = 50;
+
+	Vec3  position;
+	float scale;
+	float strength;
+
+	SWaterRippleInfo(const Vec3& vPosition, float fScale, float fStrength)
+		: position(vPosition)
+		, scale(fScale)
+		, strength(fStrength)
+	{}
+
+	SWaterRippleInfo(const SWaterRippleInfo& waterRipple)
+		: position(waterRipple.position)
+		, scale(waterRipple.scale)
+		, strength(waterRipple.strength)
+	{}
+
+	void GetMemoryUsage(ICrySizer* pSizer) const {}
+};
+
 //! Runtime shader flags for HW skinning.
 enum EHWSkinningRuntimeFlags
 {
-	eHWS_MotionBlured  = 0x04,
-	eHWS_SkinnedLinear = 0x08,
+	eHWS_MotionBlured             = BIT(2),
+	eHWS_SkinnedLinear            = BIT(3),
+	eHWS_DC_deformation_Skinning  = BIT(4),
+	eHWS_DC_Deformation_PreMorphs = BIT(5),
+	eHWS_DC_Deformation_Tangents  = BIT(6)
 };
 
 //! Shader graph support.

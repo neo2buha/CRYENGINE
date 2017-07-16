@@ -9,7 +9,6 @@
 #include "StdAfx.h"
 #include "Statoscope.h"
 #include "FrameProfileSystem.h"
-#include <CryGame/IGame.h>
 #include <CryGame/IGameFramework.h>
 #include <CryRenderer/IRenderer.h>
 #include <CryAnimation/ICryAnimation.h>
@@ -18,6 +17,7 @@
 #include "ThreadProfiler.h"
 #include <CryThreading/IThreadManager.h>
 #include <CrySystem/Scaleform/IScaleformHelper.h>
+#include <CryParticleSystem/IParticlesPfx2.h>
 
 #include "StatoscopeStreamingIntervalGroup.h"
 #include "StatoscopeTextureStreamingIntervalGroup.h"
@@ -953,6 +953,39 @@ struct SParticlesDG : public IStatoscopeDataGroup
 	}
 };
 
+struct SWavicleDG : public IStatoscopeDataGroup
+{
+	virtual SDescription GetDescription() const
+	{
+		return SDescription(
+			'P', "Wavicle", "['/Wavicle/'"
+			"(int emittersAlive)(int emittersUpdated)(int emittersRendererd)"
+			"(int componentAlive)(int componentUpdated)(int componentRendered)"
+			"(int particlesAllocated)(int particlesAlive)(int particlesUpdated)(int particlesRendered)(int particlesClipped)"
+			"]");
+	}
+
+	virtual void Write(IStatoscopeFrameRecord& fr)
+	{
+		using namespace pfx2;
+
+		SParticleStats stats;
+		GetIParticleSystem()->GetStats(stats);
+		
+		fr.AddValue(int(stats.m_emittersAlive));
+		fr.AddValue(int(stats.m_emittersUpdated));
+		fr.AddValue(int(stats.m_emittersRendererd));
+		fr.AddValue(int(stats.m_runtimesAlive));
+		fr.AddValue(int(stats.m_runtimesUpdated));
+		fr.AddValue(int(stats.m_runtimesRendered));
+		fr.AddValue(int(stats.m_particlesAllocated));
+		fr.AddValue(int(stats.m_particlesAlive));
+		fr.AddValue(int(stats.m_particlesUpdated));
+		fr.AddValue(int(stats.m_particlesRendered));
+		fr.AddValue(int(stats.m_particlesClipped));
+	}
+};
+
 struct SLocationDG : public IStatoscopeDataGroup
 {
 	virtual SDescription GetDescription() const
@@ -1132,7 +1165,7 @@ struct SPerCGFGPUProfilersDG : public IStatoscopeDataGroup
 				drawProfilerCount++;
 		}
 
-		//Flash! aaah aaaaaaaahhh!
+		//Flash!
 		{
 			unsigned int numDPs = 0;
 			unsigned int numTris = 0;
@@ -1758,7 +1791,7 @@ CStatoscope::CStatoscope()
 	m_pStatoscopeScreenshotCapturePeriodCVar = REGISTER_FLOAT("e_StatoscopeScreenshotCapturePeriod", -1.0f, VF_NULL, "How many seconds between Statoscope screenshot captures (-1 to disable).");
 	m_pStatoscopeFilenameUseBuildInfoCVar = REGISTER_INT("e_StatoscopeFilenameUseBuildInfo", 1, VF_NULL, "Set to include the platform and build number in the log filename.");
 	m_pStatoscopeFilenameUseMapCVar = REGISTER_INT("e_StatoscopeFilenameUseMap", 0, VF_NULL, "Set to include the map name in the log filename.");
-	m_pStatoscopeFilenameUseTagCvar = REGISTER_STRING("e_StatoscopeFilenameUseTag", "", VF_NULL, "Set to include tag in the log file name.");
+	m_pStatoscopeFilenameUseTagCvar = REGISTER_STRING_CB("e_StatoscopeFilenameUseTag", "", VF_NULL, "Set to include tag in the log file name.", OnTagCVarChange);
 	m_pStatoscopeFilenameUseTimeCVar = REGISTER_INT("e_StatoscopeFilenameUseTime", 0, VF_NULL, "Set to include the time and date in the log filename.");
 	m_pStatoscopeFilenameUseDatagroupsCVar = REGISTER_INT("e_StatoscopeFilenameUseDatagroups", 0, VF_NULL, "Set to include the datagroup and date in the log filename.");
 	m_pStatoscopeMinFuncLengthMsCVar = REGISTER_FLOAT("e_StatoscopeMinFuncLengthMs", 0.01f, VF_NULL, "Min func duration (ms) to be logged by statoscope.");
@@ -1773,7 +1806,7 @@ CStatoscope::CStatoscope()
 
 	REGISTER_COMMAND("e_StatoscopeAddUserMarker", &ConsoleAddUserMarker, 0, "Add a user marker to the perf stat logging for this frame");
 
-	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this);
+	gEnv->pSystem->GetISystemEventDispatcher()->RegisterListener(this, "CStatoscope");
 
 	CryCreateDirectory("%USER%/statoscope");
 
@@ -1890,7 +1923,6 @@ void CStatoscope::UnregisterDataGroup(IStatoscopeDataGroup* pDG)
 void CStatoscope::Tick()
 {
 	FUNCTION_PROFILER(gEnv->pSystem, PROFILE_SYSTEM);
-	ScopedSwitchToGlobalHeap useGlobalHeap;
 
 	if (m_pStatoscopeEnabledCVar->GetIVal() != 0)
 	{
@@ -1919,7 +1951,10 @@ void CStatoscope::Tick()
 	else if (IsRunning())
 	{
 		CryLogAlways("Flushing Statoscope log\n");
-		m_pDataWriter->Close();
+		if (m_pDataWriter)
+		{
+			m_pDataWriter->Close();
+		}
 
 		for (IntervalGroupVec::const_iterator it = m_intervalGroups.begin(), itEnd = m_intervalGroups.end(); it != itEnd; ++it)
 			(*it)->Disable();
@@ -1940,13 +1975,11 @@ void CStatoscope::SetCurrentProfilerRecords(const std::vector<CFrameProfiler*>* 
 {
 	if (m_pFrameProfilers)
 	{
-		ScopedSwitchToGlobalHeap useGlobalHeap;
-
 		// we want to avoid reallocation of m_perfStatDumpProfilers
 		// even if numProfilers is quite large (in the thousands), it'll only be tens of KB
 		uint32 numProfilers = profilers->size();
-		m_perfStatDumpProfilers.reserve(MAX(numProfilers, m_perfStatDumpProfilers.size()));
-		m_perfStatDumpProfilers.resize(0);
+		m_perfStatDumpProfilers.clear();
+		m_perfStatDumpProfilers.reserve(std::max((size_t)numProfilers, m_perfStatDumpProfilers.size()));		
 
 		float minFuncTime = m_pStatoscopeMinFuncLengthMsCVar->GetFVal();
 
@@ -1982,7 +2015,7 @@ void CStatoscope::SetCurrentProfilerRecords(const std::vector<CFrameProfiler*>* 
 		{
 			uint32 maxNumFuncs = (uint32)m_pStatoscopeMaxNumFuncsPerFrameCVar->GetIVal();
 			// limit the number being recorded
-			m_perfStatDumpProfilers.resize(MIN(m_perfStatDumpProfilers.size(), maxNumFuncs));
+			m_perfStatDumpProfilers.resize(std::min(m_perfStatDumpProfilers.size(), (size_t)maxNumFuncs));
 		}
 
 		uint32 numDumpProfilers = m_perfStatDumpProfilers.size();
@@ -2387,9 +2420,9 @@ void CStatoscope::SetLogFilename()
 		//If we don't have a last map loaded, try to look up the current one now
 		if (m_currentMap.empty())
 		{
-			if (gEnv->pGame)
+			if (gEnv->pGameFramework)
 			{
-				mapName = gEnv->pGame->GetIGameFramework()->GetLevelName();
+				mapName = gEnv->pGameFramework->GetLevelName();
 			}
 		}
 		//If we tracked the last map loaded then use it here
@@ -2491,8 +2524,6 @@ void CStatoscope::OutputLoadedModuleInformation(CDataWriter* pDataWriter)
 
 void CStatoscope::StoreCallstack(const char* tag, void** callstackAddresses, uint32 callstackLength)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	if (m_pCallstacks && m_pCallstacks->IsEnabled())
 	{
 		CryMT::vector<SCallstack>::AutoLock lock(m_pCallstacks->m_callstacks.get_lock());
@@ -2509,7 +2540,6 @@ void CStatoscope::AddUserMarker(const char* path, const char* name)
 
 	if (m_pUserMarkers && m_pUserMarkers->IsEnabled())
 	{
-		ScopedSwitchToGlobalHeap useGlobalHeap;
 		m_pUserMarkers->m_userMarkers.push_back(SUserMarker(path, name));
 	}
 }
@@ -2527,7 +2557,6 @@ void CStatoscope::AddUserMarkerFmt(const char* path, const char* fmt, ...)
 		cry_vsprintf(msg, fmt, args);
 		va_end(args);
 
-		ScopedSwitchToGlobalHeap useGlobalHeap;
 		m_pUserMarkers->m_userMarkers.push_back(SUserMarker(path, msg));
 	}
 }
@@ -2586,6 +2615,19 @@ void CStatoscope::OnLogDestinationCVarChange(ICVar* pVar)
 	pStatoscope->m_pServer->CloseConnection();
 }
 
+void CStatoscope::OnTagCVarChange(ICVar* pVar)
+{
+	CStatoscope* pStatoscope = (CStatoscope*)gEnv->pStatoscope;
+	if (pStatoscope->m_pDataWriter)
+	{
+		pStatoscope->m_pDataWriter->Close();
+	}
+	SAFE_DELETE(pStatoscope->m_pDataWriter);
+	pStatoscope->m_pServer->CloseConnection();
+
+	pStatoscope->SetLogFilename();
+}
+
 bool CStatoscope::IsLoggingForTelemetry()
 {
 	return m_pStatoscopeLogDestinationCVar->GetIVal() == eLD_Telemetry;
@@ -2606,9 +2648,9 @@ void CStatoscope::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lp
 
 				const char* mapName = NULL;
 
-				if (gEnv->pGame && gEnv->pGame->GetIGameFramework())
+				if (gEnv->pGameFramework)
 				{
-					mapName = gEnv->pGame->GetIGameFramework()->GetLevelName();
+					mapName = gEnv->pGameFramework->GetLevelName();
 				}
 
 				if (!mapName)
@@ -2617,7 +2659,6 @@ void CStatoscope::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lp
 				}
 				else
 				{
-					ScopedSwitchToGlobalHeap globalHeap;
 					m_currentMap = mapName;
 				}
 
@@ -2762,6 +2803,7 @@ void CStatoscope::RegisterBuiltInDataGroups()
 	RegisterDataGroup(new SCPUTimesDG());
 	RegisterDataGroup(new SVertexCostDG());
 	RegisterDataGroup(new SParticlesDG);
+	RegisterDataGroup(new SWavicleDG);
 	RegisterDataGroup(new SLocationDG());
 	RegisterDataGroup(new SPerCGFGPUProfilersDG());
 	RegisterDataGroup(m_pParticleProfilers);
@@ -3168,7 +3210,7 @@ bool CFileDataWriter::Open()
 {
 	if (!m_pFile)
 	{
-		CDebugAllowFileAccess afa;
+		SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
 
 		const char* modeStr = m_bAppend ? "ab" : "wb";
 		m_bAppend = true;

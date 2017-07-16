@@ -42,8 +42,6 @@ void GSysAllocCryMem::GetInfo(Info* i) const
 
 void* GSysAllocCryMem::Alloc(UPInt size, UPInt align)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	const size_t granularity = m_pHeap->GetGranularity();
 	size = (size + granularity - 1) & ~(granularity - 1);
 
@@ -121,9 +119,9 @@ void GSysAllocCryMem::GetMemoryUsage(ICrySizer* pSizer) const
 	pSizer->AddObject(this, sizeof(*this) + m_stats.Allocated);
 }
 
-GSysAllocBase* GSysAllocCryMem::GetSysAllocImpl()
+GSysAllocBase* GSysAllocCryMem::GetSysAllocImpl() const
 {
-	return this;
+	return (GSysAllocBase*)this;
 }
 
 GFxMemoryArenaWrapper& GSysAllocCryMem::GetMemoryArenas()
@@ -167,8 +165,6 @@ GSysAllocStaticCryMem::GSysAllocStaticCryMem(size_t poolSize)
 	, m_size(poolSize)
 	, m_arenas()
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	m_pMem = malloc(m_size);
 	if (m_pMem)
 	{
@@ -205,7 +201,7 @@ void GSysAllocStaticCryMem::GetMemoryUsage(ICrySizer* pSizer) const
 	pSizer->AddObject(m_pMem, m_size);
 }
 
-GSysAllocBase* GSysAllocStaticCryMem::GetSysAllocImpl()
+GSysAllocBase* GSysAllocStaticCryMem::GetSysAllocImpl() const
 {
 	assert(m_pStaticAlloc);
 	return m_pStaticAlloc;

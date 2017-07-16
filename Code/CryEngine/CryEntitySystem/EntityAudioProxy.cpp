@@ -2,82 +2,76 @@
 
 #include "stdafx.h"
 #include "EntityAudioProxy.h"
-#include <CryAudio/IAudioSystem.h>
-#include <CryAnimation/ICryAnimation.h>
 #include "Entity.h"
+#include <CryAudio/IAudioSystem.h>
+#include <CryAudio/IListener.h>
 
-CEntityAudioProxy::TAudioProxyPair CEntityAudioProxy::s_nullAudioProxyPair(INVALID_AUDIO_PROXY_ID, static_cast<IAudioProxy*>(nullptr));
-CAudioObjectTransformation CEntityAudioProxy::s_audioListenerLastTransformation;
+CRYREGISTER_CLASS(CEntityComponentAudio);
+
+CEntityComponentAudio::AudioAuxObjectPair CEntityComponentAudio::s_nullAudioProxyPair(CryAudio::InvalidAuxObjectId, static_cast<CryAudio::IObject*>(nullptr));
+CryAudio::CObjectTransformation CEntityComponentAudio::s_audioListenerLastTransformation;
 
 //////////////////////////////////////////////////////////////////////////
-CEntityAudioProxy::CEntityAudioProxy()
-	: m_audioProxyIDCounter(INVALID_AUDIO_PROXY_ID)
-	, m_audioEnvironmentId(INVALID_AUDIO_ENVIRONMENT_ID)
-	, m_pEntity(nullptr)
-	, m_flags(eEAPF_CAN_MOVE_WITH_ENTITY)
+CEntityComponentAudio::CEntityComponentAudio()
+	: m_audioAuxObjectIdCounter(CryAudio::InvalidAuxObjectId)
+	, m_audioEnvironmentId(CryAudio::InvalidEnvironmentId)
+	, m_flags(eEntityAudioProxyFlags_CanMoveWithEntity)
+	, m_pIListener(nullptr)
 	, m_fadeDistance(0.0f)
 	, m_environmentFadeDistance(0.0f)
 {
+	m_componentFlags.Add(EEntityComponentFlags::NoSave);
 }
 
 //////////////////////////////////////////////////////////////////////////
-CEntityAudioProxy::~CEntityAudioProxy()
+CEntityComponentAudio::~CEntityComponentAudio()
 {
-	m_pEntity = nullptr;
 	std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SReleaseAudioProxy());
 	m_mapAuxAudioProxies.clear();
+
+	if (m_pIListener != nullptr)
+	{
+		gEnv->pAudioSystem->ReleaseListener(m_pIListener);
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::Initialize(SComponentInitializer const& init)
+void CEntityComponentAudio::Initialize()
 {
-	m_pEntity = static_cast<CEntity*>(init.m_pEntity);
 	assert(m_mapAuxAudioProxies.empty());
 
 	if ((m_pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
 	{
-		m_flags &= ~eEAPF_CAN_MOVE_WITH_ENTITY;
+		m_flags &= ~eEntityAudioProxyFlags_CanMoveWithEntity;
+		m_pIListener = gEnv->pAudioSystem->CreateListener();
+
+		Matrix34 const& tm = m_pEntity->GetWorldTM();
+		CRY_ASSERT_MESSAGE(tm.IsValid(), "Invalid Matrix34 during CEntityComponentAudio::Initialize");
+		Matrix34 transformation = tm;
+		transformation += CVar::audioListenerOffset;
+		s_audioListenerLastTransformation = transformation;
+		if (m_pIListener != nullptr)
+		{
+			m_pIListener->SetTransformation(s_audioListenerLastTransformation);
+		}
 	}
 
 	// Creating the default AudioProxy.
-	CreateAuxAudioProxy();
-	SetObstructionCalcType(eAudioOcclusionType_Ignore);
+	CreateAudioAuxObject();
 	OnMove();
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::Reload(IEntity* pEntity, SEntitySpawnParams& params)
+void CEntityComponentAudio::OnMove()
 {
-	// Currently we do not need to do anything here.
-	// Just make sure the EAP is properly initialized before this is called and that the parent entities match.
-#if defined(INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE)
-	if (pEntity == nullptr ||
-	    m_pEntity == nullptr ||
-	    pEntity != m_pEntity ||
-	    pEntity->GetId() != m_pEntity->GetId())
-	{
-		CryFatalError("<Audio> CEntityAudioProxy::Reload() while not being properly initialized yet!");
-	}
-#endif // INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::Release()
-{
-	delete this;
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnMove()
-{
-	CRY_ASSERT_MESSAGE(!(((m_flags & eEAPF_CAN_MOVE_WITH_ENTITY) > 0) && ((m_pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)), "An CEntityAudioProxy cannot have both flags (eEAPF_CAN_MOVE_WITH_ENTITY & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) set simultaneously!");
+	CRY_ASSERT_MESSAGE(!(((m_flags & eEntityAudioProxyFlags_CanMoveWithEntity) > 0) && ((m_pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)), "An CEntityAudioProxy cannot have both flags (eEAPF_CAN_MOVE_WITH_ENTITY & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) set simultaneously!");
 
 	Matrix34 const& tm = m_pEntity->GetWorldTM();
-	CRY_ASSERT_MESSAGE(tm.IsValid(), "Invalid Matrix34 during CEntityAudioProxy::OnMove");
+	CRY_ASSERT_MESSAGE(tm.IsValid(), "Invalid Matrix34 during CEntityComponentAudio::OnMove");
 
-	if ((m_flags & eEAPF_CAN_MOVE_WITH_ENTITY) > 0)
+	if ((m_flags & eEntityAudioProxyFlags_CanMoveWithEntity) > 0)
 	{
-		std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SRepositionAudioProxy(tm));
+		std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SRepositionAudioProxy(tm, CryAudio::SRequestUserData::GetEmptyObject()));
 	}
 	else if ((m_pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
 	{
@@ -87,16 +81,10 @@ void CEntityAudioProxy::OnMove()
 		if (!s_audioListenerLastTransformation.IsEquivalent(transformation, 0.01f))
 		{
 			s_audioListenerLastTransformation = transformation;
-
-			SAudioRequest request;
-			request.flags = eAudioRequestFlags_PriorityNormal;
-			request.pOwner = this;
-
-			SAudioListenerRequestData<eAudioListenerRequestType_SetTransformation> requestData(s_audioListenerLastTransformation);
-
-			request.pData = &requestData;
-
-			gEnv->pAudioSystem->PushRequest(request);
+			if (m_pIListener != nullptr)
+			{
+				m_pIListener->SetTransformation(s_audioListenerLastTransformation);
+			}
 
 			// As this is an audio listener add its entity to the AreaManager for raising audio relevant events.
 			gEnv->pEntitySystem->GetAreaManager()->MarkEntityForUpdate(m_pEntity->GetId());
@@ -105,79 +93,58 @@ void CEntityAudioProxy::OnMove()
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnListenerMoveInside(Vec3 const& listenerPos)
+void CEntityComponentAudio::OnListenerMoveInside(Vec3 const& listenerPos)
 {
 	m_pEntity->SetPos(listenerPos);
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnListenerExclusiveMoveInside(IEntity const* const __restrict pEntity, IEntity const* const __restrict pAreaHigh, IEntity const* const __restrict pAreaLow, float const fade)
+void CEntityComponentAudio::OnListenerExclusiveMoveInside(IEntity const* const __restrict pEntity, IEntity const* const __restrict pAreaHigh, IEntity const* const __restrict pAreaLow, float const fade)
 {
-	IEntityAreaProxy const* const __restrict pAreaProxyLow = static_cast<IEntityAreaProxy const* const __restrict>(pAreaLow->GetProxy(ENTITY_PROXY_AREA));
-	IEntityAreaProxy* const __restrict pAreaProxyHigh = static_cast<IEntityAreaProxy* const __restrict>(pAreaHigh->GetProxy(ENTITY_PROXY_AREA));
+	IEntityAreaComponent const* const __restrict pAreaProxyLow = static_cast<IEntityAreaComponent const* const __restrict>(pAreaLow->GetProxy(ENTITY_PROXY_AREA));
+	IEntityAreaComponent* const __restrict pAreaProxyHigh = static_cast<IEntityAreaComponent* const __restrict>(pAreaHigh->GetProxy(ENTITY_PROXY_AREA));
 
 	if (pAreaProxyLow != nullptr && pAreaProxyHigh != nullptr)
 	{
-		Vec3 OnHighHull3d(ZERO);
-		Vec3 const oPos(pEntity->GetWorldPos());
-		EntityId const nEntityID = pEntity->GetId();
-		bool const bInsideLow = pAreaProxyLow->CalcPointWithin(nEntityID, oPos);
+		Vec3 onHighHull3d(ZERO);
+		Vec3 const pos(pEntity->GetWorldPos());
+		EntityId const entityId = pEntity->GetId();
+		bool const bInsideLow = pAreaProxyLow->CalcPointWithin(entityId, pos);
 
 		if (bInsideLow)
 		{
-			pAreaProxyHigh->ClosestPointOnHullDistSq(nEntityID, oPos, OnHighHull3d);
-			m_pEntity->SetPos(OnHighHull3d);
+			pAreaProxyHigh->ClosestPointOnHullDistSq(entityId, pos, onHighHull3d);
+			m_pEntity->SetPos(onHighHull3d);
 		}
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnExclusiveMoveInside(IEntity const* const __restrict pEntity, IEntity const* const __restrict pEntityAreaHigh, IEntity const* const __restrict pEntityAreaLow, float const fade)
-{
-	SetEnvironmentAmountInternal(pEntity, fade);
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnListenerEnter(IEntity const* const pEntity)
+void CEntityComponentAudio::OnListenerEnter(IEntity const* const pEntity)
 {
 	m_pEntity->SetPos(pEntity->GetWorldPos());
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnEnter(IEntity const* const pIEntity)
-{
-	SetEnvironmentAmountInternal(pIEntity, 1.0f);
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnLeaveNear(IEntity const* const pIEntity)
-{
-	SetEnvironmentAmountInternal(pIEntity, 0.0f);
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnMoveNear(IEntity const* const pIEntity, float const amount)
-{
-	// Note: This can be called for several entities during a frame!
-	SetEnvironmentAmountInternal(pIEntity, amount);
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnAreaCrossing(IEntity const* const pIEntity)
-{
-	// pIEntity just crossed into or out of an area that this EAP is attached to.
-	// We reapply our environment to it if provided.
-	SetEnvironmentAmountInternal(pIEntity, 1.0f);
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::OnListenerMoveNear(Vec3 const& closestPointToArea)
+void CEntityComponentAudio::OnListenerMoveNear(Vec3 const& closestPointToArea)
 {
 	m_pEntity->SetPos(closestPointToArea);
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::ProcessEvent(SEntityEvent& event)
+uint64 CEntityComponentAudio::GetEventMask() const
+{
+	return
+	  BIT64(ENTITY_EVENT_XFORM) |
+	  BIT64(ENTITY_EVENT_ENTERAREA) |
+	  BIT64(ENTITY_EVENT_MOVENEARAREA) |
+	  BIT64(ENTITY_EVENT_ENTERNEARAREA) |
+	  BIT64(ENTITY_EVENT_MOVEINSIDEAREA) |
+	  BIT64(ENTITY_EVENT_SET_NAME);
+}
+
+//////////////////////////////////////////////////////////////////////////
+void CEntityComponentAudio::ProcessEvent(SEntityEvent& event)
 {
 	if (m_pEntity != nullptr)
 	{
@@ -185,9 +152,9 @@ void CEntityAudioProxy::ProcessEvent(SEntityEvent& event)
 		{
 		case ENTITY_EVENT_XFORM:
 			{
-				int const nFlags = (int)event.nParam[0];
+				int const flags = (int)event.nParam[0];
 
-				if ((nFlags & (ENTITY_XFORM_POS | ENTITY_XFORM_ROT)) > 0)
+				if ((flags & (ENTITY_XFORM_POS | ENTITY_XFORM_ROT)) > 0)
 				{
 					OnMove();
 				}
@@ -198,36 +165,12 @@ void CEntityAudioProxy::ProcessEvent(SEntityEvent& event)
 			{
 				if ((m_pEntity->GetFlags() & ENTITY_FLAG_VOLUME_SOUND) > 0)
 				{
-					EntityId const nEntityID = static_cast<EntityId>(event.nParam[0]); // Entering entity!
-					IEntity* const pEntity = gEnv->pEntitySystem->GetEntity(nEntityID);
+					EntityId const entityId = static_cast<EntityId>(event.nParam[0]); // Entering entity!
+					IEntity* const pIEntity = gEnv->pEntitySystem->GetEntity(entityId);
 
-					if ((pEntity != nullptr) && (pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
+					if ((pIEntity != nullptr) && (pIEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
 					{
-						OnListenerEnter(pEntity);
-					}
-					else if ((pEntity != nullptr) && (m_audioEnvironmentId != INVALID_AUDIO_ENVIRONMENT_ID))
-					{
-						OnEnter(pEntity);
-					}
-				}
-
-				break;
-			}
-		case ENTITY_EVENT_LEAVEAREA:
-			{
-
-				break;
-			}
-		case ENTITY_EVENT_CROSS_AREA:
-			{
-				if ((m_pEntity->GetFlags() & ENTITY_FLAG_VOLUME_SOUND) > 0)
-				{
-					EntityId const nEntityID = static_cast<EntityId>(event.nParam[0]); // Crossing entity!
-					IEntity* const pEntity = gEnv->pEntitySystem->GetEntity(nEntityID);
-
-					if (pEntity != nullptr)
-					{
-						OnAreaCrossing(pEntity);
+						OnListenerEnter(pIEntity);
 					}
 				}
 
@@ -238,69 +181,47 @@ void CEntityAudioProxy::ProcessEvent(SEntityEvent& event)
 			{
 				if ((m_pEntity->GetFlags() & ENTITY_FLAG_VOLUME_SOUND) > 0)
 				{
-					EntityId const nEntityID = static_cast<EntityId>(event.nParam[0]); // Near entering/moving entity!
-					IEntity* const pEntity = gEnv->pEntitySystem->GetEntity(nEntityID);
+					EntityId const entityId = static_cast<EntityId>(event.nParam[0]); // Near entering/moving entity!
+					IEntity* const pIEntity = gEnv->pEntitySystem->GetEntity(entityId);
 
-					if (pEntity != nullptr)
+					if (pIEntity != nullptr)
 					{
-						if ((pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
+						if ((pIEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
 						{
 							OnListenerMoveNear(event.vec);
 						}
-						else if (m_audioEnvironmentId != INVALID_AUDIO_ENVIRONMENT_ID)
-						{
-							OnMoveNear(pEntity, event.fParam[2]);
-						}
 					}
 				}
 
-				break;
-			}
-		case ENTITY_EVENT_LEAVENEARAREA:
-			{
-				if ((m_pEntity->GetFlags() & ENTITY_FLAG_VOLUME_SOUND) > 0)
-				{
-					EntityId const nEntityID = static_cast<EntityId>(event.nParam[0]); // Leaving entity!
-					IEntity* const pEntity = gEnv->pEntitySystem->GetEntity(nEntityID);
-
-					if ((pEntity != nullptr) && (pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) == 0)
-					{
-						OnLeaveNear(pEntity);
-					}
-				}
 				break;
 			}
 		case ENTITY_EVENT_MOVEINSIDEAREA:
 			{
 				if ((m_pEntity->GetFlags() & ENTITY_FLAG_VOLUME_SOUND) > 0)
 				{
-					EntityId const nEntityID = static_cast<EntityId>(event.nParam[0]); // Inside moving entity!
-					IEntity* const __restrict pEntity = gEnv->pEntitySystem->GetEntity(nEntityID);
+					EntityId const entityId = static_cast<EntityId>(event.nParam[0]); // Inside moving entity!
+					IEntity* const __restrict pIEntity = gEnv->pEntitySystem->GetEntity(entityId);
 
-					if (pEntity != nullptr)
+					if (pIEntity != nullptr)
 					{
-						EntityId const nAreaID1 = static_cast<EntityId>(event.nParam[2]); // AreaEntityID (low)
-						EntityId const nAreaID2 = static_cast<EntityId>(event.nParam[3]); // AreaEntityID (high)
+						EntityId const area1Id = static_cast<EntityId>(event.nParam[2]); // AreaEntityID (low)
+						EntityId const area2Id = static_cast<EntityId>(event.nParam[3]); // AreaEntityID (high)
 
-						IEntity* const __restrict pArea1 = gEnv->pEntitySystem->GetEntity(nAreaID1);
-						IEntity* const __restrict pArea2 = gEnv->pEntitySystem->GetEntity(nAreaID2);
+						IEntity* const __restrict pArea1 = gEnv->pEntitySystem->GetEntity(area1Id);
+						IEntity* const __restrict pArea2 = gEnv->pEntitySystem->GetEntity(area2Id);
 
 						if (pArea1 != nullptr)
 						{
 							if (pArea2 != nullptr)
 							{
-								if ((pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
+								if ((pIEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
 								{
-									OnListenerExclusiveMoveInside(pEntity, pArea2, pArea1, event.fParam[0]);
-								}
-								else
-								{
-									OnExclusiveMoveInside(pEntity, pArea2, pArea1, event.fParam[1]);
+									OnListenerExclusiveMoveInside(pIEntity, pArea2, pArea1, event.fParam[0]);
 								}
 							}
 							else
 							{
-								if ((pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
+								if ((pIEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) > 0)
 								{
 									OnListenerMoveInside(event.vec);
 								}
@@ -311,104 +232,90 @@ void CEntityAudioProxy::ProcessEvent(SEntityEvent& event)
 
 				break;
 			}
-		case ENTITY_EVENT_ANIM_EVENT:
+#if defined(INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE)
+		case ENTITY_EVENT_SET_NAME:
 			{
-				REINST("reintroduce anim event voice playing in EntityAudioProxy");
-				/*if (!IsSoundAnimEventsHandledExternally())
-				   {
-				   const AnimEventInstance* pAnimEvent = reinterpret_cast<const AnimEventInstance*>(event.nParam[0]);
-				   ICharacterInstance* pCharacter = reinterpret_cast<ICharacterInstance*>(event.nParam[1]);
-				   const char* eventName = (pAnimEvent ? pAnimEvent->m_EventName : 0);
-				   if (eventName && stricmp(eventName, "sound") == 0)
-				   {
-				    Vec3 offset(ZERO);
-				    if (pAnimEvent->m_BonePathName && pAnimEvent->m_BonePathName[0])
-				    {
-				      if (pCharacter)
-				      {
-				        IDefaultSkeleton& rIDefaultSkeleton = pCharacter->GetIDefaultSkeleton();
-				        int id = rIDefaultSkeleton.GetJointIDByName(pAnimEvent->m_BonePathName);
-				        if (id >= 0)
-				        {
-				          ISkeletonPose* pSkeletonPose = pCharacter->GetISkeletonPose();
-				          QuatT boneQuat(pSkeletonPose->GetAbsJointByID(id));
-				          offset = boneQuat.t;
-				        }
-				      }
-				    }
+				CryFixedStringT<CryAudio::MaxObjectNameLength> name(m_pEntity->GetName());
+				size_t numAuxObjects = 0;
 
-				    int flags = FLAG_SOUND_DEFAULT_3D;
-				    if (strchr(pAnimEvent->m_CustomParameter, ':') == nullptr)
-				      flags |= FLAG_SOUND_VOICE;
-				    PlaySound(pAnimEvent->m_CustomParameter, offset, FORWARD_DIRECTION, flags, 0, eSoundSemantic_Animation, 0, 0);
-				   }
-				   }*/
+				for (auto const& objectPair : m_mapAuxAudioProxies)
+				{
+					if (numAuxObjects > 0)
+					{
+						// First AuxAudioObject is not explicitly identified, it keeps the entity's name.
+						// All additional objects however are being explicitly identified.
+						name.Format("%s_aux_object_#%" PRISIZE_T, m_pEntity->GetName(), numAuxObjects + 1);
+					}
+
+					objectPair.second.pIObject->SetName(name.c_str());
+					++numAuxObjects;
+				}
 
 				break;
 			}
+#endif // INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE
 		}
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-bool CEntityAudioProxy::GetSignature(TSerialize signature)
-{
-	// EntityAudioProxy is not relevant to signature as it is always created again if needed
-	return true;
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::Serialize(TSerialize ser)
+void CEntityComponentAudio::GameSerialize(TSerialize ser)
 {
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::PlayFile(
-  char const* const _szFile,
-  AudioProxyId const _audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/,
-  SAudioCallBackInfo const& _callBackInfo /*= SAudioCallBackInfo::GetEmptyObject()*/)
+bool CEntityComponentAudio::PlayFile(CryAudio::SPlayFileInfo const& playbackInfo, CryAudio::AuxObjectId const audioAuxObjectId /* = DefaultAuxObjectId */, CryAudio::SRequestUserData const& userData /* = SAudioRequestUserData::GetEmptyObject() */)
 {
 	if (m_pEntity != nullptr)
 	{
-		if (_audioProxyId != INVALID_AUDIO_PROXY_ID)
+		if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 		{
-			TAudioProxyPair const& audioProxyPair = GetAuxAudioProxyPair(_audioProxyId);
+			AudioAuxObjectPair const& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-			if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+			if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 			{
-				(SPlayFile(_szFile, _callBackInfo))(audioProxyPair);
+				(SPlayFile(playbackInfo, userData))(audioObjectPair);
+				return true;
 			}
+#if defined(INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE)
+			else
+			{
+				gEnv->pSystem->Warning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_WARNING, VALIDATOR_FLAG_AUDIO, 0, "<Audio> Could not find AuxAudioProxy with id '%u' on entity '%s' to PlayFile '%s'", audioAuxObjectId, m_pEntity->GetEntityTextDescription().c_str(), playbackInfo.szFile);
+			}
+#endif  // INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE
 		}
 		else
 		{
-			std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SPlayFile(_szFile, _callBackInfo));
+			std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SPlayFile(playbackInfo, userData));
+			return !m_mapAuxAudioProxies.empty();
 		}
 	}
 	else
 	{
 		gEnv->pSystem->Warning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_WARNING, VALIDATOR_FLAG_AUDIO, 0, "<Audio> Trying to play an audio file on an EntityAudioProxy without a valid entity!");
 	}
+	return false;
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::StopFile(
-  char const* const _szFile,
-  AudioProxyId const _audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/)
+void CEntityComponentAudio::StopFile(
+  char const* const szFile,
+  CryAudio::AuxObjectId const audioAuxObjectId /*= DefaultAuxObjectId*/)
 {
 	if (m_pEntity != nullptr)
 	{
-		if (_audioProxyId != INVALID_AUDIO_PROXY_ID)
+		if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 		{
-			TAudioProxyPair const& audioProxyPair = GetAuxAudioProxyPair(_audioProxyId);
+			AudioAuxObjectPair const& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-			if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+			if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 			{
-				(SStopFile(_szFile))(audioProxyPair);
+				(SStopFile(szFile))(audioObjectPair);
 			}
 		}
 		else
 		{
-			std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SStopFile(_szFile));
+			std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SStopFile(szFile));
 		}
 	}
 	else
@@ -418,45 +325,38 @@ void CEntityAudioProxy::StopFile(
 }
 
 //////////////////////////////////////////////////////////////////////////
-bool CEntityAudioProxy::ExecuteTrigger(
-  AudioControlId const audioTriggerId,
-  AudioProxyId const audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/,
-  SAudioCallBackInfo const& callBackInfo /*= SAudioCallBackInfo::GetEmptyObject()*/)
+bool CEntityComponentAudio::ExecuteTrigger(
+  CryAudio::ControlId const audioTriggerId,
+  CryAudio::AuxObjectId const audioAuxObjectId /* = DefaultAuxObjectId */,
+  CryAudio::SRequestUserData const& userData /* = SAudioRequestUserData::GetEmptyObject() */)
 {
 	if (m_pEntity != nullptr)
 	{
-#if defined(INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE)
-		if (m_pEntity->GetWorldTM().GetTranslation() == Vec3Constants<float>::fVec3_Zero)
-		{
-			gEnv->pSystem->Warning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_WARNING, VALIDATOR_FLAG_AUDIO, 0, "<Audio> Trying to execute an audio trigger at (0,0,0) position in the entity %s. Entity may not be initialized correctly!", m_pEntity->GetEntityTextDescription());
-		}
-#endif // INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE
-
 		if ((m_pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_DISABLED) == 0)
 		{
-			if (audioProxyId != INVALID_AUDIO_PROXY_ID)
+			if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 			{
-				TAudioProxyPair const& audioProxyPair = GetAuxAudioProxyPair(audioProxyId);
+				AudioAuxObjectPair const& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-				if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+				if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 				{
-					(SRepositionAudioProxy(m_pEntity->GetWorldTM()))(audioProxyPair);
-					audioProxyPair.second.pIAudioProxy->ExecuteTrigger(audioTriggerId, callBackInfo);
+					(SRepositionAudioProxy(m_pEntity->GetWorldTM(), userData))(audioObjectPair);
+					audioObjectPair.second.pIObject->ExecuteTrigger(audioTriggerId, userData);
 					return true;
 				}
 #if defined(INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE)
 				else
 				{
-					gEnv->pSystem->Warning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_WARNING, VALIDATOR_FLAG_AUDIO, 0, "<Audio> Could not find AuxAudioProxy with id '%u' on entity '%s' to ExecuteTrigger '%s'", audioProxyId, m_pEntity->GetEntityTextDescription(), gEnv->pAudioSystem->GetAudioControlName(eAudioControlType_Trigger, audioTriggerId));
+					gEnv->pSystem->Warning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_WARNING, VALIDATOR_FLAG_AUDIO, 0, "<Audio> Could not find AuxAudioProxy with id '%u' on entity '%s' to ExecuteTrigger '%u'", audioAuxObjectId, m_pEntity->GetEntityTextDescription().c_str(), audioTriggerId);
 				}
 #endif  // INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE
 			}
 			else
 			{
-				for (TAuxAudioProxies::iterator it = m_mapAuxAudioProxies.begin(); it != m_mapAuxAudioProxies.end(); ++it)
+				for (AudioAuxObjects::iterator it = m_mapAuxAudioProxies.begin(); it != m_mapAuxAudioProxies.end(); ++it)
 				{
-					(SRepositionAudioProxy(m_pEntity->GetWorldTM()))(*it);
-					it->second.pIAudioProxy->ExecuteTrigger(audioTriggerId, callBackInfo);
+					(SRepositionAudioProxy(m_pEntity->GetWorldTM(), userData))(*it);
+					it->second.pIObject->ExecuteTrigger(audioTriggerId, userData);
 				}
 				return !m_mapAuxAudioProxies.empty();
 			}
@@ -471,33 +371,36 @@ bool CEntityAudioProxy::ExecuteTrigger(
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::StopTrigger(AudioControlId const audioTriggerId, AudioProxyId const audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/)
+void CEntityComponentAudio::StopTrigger(
+  CryAudio::ControlId const audioTriggerId,
+  CryAudio::AuxObjectId const audioAuxObjectId /* = DefaultAuxObjectId */,
+  CryAudio::SRequestUserData const& userData /* = SAudioRequestUserData::GetEmptyObject() */)
 {
-	if (audioProxyId != INVALID_AUDIO_PROXY_ID)
+	if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 	{
-		TAudioProxyPair const& audioProxyPair = GetAuxAudioProxyPair(audioProxyId);
+		AudioAuxObjectPair const& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-		if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+		if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 		{
-			(SStopTrigger(audioTriggerId))(audioProxyPair);
+			(SStopTrigger(audioTriggerId, userData))(audioObjectPair);
 		}
 	}
 	else
 	{
-		std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SStopTrigger(audioTriggerId));
+		std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SStopTrigger(audioTriggerId, userData));
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::SetSwitchState(AudioControlId const audioSwitchId, AudioSwitchStateId const audioStateId, AudioProxyId const audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/)
+void CEntityComponentAudio::SetSwitchState(CryAudio::ControlId const audioSwitchId, CryAudio::SwitchStateId const audioStateId, CryAudio::AuxObjectId const audioAuxObjectId /*= DEFAULT_AUDIO_PROXY_ID*/)
 {
-	if (audioProxyId != INVALID_AUDIO_PROXY_ID)
+	if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 	{
-		TAudioProxyPair const& audioProxyPair = GetAuxAudioProxyPair(audioProxyId);
+		AudioAuxObjectPair const& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-		if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+		if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 		{
-			(SSetSwitchState(audioSwitchId, audioStateId))(audioProxyPair);
+			(SSetSwitchState(audioSwitchId, audioStateId))(audioObjectPair);
 		}
 	}
 	else
@@ -507,33 +410,33 @@ void CEntityAudioProxy::SetSwitchState(AudioControlId const audioSwitchId, Audio
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::SetRtpcValue(AudioControlId const audioRtpcId, float const value, AudioProxyId const audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/)
+void CEntityComponentAudio::SetParameter(CryAudio::ControlId const parameterId, float const value, CryAudio::AuxObjectId const audioAuxObjectId /*= DefaultAuxObjectId*/)
 {
-	if (audioProxyId != INVALID_AUDIO_PROXY_ID)
+	if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 	{
-		TAudioProxyPair const& audioProxyPair = GetAuxAudioProxyPair(audioProxyId);
+		AudioAuxObjectPair const& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-		if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+		if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 		{
-			(SSetRtpcValue(audioRtpcId, value))(audioProxyPair);
+			(SSetParameter(parameterId, value))(audioObjectPair);
 		}
 	}
 	else
 	{
-		std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SSetRtpcValue(audioRtpcId, value));
+		std::for_each(m_mapAuxAudioProxies.begin(), m_mapAuxAudioProxies.end(), SSetParameter(parameterId, value));
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::SetObstructionCalcType(EAudioOcclusionType const occlusionType, AudioProxyId const audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/)
+void CEntityComponentAudio::SetObstructionCalcType(CryAudio::EOcclusionType const occlusionType, CryAudio::AuxObjectId const audioAuxObjectId /*= DEFAULT_AUDIO_PROXY_ID*/)
 {
-	if (audioProxyId != INVALID_AUDIO_PROXY_ID)
+	if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 	{
-		TAudioProxyPair const& audioProxyPair = GetAuxAudioProxyPair(audioProxyId);
+		AudioAuxObjectPair const& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-		if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+		if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 		{
-			(SSetOcclusionType(occlusionType))(audioProxyPair);
+			(SSetOcclusionType(occlusionType))(audioObjectPair);
 		}
 	}
 	else
@@ -543,15 +446,15 @@ void CEntityAudioProxy::SetObstructionCalcType(EAudioOcclusionType const occlusi
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::SetEnvironmentAmount(AudioEnvironmentId const audioEnvironmentId, float const amount, AudioProxyId const audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/)
+void CEntityComponentAudio::SetEnvironmentAmount(CryAudio::EnvironmentId const audioEnvironmentId, float const amount, CryAudio::AuxObjectId const audioAuxObjectId /*= DEFAULT_AUDIO_PROXY_ID*/)
 {
-	if (audioProxyId != INVALID_AUDIO_PROXY_ID)
+	if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 	{
-		TAudioProxyPair const& audioProxyPair = GetAuxAudioProxyPair(audioProxyId);
+		AudioAuxObjectPair const& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-		if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+		if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 		{
-			SSetEnvironmentAmount(audioEnvironmentId, amount)(audioProxyPair);
+			SSetEnvironmentAmount(audioEnvironmentId, amount)(audioObjectPair);
 		}
 	}
 	else
@@ -561,15 +464,15 @@ void CEntityAudioProxy::SetEnvironmentAmount(AudioEnvironmentId const audioEnvir
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::SetCurrentEnvironments(AudioProxyId const audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/)
+void CEntityComponentAudio::SetCurrentEnvironments(CryAudio::AuxObjectId const audioAuxObjectId /*= DEFAULT_AUDIO_PROXY_ID*/)
 {
-	if (audioProxyId != INVALID_AUDIO_PROXY_ID)
+	if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 	{
-		TAudioProxyPair const& audioProxyPair = GetAuxAudioProxyPair(audioProxyId);
+		AudioAuxObjectPair const& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-		if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+		if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 		{
-			SSetCurrentEnvironments(m_pEntity->GetId())(audioProxyPair);
+			SSetCurrentEnvironments(m_pEntity->GetId())(audioObjectPair);
 		}
 	}
 	else
@@ -579,50 +482,50 @@ void CEntityAudioProxy::SetCurrentEnvironments(AudioProxyId const audioProxyId /
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::AuxAudioProxiesMoveWithEntity(bool const bCanMoveWithEntity)
+void CEntityComponentAudio::AudioAuxObjectsMoveWithEntity(bool const bCanMoveWithEntity)
 {
 	if (bCanMoveWithEntity)
 	{
-		m_flags |= eEAPF_CAN_MOVE_WITH_ENTITY;
+		m_flags |= eEntityAudioProxyFlags_CanMoveWithEntity;
 	}
 	else
 	{
-		m_flags &= ~eEAPF_CAN_MOVE_WITH_ENTITY;
+		m_flags &= ~eEntityAudioProxyFlags_CanMoveWithEntity;
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::AddAsListenerToAuxAudioProxy(AudioProxyId const audioProxyId, void (* func)(SAudioRequestInfo const* const), EAudioRequestType requestType /*= eAudioRequestType_AudioAllRequests*/, AudioEnumFlagsType specificRequestMask /*= ALL_AUDIO_REQUEST_SPECIFIC_TYPE_FLAGS*/)
+void CEntityComponentAudio::AddAsListenerToAudioAuxObject(CryAudio::AuxObjectId const audioAuxObjectId, void (* func)(CryAudio::SRequestInfo const* const), CryAudio::ESystemEvents const eventMask)
 {
-	TAuxAudioProxies::const_iterator const iter(m_mapAuxAudioProxies.find(audioProxyId));
+	AudioAuxObjects::const_iterator const iter(m_mapAuxAudioProxies.find(audioAuxObjectId));
 
 	if (iter != m_mapAuxAudioProxies.end())
 	{
-		gEnv->pAudioSystem->AddRequestListener(func, iter->second.pIAudioProxy, requestType, specificRequestMask);
+		gEnv->pAudioSystem->AddRequestListener(func, iter->second.pIObject, eventMask);
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::RemoveAsListenerFromAuxAudioProxy(AudioProxyId const audioProxyId, void (* func)(SAudioRequestInfo const* const))
+void CEntityComponentAudio::RemoveAsListenerFromAudioAuxObject(CryAudio::AuxObjectId const audioAuxObjectId, void (* func)(CryAudio::SRequestInfo const* const))
 {
-	TAuxAudioProxies::const_iterator const iter(m_mapAuxAudioProxies.find(audioProxyId));
+	AudioAuxObjects::const_iterator const iter(m_mapAuxAudioProxies.find(audioAuxObjectId));
 
 	if (iter != m_mapAuxAudioProxies.end())
 	{
-		gEnv->pAudioSystem->RemoveRequestListener(func, iter->second.pIAudioProxy);
+		gEnv->pAudioSystem->RemoveRequestListener(func, iter->second.pIObject);
 	}
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::SetAuxAudioProxyOffset(Matrix34 const& offset, AudioProxyId const audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/)
+void CEntityComponentAudio::SetAudioAuxObjectOffset(Matrix34 const& offset, CryAudio::AuxObjectId const audioAuxObjectId /*= DEFAULT_AUDIO_PROXY_ID*/)
 {
-	if (audioProxyId != INVALID_AUDIO_PROXY_ID)
+	if (audioAuxObjectId != CryAudio::InvalidAuxObjectId)
 	{
-		TAudioProxyPair& audioProxyPair = GetAuxAudioProxyPair(audioProxyId);
+		AudioAuxObjectPair& audioObjectPair = GetAudioAuxObjectPair(audioAuxObjectId);
 
-		if (audioProxyPair.first != INVALID_AUDIO_PROXY_ID)
+		if (audioObjectPair.first != CryAudio::InvalidAuxObjectId)
 		{
-			SSetAuxAudioProxyOffset(offset, m_pEntity->GetWorldTM())(audioProxyPair);
+			SSetAuxAudioProxyOffset(offset, m_pEntity->GetWorldTM())(audioObjectPair);
 		}
 	}
 	else
@@ -632,9 +535,9 @@ void CEntityAudioProxy::SetAuxAudioProxyOffset(Matrix34 const& offset, AudioProx
 }
 
 //////////////////////////////////////////////////////////////////////////
-Matrix34 const& CEntityAudioProxy::GetAuxAudioProxyOffset(AudioProxyId const audioProxyId /*= DEFAULT_AUDIO_PROXY_ID*/)
+Matrix34 const& CEntityComponentAudio::GetAudioAuxObjectOffset(CryAudio::AuxObjectId const audioAuxObjectId /*= DEFAULT_AUDIO_PROXY_ID*/)
 {
-	TAuxAudioProxies::const_iterator const iter(m_mapAuxAudioProxies.find(audioProxyId));
+	AudioAuxObjects::const_iterator const iter(m_mapAuxAudioProxies.find(audioAuxObjectId));
 
 	if (iter != m_mapAuxAudioProxies.end())
 	{
@@ -646,77 +549,75 @@ Matrix34 const& CEntityAudioProxy::GetAuxAudioProxyOffset(AudioProxyId const aud
 }
 
 //////////////////////////////////////////////////////////////////////////
-AudioProxyId CEntityAudioProxy::CreateAuxAudioProxy()
+float CEntityComponentAudio::GetGreatestFadeDistance() const
 {
-	AudioProxyId nAudioProxyLocalID = INVALID_AUDIO_PROXY_ID;
-
-	if ((m_pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) == 0)
-	{
-		IAudioProxy* const pIAudioProxy = gEnv->pAudioSystem->GetFreeAudioProxy();
-
-		if (pIAudioProxy != nullptr)
-		{
-#if defined(INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE)
-			if (m_audioProxyIDCounter == std::numeric_limits<AudioProxyId>::max())
-			{
-				CryFatalError("<Audio> Exceeded numerical limits during CEntityAudioProxy::CreateAudioProxy!");
-			}
-			else if (m_pEntity == nullptr)
-			{
-				CryFatalError("<Audio> nullptr entity pointer during CEntityAudioProxy::CreateAudioProxy!");
-			}
-
-			CryFixedStringT<MAX_AUDIO_OBJECT_NAME_LENGTH> sFinalName(m_pEntity->GetName());
-			size_t const nNumAuxAudioProxies = m_mapAuxAudioProxies.size();
-
-			if (nNumAuxAudioProxies > 0)
-			{
-				// First AuxAudioProxy is not explicitly identified, it keeps the entity's name.
-				// All additionally AuxaudioProxies however are being explicitly identified.
-				sFinalName.Format("%s_auxaudioproxy_#%" PRISIZE_T, m_pEntity->GetName(), nNumAuxAudioProxies + 1);
-			}
-
-			pIAudioProxy->Initialize(sFinalName.c_str());
-#else
-			pIAudioProxy->Initialize(nullptr);
-#endif // INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE
-
-			pIAudioProxy->SetPosition(m_pEntity->GetWorldPos());
-			pIAudioProxy->SetOcclusionType(eAudioOcclusionType_Ignore);
-			pIAudioProxy->SetCurrentEnvironments(m_pEntity->GetId());
-
-			m_mapAuxAudioProxies.insert(TAudioProxyPair(++m_audioProxyIDCounter, SAudioProxyWrapper(pIAudioProxy)));
-			nAudioProxyLocalID = m_audioProxyIDCounter;
-		}
-	}
-
-	return nAudioProxyLocalID;
+	return std::max<float>(m_fadeDistance, m_environmentFadeDistance);
 }
 
 //////////////////////////////////////////////////////////////////////////
-bool CEntityAudioProxy::RemoveAuxAudioProxy(AudioProxyId const audioProxyId)
+CryAudio::AuxObjectId CEntityComponentAudio::CreateAudioAuxObject()
+{
+	CryAudio::AuxObjectId audioAuxObjectId = CryAudio::InvalidAuxObjectId;
+	char const* szName = nullptr;
+
+	if ((m_pEntity->GetFlagsExtended() & ENTITY_FLAG_EXTENDED_AUDIO_LISTENER) == 0)
+	{
+#if defined(INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE)
+		if (m_audioAuxObjectIdCounter == std::numeric_limits<CryAudio::AuxObjectId>::max())
+		{
+			CryFatalError("<Audio> Exceeded numerical limits during CEntityAudioProxy::CreateAudioProxy!");
+		}
+		else if (m_pEntity == nullptr)
+		{
+			CryFatalError("<Audio> nullptr entity pointer during CEntityAudioProxy::CreateAudioProxy!");
+		}
+
+		CryFixedStringT<CryAudio::MaxObjectNameLength> name(m_pEntity->GetName());
+		size_t const numAuxObjects = m_mapAuxAudioProxies.size();
+
+		if (numAuxObjects > 0)
+		{
+			// First AuxAudioObject is not explicitly identified, it keeps the entity's name.
+			// All additional objects however are being explicitly identified.
+			name.Format("%s_aux_object_#%" PRISIZE_T, m_pEntity->GetName(), numAuxObjects + 1);
+		}
+
+		szName = name.c_str();
+#endif // INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE
+
+		CryAudio::SCreateObjectData const objectData(szName, CryAudio::EOcclusionType::Ignore, m_pEntity->GetWorldTM(), m_pEntity->GetId(), true);
+		CryAudio::IObject* const pIObject = gEnv->pAudioSystem->CreateObject(objectData);
+		m_mapAuxAudioProxies.insert(AudioAuxObjectPair(++m_audioAuxObjectIdCounter, SAudioAuxObjectWrapper(pIObject)));
+		audioAuxObjectId = m_audioAuxObjectIdCounter;
+	}
+
+	return audioAuxObjectId;
+}
+
+//////////////////////////////////////////////////////////////////////////
+bool CEntityComponentAudio::RemoveAudioAuxObject(CryAudio::AuxObjectId const audioAuxObjectId)
 {
 	bool bSuccess = false;
 
-	if (audioProxyId != DEFAULT_AUDIO_PROXY_ID)
+	if (audioAuxObjectId != CryAudio::DefaultAuxObjectId)
 	{
-		TAuxAudioProxies::iterator iter(m_mapAuxAudioProxies.find(audioProxyId));
+		AudioAuxObjects::iterator iter(m_mapAuxAudioProxies.find(audioAuxObjectId));
 
 		if (iter != m_mapAuxAudioProxies.end())
 		{
-			iter->second.pIAudioProxy->Release();
+			gEnv->pAudioSystem->ReleaseObject(iter->second.pIObject);
 			m_mapAuxAudioProxies.erase(iter);
 			bSuccess = true;
 		}
 		else
 		{
-			gEnv->pSystem->Warning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_WARNING, VALIDATOR_FLAG_AUDIO, 0, "<Audio> AuxAudioProxy with ID '%u' not found during CEntityAudioProxy::RemoveAuxAudioProxy (%s)!", audioProxyId, m_pEntity->GetEntityTextDescription());
+			gEnv->pSystem->Warning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_WARNING, VALIDATOR_FLAG_AUDIO, 0, "<Audio> AuxAudioProxy with ID '%u' not found during CEntityAudioProxy::RemoveAuxAudioProxy (%s)!", audioAuxObjectId, m_pEntity->GetEntityTextDescription().c_str());
 			assert(false);
 		}
 	}
 	else
 	{
-		gEnv->pSystem->Warning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_ERROR, VALIDATOR_FLAG_AUDIO, 0, "<Audio> Trying to remove the default AudioProxy during CEntityAudioProxy::RemoveAuxAudioProxy (%s)!", m_pEntity->GetEntityTextDescription());
+		gEnv->pSystem->Warning(VALIDATOR_MODULE_ENTITYSYSTEM, VALIDATOR_ERROR, VALIDATOR_FLAG_AUDIO, 0, "<Audio> Trying to remove the default AudioProxy during CEntityAudioProxy::RemoveAuxAudioProxy (%s)!", m_pEntity->GetEntityTextDescription().c_str());
 		assert(false);
 	}
 
@@ -724,9 +625,9 @@ bool CEntityAudioProxy::RemoveAuxAudioProxy(AudioProxyId const audioProxyId)
 }
 
 //////////////////////////////////////////////////////////////////////////
-CEntityAudioProxy::TAudioProxyPair& CEntityAudioProxy::GetAuxAudioProxyPair(AudioProxyId const audioProxyId)
+CEntityComponentAudio::AudioAuxObjectPair& CEntityComponentAudio::GetAudioAuxObjectPair(CryAudio::AuxObjectId const audioAuxObjectId)
 {
-	TAuxAudioProxies::iterator const iter(m_mapAuxAudioProxies.find(audioProxyId));
+	AudioAuxObjects::iterator const iter(m_mapAuxAudioProxies.find(audioAuxObjectId));
 
 	if (iter != m_mapAuxAudioProxies.end())
 	{
@@ -737,26 +638,33 @@ CEntityAudioProxy::TAudioProxyPair& CEntityAudioProxy::GetAuxAudioProxyPair(Audi
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::SetEnvironmentAmountInternal(IEntity const* const pIEntity, float const amount) const
+void CEntityComponentAudio::SetEnvironmentAmountInternal(IEntity const* const pIEntity, float const amount) const
 {
 	// If the passed-in entity is our parent we skip it.
 	// Meaning we do not apply our own environment to ourselves.
 	if (pIEntity != nullptr && m_pEntity != nullptr && pIEntity != m_pEntity)
 	{
-		IEntityAudioProxy* const pIEntityAudioProxy = static_cast<IEntityAudioProxy*>(pIEntity->GetProxy(ENTITY_PROXY_AUDIO));
+		auto pIEntityAudioComponent = pIEntity->GetComponent<IEntityAudioComponent>();
 
-		if ((pIEntityAudioProxy != nullptr) && (m_audioEnvironmentId != INVALID_AUDIO_ENVIRONMENT_ID))
+		if ((pIEntityAudioComponent != nullptr) && (m_audioEnvironmentId != CryAudio::InvalidEnvironmentId))
 		{
 			// Only set the audio-environment-amount on the entities that already have an AudioProxy.
 			// Passing INVALID_AUDIO_PROXY_ID to address all auxiliary AudioProxies on pEntityAudioProxy.
 			CRY_ASSERT(amount >= 0.0f && amount <= 1.0f);
-			pIEntityAudioProxy->SetEnvironmentAmount(m_audioEnvironmentId, amount, INVALID_AUDIO_PROXY_ID);
+			pIEntityAudioComponent->SetEnvironmentAmount(m_audioEnvironmentId, amount, CryAudio::InvalidAuxObjectId);
 		}
 	}
 }
 
-///////////////////////////////////////////////////////////////////////////
-void CEntityAudioProxy::Done()
+//////////////////////////////////////////////////////////////////////////
+CryAudio::AuxObjectId CEntityComponentAudio::GetAuxObjectIdFromAudioObject(CryAudio::IObject* pObject)
 {
-	m_pEntity = nullptr;
+	for (auto& current : m_mapAuxAudioProxies)
+	{
+		if (current.second.pIObject == pObject)
+		{
+			return current.first;
+		}
+	}
+	return CryAudio::InvalidAuxObjectId;
 }

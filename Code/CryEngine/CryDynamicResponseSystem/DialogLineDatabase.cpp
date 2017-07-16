@@ -64,6 +64,8 @@ bool CDialogLineDatabase::InitFromFiles(const char* szFilePath)
 //--------------------------------------------------------------------------------------------------
 bool CDialogLineDatabase::Save(const char* szFilePath)
 {
+	GetISystem()->GetIPak()->MakeDir(szFilePath);
+
 	string filepath = PathUtil::AddSlash(szFilePath);
 	filepath += s_szFilename;
 	if (m_drsDialogBinaryFileFormatCVar != 0)
@@ -86,30 +88,22 @@ bool CDialogLineDatabase::Save(const char* szFilePath)
 }
 
 //--------------------------------------------------------------------------------------------------
-const CDialogLine* CDialogLineDatabase::GetLineByID(CHashedString lineID, int* pOutPriority)
+void CDialogLineDatabase::Reset()
 {
 	for (CDialogLineSet& currentLineSet : m_lineSets)
 	{
-		if (currentLineSet.GetLineId() == lineID)
-		{
-			if (pOutPriority)
-			{
-				*pOutPriority = currentLineSet.GetPriority();
-			}
-			return currentLineSet.PickLine();
-		}
+		currentLineSet.Reset();
 	}
-	return nullptr;
 }
 
 //--------------------------------------------------------------------------------------------------
-uint CDialogLineDatabase::GetLineSetCount()
+uint CDialogLineDatabase::GetLineSetCount() const
 {
 	return m_lineSets.size();
 }
 
 //--------------------------------------------------------------------------------------------------
-IDialogLineSet* CDialogLineDatabase::GetLineSetByIndex(uint index)
+IDialogLineSet* CDialogLineDatabase::GetLineSetByIndex(uint32 index)
 {
 	if (index < m_lineSets.size())
 	{
@@ -119,9 +113,9 @@ IDialogLineSet* CDialogLineDatabase::GetLineSetByIndex(uint index)
 }
 
 //--------------------------------------------------------------------------------------------------
-const IDialogLineSet* const CDialogLineDatabase::GetLineSetById(const CHashedString& lineID) const
+CDialogLineSet* CDialogLineDatabase::GetLineSetById(const CHashedString& lineID)
 {
-	for (const CDialogLineSet& currentLineSet : m_lineSets)
+	for (CDialogLineSet& currentLineSet : m_lineSets)
 	{
 		if (currentLineSet.GetLineId() == lineID)
 		{
@@ -132,20 +126,29 @@ const IDialogLineSet* const CDialogLineDatabase::GetLineSetById(const CHashedStr
 }
 
 //--------------------------------------------------------------------------------------------------
-IDialogLineSet* CDialogLineDatabase::InsertLineSet(uint index)
+IDialogLineSet* CDialogLineDatabase::InsertLineSet(uint32 index)
 {
 	CDialogLineSet newSet;
 	newSet.SetLineId(GenerateUniqueId("NEW_LINE"));
+
+	if (index == (uint32)-1)
+	{
+		m_lineSets.push_back(newSet);
+		return &m_lineSets.back();
+	}
+
 	return &(*m_lineSets.insert(m_lineSets.begin() + index, newSet));
 }
 
 //--------------------------------------------------------------------------------------------------
-void CDialogLineDatabase::RemoveLineSet(uint index)
+bool CDialogLineDatabase::RemoveLineSet(uint32 index)
 {
 	if (index < m_lineSets.size())
 	{
 		m_lineSets.erase(m_lineSets.begin() + index);
+		return true;
 	}
+	return false;
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -169,37 +172,143 @@ void CDialogLineDatabase::SerializeLinesHistory(Serialization::IArchive& ar)
 }
 
 //--------------------------------------------------------------------------------------------------
+bool CDialogLineDatabase::ExecuteScript(uint32 index)
+{
+#if defined(CRY_PLATFORM_WINDOWS)
+	static int maxParallelCmds = 4;  //todo: expose this value to the UI
+	static int counter = 0;
+
+	const string linescriptpath = PathUtil::GetGameFolder() + CRY_NATIVE_PATH_SEPSTR "linescript.bat";
+
+	if (gEnv->pCryPak->IsFileExist(linescriptpath, ICryPak::eFileLocation_Any))
+	{
+		DRS::IDialogLineSet* pLineSet = GetLineSetByIndex(index);
+
+		if (pLineSet)
+		{
+			for (int i = 0; i < pLineSet->GetLineCount(); i++)
+			{
+				const IDialogLine* pCurrentLine = pLineSet->GetLineByIndex(i);
+				const char* szStartTriggerWithoutPrefix = pCurrentLine->GetStartAudioTrigger().c_str();
+
+				const size_t prefixPos = pCurrentLine->GetStartAudioTrigger().find('_');
+				if (prefixPos != string::npos)
+				{
+					szStartTriggerWithoutPrefix = szStartTriggerWithoutPrefix + prefixPos + 1;
+				}
+
+				char szBuffer[1024];
+				cry_sprintf(szBuffer, "@SET LINE_ID=%s&SET LINE_ID_HASH=%s&SET SUBTITLE=%s&SET AUDIO_TRIGGER=%s&SET AUDIO_TRIGGER_CLEANED=%s&SET ANIMATION_NAME=%s&SET STANDALONE_FILE=%s&SET CUSTOM_DATA=%s&SET VARIATION_INDEX=%s&%s%s",
+					pLineSet->GetLineId().GetText().c_str(),
+					CryStringUtils::toString(pLineSet->GetLineId().GetHash()),
+					pCurrentLine->GetText().c_str(),
+					pCurrentLine->GetStartAudioTrigger().c_str(),
+					szStartTriggerWithoutPrefix,
+					pCurrentLine->GetLipsyncAnimation().c_str(),
+					pCurrentLine->GetStandaloneFile().c_str(),
+					pCurrentLine->GetCustomData().c_str(),
+					CryStringUtils::toString(i),
+					(++counter % maxParallelCmds == 0) ? "" : "start cmd /c ",
+					linescriptpath.c_str());
+
+				system(szBuffer);
+			}
+			return true;
+		}
+	}
+#endif //CRY_PLATFORM_WINDOWS
+
+	return false;
+}
+
+//--------------------------------------------------------------------------------------------------
+void CryDRS::CDialogLineDatabase::GetAllLineData(DRS::ValuesList* pOutCollectionsList, bool bSkipDefaultValues)
+{
+	std::pair<string, string> temp;
+	for (const CDialogLineSet& line : m_lineSets)
+	{
+		if (!bSkipDefaultValues || line.GetLastPickedLine() != 0)
+		{
+			temp.first = line.GetLineId().GetText();
+			temp.second = CryStringUtils::toString(line.GetLastPickedLine());
+			pOutCollectionsList->push_back(temp);
+		}
+	}
+}
+
+//--------------------------------------------------------------------------------------------------
+void CryDRS::CDialogLineDatabase::SetAllLineData(DRS::ValuesListIterator start, DRS::ValuesListIterator end)
+{
+	for (CDialogLineSet& line : m_lineSets)
+	{
+		line.Reset();
+	}
+
+	for (DRS::ValuesListIterator it = start; it != end; ++it)
+	{
+		CDialogLineSet* pLine = GetLineSetById(it->first.c_str());
+		if (pLine)
+		{
+			pLine->SetLastPickedLine((int)atoi(it->second));
+		}
+		
+	}
+}
+
+//--------------------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------
 CDialogLineSet::CDialogLineSet()
 	: m_priority(50)
-	, m_flags((int)IDialogLineSet::EPickModeFlags::Random)
+	, m_flags(IDialogLineSet::EPickModeFlags_RandomVariation)
 	, m_lastPickedLine(0)
+	, m_maxQueuingDuration(-1.0f) //negative values do mean 'default' which maps to the value set in CSpeakerManager via cvar 'drs_dialogsDefaultMaxQueueTime'
 {
-	m_lines.push_back(CDialogLine());
+	//m_lines.push_back(CDialogLine());
 }
 
 //--------------------------------------------------------------------------------------------------
 const CDialogLine* CDialogLineSet::PickLine()
 {
-	const int numLines = m_lines.size();
+	const int numLines = static_cast<int>(m_lines.size());
 
-	if (numLines == 1)
-	{
-		return &m_lines[0];
-	}
-	else if (numLines == 0)
+	if (numLines == 0)
 	{
 		DrsLogWarning("DialogLineSet without a single concrete line in it detected");
 		return nullptr;
 	}
 
-	if (m_flags & (int)IDialogLineSet::EPickModeFlags::Random)
+	if ((m_flags & EPickModeFlags::EPickModeFlags_SequentialVariationOnlyOnce) > 0)
 	{
-		const int randomLineIndex = cry_random(0, numLines - 1);
+		if (m_lastPickedLine >= numLines)
+		{
+			return nullptr;
+		}
+		return &m_lines[m_lastPickedLine++];
+	}
+	else if (numLines == 1)
+	{
+		return &m_lines[0];
+	}
+	else if ((m_flags & IDialogLineSet::EPickModeFlags_RandomVariation) > 0)
+	{
+		int randomLineIndex = 0;
+		if (numLines == 2)
+		{
+			if (m_lastPickedLine == 0)
+				randomLineIndex = 1;
+		}
+		else
+		{
+			randomLineIndex = cry_random(0, numLines - 2);
+			if (randomLineIndex == m_lastPickedLine)
+				randomLineIndex = numLines - 1;
+		}
+
+		m_lastPickedLine = randomLineIndex;
 		return &m_lines[randomLineIndex];
 	}
-	else if (m_flags & (int)IDialogLineSet::EPickModeFlags::Sequential)
+	else if ((m_flags & IDialogLineSet::EPickModeFlags_SequentialVariationRepeat) > 0)
 	{
 		if (m_lastPickedLine >= numLines)
 		{
@@ -207,11 +316,50 @@ const CDialogLine* CDialogLineSet::PickLine()
 		}
 		return &m_lines[m_lastPickedLine++];
 	}
+	else if ((m_flags & IDialogLineSet::EPickModeFlags_SequentialVariationClamp) > 0)
+	{
+		if (m_lastPickedLine >= numLines)
+		{
+			return &m_lines[numLines-1];
+		}
+		return &m_lines[m_lastPickedLine++];
+	}
+	else if ((m_flags & IDialogLineSet::EPickModeFlags_SequentialAllSuccessively) > 0)
+	{
+		return &m_lines[0];
+	}
 	else
 	{
 		DrsLogWarning("Could not pick a line from the dialogLineSet, because the RandomMode was set to an illegal value");
 	}
 	return nullptr;
+}
+
+//--------------------------------------------------------------------------------------------------
+const CDialogLine* CDialogLineSet::GetFollowUpLine(const CDialogLine* pCurrentLine)
+{
+	if ((m_flags & IDialogLineSet::EPickModeFlags_SequentialAllSuccessively) > 0)
+	{
+		bool bCurrentLineFound = false;
+		for (const CDialogLine& currentLine : m_lines)
+		{
+			if (bCurrentLineFound) //if the current line was found, this means the next one is the follow up line
+			{
+				return &currentLine;
+			}
+			if (pCurrentLine == &currentLine)
+			{
+				bCurrentLineFound = true;
+			}
+		}
+	}
+	return nullptr;
+}
+
+//--------------------------------------------------------------------------------------------------
+void CDialogLineSet::Reset()
+{
+	SetLastPickedLine(0);
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -252,7 +400,7 @@ bool Serialize(Serialization::IArchive& ar, SortedDialogLinePair& pair, const ch
 }
 
 //--------------------------------------------------------------------------------------------------
-IDialogLine* CDialogLineSet::GetLineByIndex(uint index)
+IDialogLine* CDialogLineSet::GetLineByIndex(uint32 index)
 {
 	if (index < m_lines.size())
 	{
@@ -262,18 +410,25 @@ IDialogLine* CDialogLineSet::GetLineByIndex(uint index)
 }
 
 //--------------------------------------------------------------------------------------------------
-IDialogLine* CDialogLineSet::InsertLine(uint index)
+IDialogLine* CDialogLineSet::InsertLine(uint32 index)
 {
+	if (index == (uint32)-1)
+	{
+		m_lines.emplace_back(CDialogLine());
+		return &m_lines.back();
+	}
 	return &(*m_lines.insert(m_lines.begin() + index, CDialogLine()));
 }
 
 //--------------------------------------------------------------------------------------------------
-void CDialogLineSet::RemoveLine(uint index)
+bool CDialogLineSet::RemoveLine(uint32 index)
 {
 	if (index < m_lines.size())
 	{
 		m_lines.erase(m_lines.begin() + index);
+		return true;
 	}
+	return false;
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -281,9 +436,10 @@ void CDialogLineSet::Serialize(Serialization::IArchive& ar)
 {
 	ar(m_lineId, "lineID", "lineID");
 	ar(m_priority, "priority", "Priority");
-	ar(m_lastPickedLine, "lastPicked", 0);
-	ar(m_flags, "flags", "+Flags");  //bitmask editor widget?
+	ar(m_lastPickedLine, "lastPicked", "Last Picked variation");
+	ar(m_flags, "flags", "Flags");
 	ar(m_lines, "lineVariations", "+Lines");
+	ar(m_maxQueuingDuration, "maxQueuingDuration", "MaxQueuingDuration");
 
 #if !defined(_RELEASE)
 	if (ar.isEdit())
@@ -292,7 +448,7 @@ void CDialogLineSet::Serialize(Serialization::IArchive& ar)
 		{
 			ar.error(m_priority, "DialogLineSet without a single concrete line");
 		}
-		if ((m_flags & (uint32)(EPickModeFlags::Random)) == 0)
+		if ((m_flags & EPickModeFlags::EPickModeFlags_RandomVariation) == 0)
 		{
 			ar.error(m_priority, "DialogLineSet without a correct LinePickMode found.");
 		}
@@ -300,44 +456,46 @@ void CDialogLineSet::Serialize(Serialization::IArchive& ar)
 #endif
 }
 
-//--------------------------------------------------------------------------------------------------
-//--------------------------------------------------------------------------------------------------
-//--------------------------------------------------------------------------------------------------
-CDialogLine::CDialogLine()
+bool CryDRS::CDialogLineSet::HasAvailableLines()
 {
+	if ((m_flags & EPickModeFlags::EPickModeFlags_SequentialVariationOnlyOnce) > 0)
+	{
+		return m_lastPickedLine < static_cast<int>(m_lines.size());
+	}
+	return !m_lines.empty();
 }
+
+void CryDRS::CDialogLineSet::OnLineCanceled(const CDialogLine* pCanceledLine)
+{
+	if ((m_flags & EPickModeFlags::EPickModeFlags_SequentialVariationOnlyOnce) > 0)
+	{
+		m_lastPickedLine--; //remark: if a only-once line is canceled, we do allow it to repeat.
+	}
+}
+
+//--------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
+CDialogLine::CDialogLine() 
+	: m_pauseLength(-1.0f)   //negative values mean "default value", specified by drs_dialogsDefaultPauseAfterLines
+{}
 
 //--------------------------------------------------------------------------------------------------
 void CDialogLine::Serialize(Serialization::IArchive& ar)
 {
 	ar(m_text, "text", "^Text");
-	if (ar.isInput() || ar.isEdit())
-	{
-		ar(m_audioStartTrigger, "audioStartTrigger", "AudioStartTrigger");
-		ar(m_audioStopTrigger, "audioStopTrigger", "AudioStopTrigger");
-		ar(m_lipsyncAnimation, "lipsyncAnim", "LipsyncAnim");
+	ar(m_audioStartTrigger, "audioStartTrigger", "AudioStartTrigger");
+	ar(m_audioStopTrigger, "audioStopTrigger", "AudioStopTrigger");
+	ar(m_lipsyncAnimation, "lipsyncAnim", "LipsyncAnim");
+	ar(m_standaloneFile, "standaloneFile", "StandaloneFile");
+	ar(m_pauseLength, "pauseLength", "PauseLength");
+	ar(m_customData, "customData", "CustomData");
 
-		if (ar.isEdit())
-		{
-			if (m_text.empty() && m_audioStopTrigger.empty() && m_audioStartTrigger.empty())
-			{
-				ar.warning(m_text, "DialogLine without any data found");
-			}
-		}
-	}
-	else
+	if (ar.isEdit())
 	{
-		if (!m_audioStartTrigger.empty())  //optimization: dont write default values to file
+		if (m_text.empty() && m_audioStopTrigger.empty() && m_audioStartTrigger.empty() && m_standaloneFile.empty())
 		{
-			ar(m_audioStartTrigger, "audioStartTrigger", "AudioStartTrigger");
-		}
-		if (!m_audioStopTrigger.empty())
-		{
-			ar(m_audioStopTrigger, "audioStopTrigger", "AudioStopTrigger");
-		}
-		if (!m_lipsyncAnimation.empty())
-		{
-			ar(m_lipsyncAnimation, "lipsyncAnim", "LipsyncAnim");
+			ar.warning(m_text, "DialogLine without any data found");
 		}
 	}
 }

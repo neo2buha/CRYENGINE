@@ -13,8 +13,12 @@ def build(bld):
 
 		win_lib       = [ 'shell32', 'Gdi32' ],
 
+<<<<<<< HEAD
+=======
+		use_module       = [ 'CryLobby', 'CryPerceptionSystem' ],
+
+>>>>>>> upstream/stabilisation
 		durango_file_list   = 'gamedllsdk_durango.waf_files',
 		durango_lib         = [ 'etwplus', 'ixmlhttprequest2', 'Ws2_32', 'uuid' ],
-		durango_use_module  = [ 'ESraLibCore' ],
 		durango_cxxflags    = [ '/EHsc', '/ZW' ],
 	)

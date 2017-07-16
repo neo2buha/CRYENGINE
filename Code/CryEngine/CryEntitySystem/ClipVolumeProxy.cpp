@@ -5,29 +5,18 @@
 #include "ClipVolumeProxy.h"
 #include <Cry3DEngine/CGF/CGFContent.h>
 
+CRYREGISTER_CLASS(CEntityComponentClipVolume);
+
 //////////////////////////////////////////////////////////////////////////
-CClipVolumeProxy::CClipVolumeProxy()
-	: m_pEntity(NULL)
-	, m_pClipVolume(NULL)
+CEntityComponentClipVolume::CEntityComponentClipVolume()
+	: m_pClipVolume(NULL)
 	, m_pBspTree(NULL)
 	, m_nFlags(IClipVolume::eClipVolumeAffectedBySun)
 {
+	m_componentFlags.Add(EEntityComponentFlags::Legacy);
 }
 
-void CClipVolumeProxy::ProcessEvent(SEntityEvent& event)
-{
-	if (m_pEntity != NULL)
-	{
-		if (event.event == ENTITY_EVENT_XFORM ||
-		    event.event == ENTITY_EVENT_HIDE ||
-		    event.event == ENTITY_EVENT_UNHIDE)
-		{
-			gEnv->p3DEngine->UpdateClipVolume(m_pClipVolume, m_pRenderMesh, m_pBspTree, m_pEntity->GetWorldTM(), !m_pEntity->IsHidden(), m_nFlags, m_pEntity->GetName());
-		}
-	}
-}
-
-void CClipVolumeProxy::Release()
+CEntityComponentClipVolume::~CEntityComponentClipVolume()
 {
 	if (m_pClipVolume)
 	{
@@ -36,12 +25,37 @@ void CClipVolumeProxy::Release()
 	}
 
 	m_pRenderMesh = NULL;
-	gEnv->pEntitySystem->ReleaseBSPTree3D(m_pBspTree);
+	if (m_pBspTree)
+	{
+		gEnv->pEntitySystem->ReleaseBSPTree3D(m_pBspTree);
+		m_pBspTree = nullptr;
+	}
 
 	m_GeometryFileName = "";
 }
 
-void CClipVolumeProxy::UpdateRenderMesh(IRenderMesh* pRenderMesh, const DynArray<Vec3>& meshFaces)
+void CEntityComponentClipVolume::Initialize()
+{
+	m_pClipVolume = gEnv->p3DEngine->CreateClipVolume();
+}
+
+void CEntityComponentClipVolume::ProcessEvent(SEntityEvent& event)
+{
+	if (event.event == ENTITY_EVENT_XFORM ||
+	    event.event == ENTITY_EVENT_HIDE ||
+	    event.event == ENTITY_EVENT_UNHIDE)
+	{
+		gEnv->p3DEngine->UpdateClipVolume(m_pClipVolume, m_pRenderMesh, m_pBspTree, m_pEntity->GetWorldTM(), !m_pEntity->IsHidden(), m_nFlags, m_pEntity->GetName());
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+uint64 CEntityComponentClipVolume::GetEventMask() const
+{
+	return BIT64(ENTITY_EVENT_XFORM) | BIT64(ENTITY_EVENT_HIDE) | BIT64(ENTITY_EVENT_UNHIDE);
+}
+
+void CEntityComponentClipVolume::UpdateRenderMesh(IRenderMesh* pRenderMesh, const DynArray<Vec3>& meshFaces)
 {
 	m_pRenderMesh = pRenderMesh;
 	gEnv->pEntitySystem->ReleaseBSPTree3D(m_pBspTree);
@@ -69,7 +83,7 @@ void CClipVolumeProxy::UpdateRenderMesh(IRenderMesh* pRenderMesh, const DynArray
 		gEnv->p3DEngine->UpdateClipVolume(m_pClipVolume, m_pRenderMesh, m_pBspTree, m_pEntity->GetWorldTM(), !m_pEntity->IsHidden(), m_nFlags, m_pEntity->GetName());
 }
 
-void CClipVolumeProxy::SetProperties(bool bIgnoresOutdoorAO)
+void CEntityComponentClipVolume::SetProperties(bool bIgnoresOutdoorAO)
 {
 	if (m_pEntity && m_pClipVolume)
 	{
@@ -80,33 +94,23 @@ void CClipVolumeProxy::SetProperties(bool bIgnoresOutdoorAO)
 	}
 }
 
-bool CClipVolumeProxy::Init(IEntity* pEntity, SEntitySpawnParams& params)
+void CEntityComponentClipVolume::LegacySerializeXML(XmlNodeRef& entityNode, XmlNodeRef& componentNode, bool bLoading)
 {
-	m_pEntity = pEntity;
-	m_pClipVolume = gEnv->p3DEngine->CreateClipVolume();
-
-	if (params.pUserData)
-		m_GeometryFileName = static_cast<const char*>(params.pUserData);
-
-	return true;
-}
-
-void CClipVolumeProxy::Reload(IEntity* pEntity, SEntitySpawnParams& params)
-{
-	Release();
-	m_pEntity = pEntity;
-}
-
-void CClipVolumeProxy::SerializeXML(XmlNodeRef& entityNodeXML, bool loading)
-{
-	if (loading)
+	if (bLoading)
 	{
 		LOADING_TIME_PROFILE_SECTION;
 
-		if (XmlNodeRef pVolumeNode = entityNodeXML->findChild("ClipVolume"))
+		XmlNodeRef volumeNode = componentNode->findChild("ClipVolume");
+		if (!volumeNode)
+		{
+			// legacy behavior, look for properties on the entity node level
+			volumeNode = entityNode->findChild("ClipVolume");
+		}
+
+		if (volumeNode)
 		{
 			const char* szFileName = NULL;
-			if (pVolumeNode->getAttr("GeometryFileName", &szFileName))
+			if (volumeNode->getAttr("GeometryFileName", &szFileName))
 			{
 				// replace %level% by level path
 				char szFilePath[_MAX_PATH];
@@ -121,12 +125,12 @@ void CClipVolumeProxy::SerializeXML(XmlNodeRef& entityNodeXML, bool loading)
 	}
 	else
 	{
-		XmlNodeRef volumeNode = entityNodeXML->newChild("ClipVolume");
+		XmlNodeRef volumeNode = componentNode->newChild("ClipVolume");
 		volumeNode->setAttr("GeometryFileName", m_GeometryFileName);
 	}
 }
 
-bool CClipVolumeProxy::LoadFromFile(const char* szFilePath)
+bool CEntityComponentClipVolume::LoadFromFile(const char* szFilePath)
 {
 	assert(!m_pRenderMesh && !m_pBspTree);
 
@@ -152,22 +156,25 @@ bool CClipVolumeProxy::LoadFromFile(const char* szFilePath)
 			}
 		}
 
-		CContentCGF* pCgfContent = gEnv->p3DEngine->CreateChunkfileContent(szFilePath);
-		if (gEnv->p3DEngine->LoadChunkFileContentFromMem(pCgfContent, pBuffer, nFileSize, 0, false))
+		if (gEnv->pRenderer)
 		{
-			for (int i = 0; i < pCgfContent->GetNodeCount(); ++i)
+			CContentCGF* pCgfContent = gEnv->p3DEngine->CreateChunkfileContent(szFilePath);
+			if (gEnv->p3DEngine->LoadChunkFileContentFromMem(pCgfContent, pBuffer, nFileSize, 0, false))
 			{
-				CNodeCGF* pNode = pCgfContent->GetNode(i);
-				if (pNode->type == CNodeCGF::NODE_MESH && pNode->pMesh)
+				for (int i = 0; i < pCgfContent->GetNodeCount(); ++i)
 				{
-					m_pRenderMesh = gEnv->pRenderer->CreateRenderMesh("ClipVolume", szFilePath, NULL, eRMT_Static);
-					m_pRenderMesh->SetMesh(*pNode->pMesh, 0, FSM_CREATE_DEVICE_MESH, NULL, false);
+					CNodeCGF* pNode = pCgfContent->GetNode(i);
+					if (pNode->type == CNodeCGF::NODE_MESH && pNode->pMesh)
+					{
+						m_pRenderMesh = gEnv->pRenderer->CreateRenderMesh("ClipVolume", szFilePath, NULL, eRMT_Static);
+						m_pRenderMesh->SetMesh(*pNode->pMesh, 0, FSM_CREATE_DEVICE_MESH, NULL, false);
 
-					break;
+						break;
+					}
 				}
 			}
+			gEnv->p3DEngine->ReleaseChunkfileContent(pCgfContent);
 		}
-		gEnv->p3DEngine->ReleaseChunkfileContent(pCgfContent);
 
 		delete[] pBuffer;
 	}
@@ -175,16 +182,14 @@ bool CClipVolumeProxy::LoadFromFile(const char* szFilePath)
 	return m_pRenderMesh && m_pBspTree;
 }
 
-bool CClipVolumeProxy::GetSignature(TSerialize signature)
-{
-	signature.BeginGroup("ClipVolume");
-	signature.EndGroup();
-	return true;
-}
-
-void CClipVolumeProxy::GetMemoryUsage(ICrySizer* pSizer) const
+void CEntityComponentClipVolume::GetMemoryUsage(ICrySizer* pSizer) const
 {
 	pSizer->Add(m_GeometryFileName);
 	pSizer->AddObject(m_pRenderMesh);
 	pSizer->AddObject(m_pBspTree);
+}
+
+void CEntityComponentClipVolume::SetGeometryFilename(const char *sFilename)
+{
+	m_GeometryFileName = sFilename;
 }

@@ -187,6 +187,7 @@ void CSystem::LogVersion()
 #elif CRY_PLATFORM_MAC
 	CryLogAlways("Running 64 bit Mac version");
 #endif
+	CryLogAlways("Command Line: %s", m_pCmdLine->GetCommandLine());
 #if !CRY_PLATFORM_LINUX && !CRY_PLATFORM_ANDROID && !CRY_PLATFORM_APPLE && !CRY_PLATFORM_DURANGO && !CRY_PLATFORM_ORBIS
 	GetModuleFileName(NULL, s, sizeof(s));
 	CryLogAlways("Executable: %s", s);
@@ -194,25 +195,6 @@ void CSystem::LogVersion()
 
 	CryLogAlways("FileVersion: %d.%d.%d.%d", m_fileVersion.v[3], m_fileVersion.v[2], m_fileVersion.v[1], m_fileVersion.v[0]);
 	CryLogAlways("ProductVersion: %d.%d.%d.%d", m_productVersion.v[3], m_productVersion.v[2], m_productVersion.v[1], m_productVersion.v[0]);
-
-#if defined(IS_EAAS)
-	CryLogAlways("EaaS Build\n");
-#endif
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CSystem::LogBuildInfo()
-{
-	ICVar* pGameName = m_env.pConsole->GetCVar("sys_game_name");
-	if (pGameName)
-	{
-		CryLogAlways("GameName: %s", pGameName->GetString());
-	}
-	else
-	{
-		CryLogAlways("Couldn't find game name in cvar sys_game_name");
-	}
-	CryLogAlways("BuildTime: " __DATE__ " " __TIME__);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -312,7 +294,7 @@ bool CSystemConfiguration::OpenFile(const string& filename, CCryFile& file, int 
 	flags |= ICryPak::FOPEN_HINT_QUIET;
 
 	// Absolute paths first
-	if (gEnv->pCryPak->IsAbsPath(filename))
+	if (gEnv->pCryPak->IsAbsPath(filename) || filename[0] == '%')
 	{
 		if (file.Open(filename, "rb", flags | ICryPak::FLAGS_PATH_REAL))
 		{
@@ -359,6 +341,18 @@ bool CSystemConfiguration::OpenFile(const string& filename, CCryFile& file, int 
 
 	// Next Search in config subfolder.
 	if (file.Open(string("config/") + filename, "rb", flags | ICryPak::FLAGS_PATH_REAL))
+	{
+		return true;
+	}
+
+	// Next Search in engine root.
+	if (file.Open(string("%ENGINEROOT%/") + filename, "rb", flags))
+	{
+		return true;
+	}
+
+	// Next Search in engine config subfolder, in case loosely stored on drive
+	if (file.Open(string("%ENGINEROOT%/Engine/config/") + filename, "rb", flags))
 	{
 		return true;
 	}

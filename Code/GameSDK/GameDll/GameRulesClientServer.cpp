@@ -7,7 +7,7 @@ $DateTime$
 
 -------------------------------------------------------------------------
 History:
-- 23:5:2006   9:27 : Created by Márcio Martins
+- 23:5:2006   9:27 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -63,7 +63,6 @@ History:
 #include "HitDeathReactions.h"
 #include "PersistantStats.h"
 #include "AI/GameAISystem.h"
-#include "AI/GameAIEnv.h"
 
 #include "UI/WarningsManager.h"
 #include "LagOMeter.h"
@@ -86,6 +85,8 @@ History:
 static const int sSimulateExplosionMaxEntitiesToSkip = 20;
 #include "SkillKill.h"
 #include "EnvironmentalWeapon.h"
+
+#include <IPerceptionManager.h>
 
 //------------------------------------------------------------------------
 // Our local client has hit something locally
@@ -327,7 +328,7 @@ void CGameRules::ClientHit(const HitInfo &hitInfo)
 void CGameRules::KnockActorDown( EntityId actorEntityId )
 {
 	// Forbid fall and play if the actor is playing a hit/death reaction
-	CActor* pHitActor = static_cast<CActor*>(gEnv->pGame->GetIGameFramework()->GetIActorSystem()->GetActor( actorEntityId ));
+	CActor* pHitActor = static_cast<CActor*>(gEnv->pGameFramework->GetIActorSystem()->GetActor( actorEntityId ));
 	if (pHitActor)
 	{
 		// Don't trigger Fall and Play if the actor is playing a hit reaction
@@ -727,10 +728,9 @@ void CGameRules::CullEntitiesInExplosion(const ExplosionInfo &explosionInfo)
 					continue;
 
 				// get bounding box
-				if (IEntityPhysicalProxy* pPhysProxy = (IEntityPhysicalProxy*)pEntity->GetProxy(ENTITY_PROXY_PHYSICS))
 				{
 					AABB aabb;
-					pPhysProxy->GetWorldBounds(aabb);
+					pEntity->GetPhysicsWorldBounds(aabb);
 
 					// don't remove objects which are larger than a predefined minimum volume
 					if (aabb.GetVolume() > minVolume)
@@ -774,13 +774,6 @@ void CGameRules::CullEntitiesInExplosion(const ExplosionInfo &explosionInfo)
 void CGameRules::ClientExplosion(SExplosionContainer &explosionContainer)
 {
 	ExplosionInfo& explosionInfo = explosionContainer.m_explosionInfo;
-
-	// let 3D engine know about explosion (will create holes and remove vegetation)
-	if (explosionInfo.hole_size > 1.0f && gEnv->p3DEngine->GetIVoxTerrain())
-	{
-		gEnv->p3DEngine->OnExplosion(explosionInfo.pos, explosionInfo.hole_size, true);
-	}
-
 	TExplosionAffectedEntities affectedEntities;
 		
 	CalculateExplosionAffectedEntities(explosionInfo, affectedEntities);
@@ -850,7 +843,8 @@ void CGameRules::ClientExplosion(SExplosionContainer &explosionContainer)
 		m_pExplosionGameEffect->Explode(explosionContainer);
 	}
 
-	if (gEnv->pAISystem && !gEnv->bMultiplayer)
+	IPerceptionManager* pPerceptionManager = IPerceptionManager::GetInstance();
+	if (pPerceptionManager && !gEnv->bMultiplayer)
 	{
 		if (explosionInfo.damage > 0.0f)
 		{
@@ -862,7 +856,7 @@ void CGameRules::ClientExplosion(SExplosionContainer &explosionContainer)
 
 			SAIStimulus stim(AISTIM_EXPLOSION, 0, sourceId, 0,
 				explosionInfo.pos, ZERO, explosionInfo.radius);
-			gEnv->pAISystem->RegisterStimulus(stim);
+			pPerceptionManager->RegisterStimulus(stim);
 
 			float fSoundRadius = explosionInfo.soundRadius;
 			if (fSoundRadius <= FLT_EPSILON)
@@ -872,7 +866,7 @@ void CGameRules::ClientExplosion(SExplosionContainer &explosionContainer)
 
 			SAIStimulus stimSound(AISTIM_SOUND, AISOUND_EXPLOSION, sourceId, 0,
 				explosionInfo.pos, ZERO, fSoundRadius, AISTIMPROC_FILTER_LINK_WITH_PREVIOUS);
-			gEnv->pAISystem->RegisterStimulus(stimSound);
+			pPerceptionManager->RegisterStimulus(stimSound);
 		}
 	}
 }
@@ -1391,7 +1385,7 @@ IMPLEMENT_RMI(CGameRules, SvRequestSpectatorMode)
 //------------------------------------------------------------------------
 IMPLEMENT_RMI(CGameRules, SvSetSpectatorState )
 {
-	CActor *pActor = static_cast<CActor*>( gEnv->pGame->GetIGameFramework()->GetIActorSystem()->GetActor( params.entityId ) );
+	CActor *pActor = static_cast<CActor*>( gEnv->pGameFramework->GetIActorSystem()->GetActor( params.entityId ) );
 	if (pActor)
 	{
 		CActor::EActorSpectatorState prevState = pActor->GetSpectatorState();
@@ -1554,7 +1548,7 @@ IMPLEMENT_RMI(CGameRules, ClTaggedEntity)
 		return true;
 	}
 
-	CPlayer* pClientPlayer = static_cast<CPlayer*>( gEnv->pGame->GetIGameFramework()->GetClientActor() );
+	CPlayer* pClientPlayer = static_cast<CPlayer*>( gEnv->pGameFramework->GetClientActor() );
 	if( !pClientPlayer )
 	{
 		return true;
@@ -1743,7 +1737,7 @@ IMPLEMENT_RMI(CGameRules, ClKickVoteStatus)
 	CGameLobby::SChatMessage message;
 	if(pGameLobby)
 	{
-		const EntityId clientActorId = g_pGame->GetClientActorId();
+		const EntityId clientActorId = gEnv->pGameFramework->GetClientActorId();
 		switch(params.kickState)
 		{
 		case eKS_StartVote:

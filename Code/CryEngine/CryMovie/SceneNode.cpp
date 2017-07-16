@@ -11,7 +11,6 @@
 #include "AnimCameraNode.h"
 #include "Movie.h"
 
-#include <CryAudio/IAudioSystem.h>
 #include <CrySystem/IConsole.h>
 
 #define s_nodeParamsInitialized s_nodeParamsInitializedScene
@@ -68,7 +67,7 @@ void CAnimSceneNode::Initialize()
 	if (!s_nodeParamsInitialized)
 	{
 		s_nodeParamsInitialized = true;
-		s_nodeParams.reserve(11);
+		s_nodeParams.reserve(9);
 		AddSupportedParam("Camera", eAnimParamType_Camera, eAnimValue_Unknown);
 		AddSupportedParam("Event", eAnimParamType_Event, eAnimValue_Unknown);
 		AddSupportedParam("Sequence", eAnimParamType_Sequence, eAnimValue_Unknown);
@@ -185,7 +184,6 @@ void CAnimSceneNode::Animate(SAnimContext& animContext)
 
 	PrecacheDynamic(animContext.time);
 
-	size_t nNumAudioTracks = 0;
 	int trackCount = NumTracks();
 
 	for (int paramIndex = 0; paramIndex < trackCount; paramIndex++)
@@ -229,73 +227,10 @@ void CAnimSceneNode::Animate(SAnimContext& animContext)
 			pGotoTrack = (CGotoTrack*)pTrack;
 			break;
 
-		case eAnimParamType_AudioTrigger:
-			{
-				++nNumAudioTracks;
-
-				if (nNumAudioTracks > m_soundInfo.size())
-				{
-					m_soundInfo.resize(nNumAudioTracks);
-				}
-
-				bool const bMute = gEnv->IsEditor() && (pTrack->GetFlags() & IAnimTrack::eAnimTrackFlags_Muted);
-
-				if (!animContext.bResetting && !bMute && animContext.time > SAnimTime(0))
-				{
-					SAudioTriggerKey audioTriggerKey;
-					int const audioTriggerKeyIndex = static_cast<CAudioTriggerTrack*>(pTrack)->GetActiveKey(animContext.time, &audioTriggerKey);
-					SSoundInfo& soundInfo = m_soundInfo[nNumAudioTracks - 1];
-
-					if (audioTriggerKeyIndex >= 0)
-					{
-						const SAnimTime audioTriggerKeyTime = (animContext.time - audioTriggerKey.m_time);
-
-						if (soundInfo.nSoundKeyStart < audioTriggerKeyIndex)
-						{
-							ApplyAudioKey(audioTriggerKey.m_startTrigger);
-						}
-
-						if (soundInfo.nSoundKeyStart > audioTriggerKeyIndex)
-						{
-							soundInfo.nSoundKeyStop = audioTriggerKeyIndex;
-						}
-
-						soundInfo.nSoundKeyStart = audioTriggerKeyIndex;
-
-						if (audioTriggerKeyTime >= audioTriggerKey.m_duration)
-						{
-							if (soundInfo.nSoundKeyStop < audioTriggerKeyIndex)
-							{
-								soundInfo.nSoundKeyStop = audioTriggerKeyIndex;
-
-								if (audioTriggerKey.m_stopTrigger[0] != '\0')
-								{
-									ApplyAudioKey(audioTriggerKey.m_stopTrigger);
-								}
-								else
-								{
-									ApplyAudioKey(audioTriggerKey.m_startTrigger, false);
-								}
-							}
-						}
-						else
-						{
-							soundInfo.nSoundKeyStop = -1;
-						}
-					}
-					else
-					{
-						soundInfo.nSoundKeyStart = -1;
-						soundInfo.nSoundKeyStop = -1;
-					}
-				}
-
-				break;
-			}
 		case eAnimParamType_TimeWarp:
 			{
 				const TMovieSystemValue value = pTrack->GetValue(animContext.time);
-				const float timeScale = std::max(boost::get<float>(value), 0.0f);
+				const float timeScale = std::max(stl::get<float>(value), 0.0f);
 
 				float fixedTimeStep = 0;
 
@@ -323,7 +258,7 @@ void CAnimSceneNode::Animate(SAnimContext& animContext)
 		case eAnimParamType_FixedTimeStep:
 			{
 				const TMovieSystemValue value = pTrack->GetValue(animContext.time);
-				const float timeStep = std::max(boost::get<float>(value), 0.0f);
+				const float timeStep = std::max(stl::get<float>(value), 0.0f);
 
 				if (m_cvar_t_FixedStep)
 				{
@@ -599,7 +534,7 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 	if (pCameraInfluenceTrack)
 	{
 		const TMovieSystemValue value = pCameraInfluenceTrack->GetValue(animContext.time);
-		const float fGameCameraInfluence = boost::get<float>(value);
+		const float fGameCameraInfluence = stl::get<float>(value);
 		cameraParams.fGameCameraInfluence = clamp_tpl(fGameCameraInfluence, 0.0f, 1.0f);
 	}
 
@@ -620,14 +555,14 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 		if (pNearZTrack)
 		{
 			const TMovieSystemValue value = pNearZTrack->GetValue(animContext.time);
-			cameraParams.fNearZ = boost::get<float>(value);
+			cameraParams.fNearZ = stl::get<float>(value);
 		}
 
 		IAnimTrack* pFOVTrack = pFirstCameraNode->GetTrackForParameter(eAnimParamType_FOV);
 		if (pFOVTrack)
 		{
 			const TMovieSystemValue value = pFOVTrack->GetValue(animContext.time);
-			fFirstCameraFOV = boost::get<float>(value);
+			fFirstCameraFOV = stl::get<float>(value);
 		}
 
 		cameraParams.fFOV = DEG2RAD(fFirstCameraFOV);
@@ -650,7 +585,7 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 			if (pFOVTrack)
 			{
 				const TMovieSystemValue value = pFOVTrack->GetValue(animContext.time);
-				m_backedUpFovForInterp = boost::get<float>(value);
+				m_backedUpFovForInterp = stl::get<float>(value);
 			}
 		}
 
@@ -662,7 +597,7 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 
 		if (pSecondCameraEntity)
 		{
-			IEntityCameraProxy* pSecondCameraProxy = (IEntityCameraProxy*)pSecondCameraEntity->GetProxy(ENTITY_PROXY_CAMERA);
+			IEntityCameraComponent* pSecondCameraProxy = (IEntityCameraComponent*)pSecondCameraEntity->GetProxy(ENTITY_PROXY_CAMERA);
 
 			if (pSecondCameraProxy)
 			{
@@ -684,7 +619,7 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 			if (pFOVTrack)
 			{
 				const TMovieSystemValue value = pFOVTrack->GetValue(animContext.time);
-				fSecondCameraFOV = boost::get<float>(value);
+				fSecondCameraFOV = stl::get<float>(value);
 			}
 		}
 
@@ -711,7 +646,7 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 			if (pPosTrack)
 			{
 				const TMovieSystemValue value = pPosTrack->GetValue(animContext.time);
-				vNextKeyPos = boost::get<Vec3>(value);
+				vNextKeyPos = stl::get<Vec3>(value);
 				;
 			}
 		}
@@ -737,7 +672,7 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 			if (pPosTrack)
 			{
 				const TMovieSystemValue value = pPosTrack->GetValue(animContext.time);
-				vFirstCamPos = boost::get<Vec3>(value);
+				vFirstCamPos = stl::get<Vec3>(value);
 			}
 		}
 
@@ -790,7 +725,7 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 		if (pOrgRotationTrack)
 		{
 			const TMovieSystemValue value = pOrgRotationTrack->GetValue(animContext.time);
-			firstCameraRotation = boost::get<Quat>(value);
+			firstCameraRotation = stl::get<Quat>(value);
 		}
 
 		if (pFirstCameraEntity->GetParent())
@@ -812,7 +747,7 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 			if (pRotationTrack)
 			{
 				const TMovieSystemValue value = pRotationTrack->GetValue(animContext.time);
-				secondCameraRotation = boost::get<Quat>(value);
+				secondCameraRotation = stl::get<Quat>(value);
 			}
 		}
 
@@ -860,31 +795,6 @@ void CAnimSceneNode::ApplyCameraKey(SCameraKey& key, SAnimContext& animContext)
 void CAnimSceneNode::ApplyEventKey(SEventKey& key, SAnimContext& animContext)
 {
 	gEnv->pMovieSystem->SendGlobalEvent("Event_" + key.m_event);
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CAnimSceneNode::ApplyAudioKey(char const* const sTriggerName, bool const bPlay /* = true */)
-{
-	AudioControlId nAudioTriggerID = INVALID_AUDIO_CONTROL_ID;
-
-	if (gEnv->pAudioSystem->GetAudioTriggerId(sTriggerName, nAudioTriggerID))
-	{
-		SAudioRequest oRequest;
-		oRequest.flags = eAudioRequestFlags_PriorityHigh;
-
-		if (bPlay)
-		{
-			SAudioObjectRequestData<eAudioObjectRequestType_ExecuteTrigger> oRequestData(nAudioTriggerID, 0.0f);
-			oRequest.pData = &oRequestData;
-			gEnv->pAudioSystem->PushRequest(oRequest);
-		}
-		else
-		{
-			SAudioObjectRequestData<eAudioObjectRequestType_StopTrigger> oRequestData(nAudioTriggerID);
-			oRequest.pData = &oRequestData;
-			gEnv->pAudioSystem->PushRequest(oRequest);
-		}
-	}
 }
 
 void CAnimSceneNode::ApplySequenceKey(IAnimTrack* pTrack, int nPrevKey, int nCurrKey, SSequenceKey& key, SAnimContext& animContext)
@@ -964,14 +874,14 @@ bool CAnimSceneNode::GetEntityTransform(IAnimSequence* pSequence, IEntity* pEnti
 			if (pPosTrack)
 			{
 				const TMovieSystemValue value = pPosTrack->GetValue(time);
-				vCamPos = boost::get<Vec3>(value);
+				vCamPos = stl::get<Vec3>(value);
 			}
 
 			IAnimTrack* pOrgRotationTrack = pNode->GetTrackForParameter(eAnimParamType_Rotation);
 			if (pOrgRotationTrack != NULL)
 			{
 				const TMovieSystemValue value = pOrgRotationTrack->GetValue(time);
-				qCamRot = boost::get<Quat>(value);
+				qCamRot = stl::get<Quat>(value);
 			}
 
 			return true;

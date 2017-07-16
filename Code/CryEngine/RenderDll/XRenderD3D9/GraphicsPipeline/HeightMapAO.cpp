@@ -4,12 +4,10 @@
 #include "HeightMapAO.h"
 #include "DriverD3D.h"
 #include "D3DPostProcess.h"
+#include "GraphicsPipeline/ClipVolumes.h"
 
 void CHeightMapAOStage::Init()
 {
-	m_samplerPoint = CTexture::GetTexState(STexState(FILTER_POINT, true));
-	m_samplerLinear = CTexture::GetTexState(STexState(FILTER_LINEAR, true));
-	m_samplerLinearBorder = CTexture::GetTexState(STexState(FILTER_TRILINEAR, TADDR_BORDER, TADDR_BORDER, TADDR_BORDER, 0xFFFFFFFF));
 }
 
 void CHeightMapAOStage::Execute(ShadowMapFrustum*& pHeightMapFrustum, CTexture*& pHeightMapAOScreenDepthTex, CTexture*& pHeightMapAOTex)
@@ -20,7 +18,7 @@ void CHeightMapAOStage::Execute(ShadowMapFrustum*& pHeightMapFrustum, CTexture*&
 	pHeightMapAOScreenDepthTex = nullptr;
 	pHeightMapAOTex = nullptr;
 
-	if (!CRenderer::CV_r_HeightMapAO || pRenderer->m_RP.m_pSunLight == NULL)
+	if (!CRenderer::CV_r_HeightMapAO)
 		return;
 
 	if (CDeferredShading::Instance().GetResolvedStencilRT() == nullptr)
@@ -54,10 +52,17 @@ void CHeightMapAOStage::Execute(ShadowMapFrustum*& pHeightMapFrustum, CTexture*&
 		{
 			PROFILE_LABEL_SCOPE("GENERATE_MIPS");
 
-			pRenderer->GetDeviceContext().CopySubresourceRegion(
-			  CTexture::s_ptexHeightMapAODepth[1]->GetDevTexture()->GetBaseTexture(), 0, 0, 0, 0,
-			  CTexture::s_ptexHeightMapAODepth[0]->GetDevTexture()->GetBaseTexture(), 0, NULL
-			  );
+			const SResourceRegionMapping mapping =
+			{
+				{ 0, 0, 0, 0 }, // src position
+				{ 0, 0, 0, 0 }, // dst position
+				CTexture::s_ptexHeightMapAODepth[0]->GetDevTexture()->GetDimension()
+			};
+
+			GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(
+				CTexture::s_ptexHeightMapAODepth[0]->GetDevTexture(), // DSV
+				CTexture::s_ptexHeightMapAODepth[1]->GetDevTexture(), // SRV
+				mapping);
 
 			m_passMipmapGen.Execute(CTexture::s_ptexHeightMapAODepth[1], 3);
 		}
@@ -71,14 +76,15 @@ void CHeightMapAOStage::Execute(ShadowMapFrustum*& pHeightMapFrustum, CTexture*&
 			if (m_passSampling.InputChanged(resolutionIndex))
 			{
 				static CCryNameTSCRC techSampling("HeightMapAOPass");
+				m_passSampling.SetPrimitiveFlags(CRenderPrimitive::eFlags_ReflectShaderConstants_PS);
 				m_passSampling.SetTechnique(pShader, techSampling, 0);
 				m_passSampling.SetRenderTarget(0, pDestRT);
 				m_passSampling.SetState(GS_NODEPTHTEST);
 
-				m_passSampling.SetTextureSamplerPair(0, CTexture::s_ptexSceneNormalsMap, m_samplerPoint);
-				m_passSampling.SetTextureSamplerPair(1, pDepthTextures[resolutionIndex], m_samplerPoint);
-				m_passSampling.SetTextureSamplerPair(10, CTexture::s_ptexSceneNormalsBent, m_samplerPoint);
-				m_passSampling.SetTextureSamplerPair(11, CTexture::s_ptexHeightMapAODepth[1], m_samplerLinearBorder);
+				m_passSampling.SetTextureSamplerPair(0, CTexture::s_ptexSceneNormalsMap, EDefaultSamplerStates::PointClamp);
+				m_passSampling.SetTextureSamplerPair(1, pDepthTextures[resolutionIndex], EDefaultSamplerStates::PointClamp);
+				m_passSampling.SetTextureSamplerPair(10, CTexture::s_ptexSceneNormalsBent, EDefaultSamplerStates::PointClamp);
+				m_passSampling.SetTextureSamplerPair(11, CTexture::s_ptexHeightMapAODepth[1], EDefaultSamplerStates::TrilinearBorder_White);
 				m_passSampling.SetRequireWorldPos(true);
 			}
 
@@ -95,15 +101,15 @@ void CHeightMapAOStage::Execute(ShadowMapFrustum*& pHeightMapFrustum, CTexture*&
 			const float texelsPerMeter = CRenderer::CV_r_HeightMapAOResolution / CRenderer::CV_r_HeightMapAORange;
 			const bool enableMinMaxSampling = CRenderer::CV_r_HeightMapAO < 3;
 			Vec4 paramHMAO(CRenderer::CV_r_HeightMapAOAmount, texelsPerMeter / CTexture::s_ptexHeightMapAODepth[1]->GetWidth(), enableMinMaxSampling ? 1.0f : 0.0f, 0.0f);
-			pShader->FXSetPSFloat(nameParams, &paramHMAO, 1);
+			m_passSampling.SetConstant(nameParams, paramHMAO, eHWSC_Pixel);
 
 			Vec4 translation = Vec4(texToWorld.m03, texToWorld.m13, texToWorld.m23, 0);
-			pShader->FXSetPSFloat(nameTexToWorldT, &translation, 1);
+			m_passSampling.SetConstant(nameTexToWorldT, translation, eHWSC_Pixel);
 
 			Vec4 scale = Vec4(texToWorld.m00, texToWorld.m11, texToWorld.m22, 1);
-			pShader->FXSetPSFloat(nameTexToWorldS, &scale, 1);
+			m_passSampling.SetConstant(nameTexToWorldS, scale, eHWSC_Pixel);
 
-			pShader->FXSetPSFloat(nameTransform, (Vec4*)matHMAOTransform.GetData(), 4);
+			m_passSampling.SetConstantArray(nameTransform, (Vec4*)matHMAOTransform.GetData(), 4, eHWSC_Pixel);
 
 			m_passSampling.Execute();
 		}
@@ -127,9 +133,9 @@ void CHeightMapAOStage::Execute(ShadowMapFrustum*& pHeightMapFrustum, CTexture*&
 				m_passSmoothing.SetRenderTarget(0, CTexture::s_ptexHeightMapAO[1]);
 				m_passSmoothing.SetState(GS_NODEPTHTEST);
 
-				m_passSmoothing.SetTextureSamplerPair(0, pDestRT, m_samplerPoint);
-				m_passSmoothing.SetTextureSamplerPair(1, pDepthTextures[resolutionIndex], m_samplerPoint);
-				m_passSmoothing.SetTextureSamplerPair(2, CDeferredShading::Instance().GetResolvedStencilRT(), m_samplerPoint);
+				m_passSmoothing.SetTextureSamplerPair(0, pDestRT, EDefaultSamplerStates::PointClamp);
+				m_passSmoothing.SetTextureSamplerPair(1, pDepthTextures[resolutionIndex], EDefaultSamplerStates::PointClamp);
+				m_passSmoothing.SetTextureSamplerPair(2, CDeferredShading::Instance().GetResolvedStencilRT(), EDefaultSamplerStates::PointClamp);
 			}
 
 			static CCryNameR namePixelOffset("PixelOffset");
@@ -137,10 +143,9 @@ void CHeightMapAOStage::Execute(ShadowMapFrustum*& pHeightMapFrustum, CTexture*&
 
 			m_passSmoothing.BeginConstantUpdate();
 
-			Vec4 param0(0, 0, (float)pDestRT->GetWidth(), (float)pDestRT->GetHeight());
-			pShader->FXSetVSFloat(namePixelOffset, &param0, 1);
-
-			pShader->FXSetPSFloat(nameClipVolumeData, pClipVolumeParams, min((uint32)MAX_DEFERRED_CLIP_VOLUMES, clipVolumeCount + VIS_AREAS_OUTDOOR_STENCIL_OFFSET));
+			m_passSmoothing.SetConstant(namePixelOffset, Vec4 (0, 0, (float)pDestRT->GetWidth(), (float)pDestRT->GetHeight()), eHWSC_Vertex);
+			m_passSmoothing.SetConstantArray(nameClipVolumeData, pClipVolumeParams, 
+				min(static_cast<uint32>(CClipVolumesStage::MaxDeferredClipVolumes), static_cast<uint32>(clipVolumeCount + CClipVolumesStage::VisAreasOutdoorStencilOffset)), eHWSC_Pixel);
 
 			m_passSmoothing.Execute();
 		}

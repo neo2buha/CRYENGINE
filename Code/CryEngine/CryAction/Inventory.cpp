@@ -7,7 +7,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 18:8:2005   17:27 : Created by Márcio Martins
+   - 18:8:2005   17:27 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #include "StdAfx.h"
@@ -17,7 +17,6 @@
 #include "CryAction.h"
 #include "ScriptBind_Inventory.h"
 #include "IActorSystem.h"
-#include <CryEntitySystem/IEntityPoolManager.h>
 
 //------------------------------------------------------------------------
 CInventory::CInventory()
@@ -33,7 +32,7 @@ CInventory::CInventory()
 //------------------------------------------------------------------------
 CInventory::~CInventory()
 {
-	CCryAction* pCryAction = static_cast<CCryAction*>(gEnv->pGame->GetIGameFramework());
+	CCryAction* pCryAction = static_cast<CCryAction*>(gEnv->pGameFramework);
 	pCryAction->GetInventoryScriptBind()->DetachFrom(this);
 }
 
@@ -42,7 +41,7 @@ bool CInventory::Init(IGameObject* pGameObject)
 {
 	SetGameObject(pGameObject);
 	// attach script bind
-	CCryAction* pCryAction = static_cast<CCryAction*>(gEnv->pGame->GetIGameFramework());
+	CCryAction* pCryAction = static_cast<CCryAction*>(gEnv->pGameFramework);
 	pCryAction->GetInventoryScriptBind()->AttachTo(this);
 
 	m_pGameFrameWork = pCryAction;
@@ -66,69 +65,16 @@ bool CInventory::ReloadExtension(IGameObject* pGameObject, const SEntitySpawnPar
 void CInventory::PostReloadExtension(IGameObject* pGameObject, const SEntitySpawnParams& params)
 {
 	// attach script bind
-	CCryAction* pCryAction = static_cast<CCryAction*>(gEnv->pGame->GetIGameFramework());
+	CCryAction* pCryAction = static_cast<CCryAction*>(gEnv->pGameFramework);
 	pCryAction->GetInventoryScriptBind()->AttachTo(this);
 
 	m_pActor = pCryAction->GetIActorSystem()->GetActor(pGameObject->GetEntityId());
 }
 
 //------------------------------------------------------------------------
-bool CInventory::GetEntityPoolSignature(TSerialize signature)
-{
-	signature.BeginGroup("Inventory");
-	signature.EndGroup();
-	return true;
-}
-
-//------------------------------------------------------------------------
 void CInventory::FullSerialize(TSerialize ser)
 {
 	MEMSTAT_CONTEXT(EMemStatContextTypes::MSC_Other, 0, "Inventory serialization");
-
-	IEntityPoolManager* pMgr = gEnv->pEntitySystem->GetIEntityPoolManager();
-
-	if (pMgr && !gEnv->pSystem->IsSerializingFile())
-	{
-		// Entities being activated from the pool shouldn't
-		//	serialize their inventories. The item ids in the bookmark
-		//	refer to the previous entities which no longer exist, instead the
-		//	actor will have been given a new equipment pack instead.
-		//	In that case just holster the default weapon. We will have to
-		//  select it after on the behavior or on the entity side
-
-		if (ser.IsReading())
-		{
-			EntityId currentItemId = 0;
-			bool isUsing = false;
-
-			ser.Value("using", isUsing);
-			ser.Value("CurrentItem", currentItemId);
-
-			if (currentItemId)
-			{
-				IItem* pItem = m_pGameFrameWork->GetIItemSystem()->GetItem(currentItemId);
-				if (pItem && isUsing && !pItem->IsUsed())
-				{
-					pItem->Use(GetEntityId());
-
-					return;
-				}
-			}
-
-			HolsterItem(true);
-		}
-		else
-		{
-			bool isUsing = false;
-			if (IItem* pItem = m_pGameFrameWork->GetIItemSystem()->GetItem(m_stats.currentItemId))
-				isUsing = pItem->IsUsed() && pItem->GetOwnerId() == GetEntityId();
-
-			ser.Value("using", isUsing);
-			ser.Value("CurrentItem", m_stats.currentItemId);
-		}
-
-		return;
-	}
 
 	ser.BeginGroup("InventoryItems");
 
@@ -270,7 +216,7 @@ void CInventory::PostSerialize()
 	const bool ownerActorIsClientNotInVehicle = (m_pActor != NULL) && m_pActor->IsClient() && (m_pActor->GetLinkedVehicle() == NULL);
 	if (ownerActorIsClientNotInVehicle)
 	{
-		IItem* pCurrentItem = gEnv->pGame->GetIGameFramework()->GetIItemSystem()->GetItem(m_stats.currentItemId);
+		IItem* pCurrentItem = gEnv->pGameFramework->GetIItemSystem()->GetItem(m_stats.currentItemId);
 		if ((pCurrentItem != NULL) && (pCurrentItem->GetOwnerId() == 0))
 		{
 			if (pCurrentItem->CanUse(m_pActor->GetEntityId()))
@@ -540,8 +486,8 @@ void CInventory::ProcessEvent(SEntityEvent& event)
 			else
 			{
 				// leaving game mode
-				if (m_stats.currentItemId != m_editorstats.currentItemId)
-					m_pGameFrameWork->GetIItemSystem()->SetActorItem(m_pActor, m_editorstats.currentItemId, false);
+				if (m_stats.currentItemId != INVALID_ENTITYID)
+					m_pGameFrameWork->GetIItemSystem()->SetActorItem(m_pActor, INVALID_ENTITYID, false);
 				m_stats = m_editorstats;
 
 				//Validate inventory, some things might have changed, like some FG removing items while in editor game
@@ -631,7 +577,7 @@ void CInventory::Destroy()
 	if (!GetISystem()->IsSerializingFile())
 	{
 		IEntitySystem* pEntitySystem = gEnv->pEntitySystem;
-		IItemSystem* pItemSystem = gEnv->pGame->GetIGameFramework()->GetIItemSystem();
+		IItemSystem* pItemSystem = gEnv->pGameFramework->GetIItemSystem();
 
 		TInventoryVector deleteList = m_stats.slots;
 		for (TInventoryIt it = deleteList.begin(); it != deleteList.end(); ++it)
@@ -666,7 +612,7 @@ void CInventory::Clear(bool forceClear)
 
 	if (!gEnv->bServer)
 	{
-		IItemSystem* pItemSystem = gEnv->pGame->GetIGameFramework()->GetIItemSystem();
+		IItemSystem* pItemSystem = gEnv->pGameFramework->GetIItemSystem();
 
 		TInventoryIt end = m_stats.slots.end();
 		for (TInventoryIt it = m_stats.slots.begin(); it != end; ++it)
@@ -791,7 +737,7 @@ int CInventory::GetCountOfClass(const char* className) const
 //------------------------------------------------------------------------
 int CInventory::GetCountOfCategory(const char* categoryName) const
 {
-	IItemSystem* pItemSystem = gEnv->pGame->GetIGameFramework()->GetIItemSystem();
+	IItemSystem* pItemSystem = gEnv->pGameFramework->GetIItemSystem();
 
 	int count = 0;
 	TInventoryCIt end = m_stats.slots.end();
@@ -824,7 +770,7 @@ int CInventory::GetCountOfUniqueId(uint8 uniqueId) const
 	if (!uniqueId)
 		return 0;
 
-	IItemSystem* pItemSystem = gEnv->pGame->GetIGameFramework()->GetIItemSystem();
+	IItemSystem* pItemSystem = gEnv->pGameFramework->GetIItemSystem();
 
 	int count = 0;
 	TInventoryCIt end = m_stats.slots.end();
@@ -912,7 +858,7 @@ IItem* CInventory::GetItemByName(const char* name) const
 	{
 		if (IEntity* pEntity = pEntitySystem->GetEntity(*it))
 			if (!strcmp(pEntity->GetName(), name))
-				return gEnv->pGame->GetIGameFramework()->GetIItemSystem()->GetItem(pEntity->GetId());
+				return gEnv->pGameFramework->GetIItemSystem()->GetItem(pEntity->GetId());
 	}
 
 	return 0;
@@ -1400,7 +1346,7 @@ IMPLEMENT_RMI(CInventory, SvReq_AddItem)
 {
 	TRMIInventory_Item Info(params);
 
-	gEnv->pGame->GetIGameFramework()->GetIItemSystem()->GiveItem(GetActor(), Info.m_ItemClass.c_str(), false, true, true);
+	gEnv->pGameFramework->GetIItemSystem()->GiveItem(GetActor(), Info.m_ItemClass.c_str(), false, true, true);
 
 	return true;
 }

@@ -22,7 +22,7 @@ class CResponseInstance final : public DRS::IResponseInstance
 {
 public:
 	CResponseInstance(SSignal& signal, CResponse* pResponse);
-	virtual ~CResponseInstance();
+	virtual ~CResponseInstance() override;
 
 	void Execute();
 	bool Update();
@@ -33,14 +33,15 @@ public:
 	virtual CResponseActor*                   GetCurrentActor() const override                             { return m_pActiveActor; }
 	virtual void                              SetCurrentActor(DRS::IResponseActor* pNewResponder) override { m_pActiveActor = static_cast<CResponseActor*>(pNewResponder); }
 	virtual CResponseActor* const             GetOriginalSender() const override                           { return m_pSender; }
-	virtual DRS::IVariableCollectionSharedPtr GetContextVariables() const override                         { return std::static_pointer_cast<DRS::IVariableCollection>(m_pSignalContext); }
 	virtual const CHashedString&              GetSignalName() const override                               { return m_signalName; }
+	virtual const DRS::SignalInstanceId       GetSignalInstanceId() const override                         { return m_id; }
+	virtual DRS::IVariableCollectionSharedPtr GetContextVariables() const override                         { return std::static_pointer_cast<DRS::IVariableCollection>(m_pSignalContext); }
 	//////////////////////////////////////////////////////////
 
 	void                        SetCurrentActor(CResponseActor* pNewResponder) { m_pActiveActor = pNewResponder; }
-	VariableCollectionSharedPtr GetContextVariablesImpl() const                { return m_pSignalContext; }
 	CResponse*                  GetResponse()                                  { return m_pResponse; }
-	const DRS::SignalId         GetSignalId() const                            { return m_id; }
+	VariableCollectionSharedPtr GetContextVariablesImpl() const                { return m_pSignalContext; }
+	CResponseSegment*           GetCurrentSegment()                            { return m_pCurrentlyExecutedSegment; }
 
 private:
 	void ExecuteSegment(CResponseSegment* pSegment);
@@ -53,7 +54,7 @@ private:
 	CResponseSegment*           m_pCurrentlyExecutedSegment;
 	ActionInstanceList          m_activeActions;
 	const CHashedString         m_signalName;
-	const DRS::SignalId         m_id;
+	const DRS::SignalInstanceId m_id;
 	CResponse*                  m_pResponse;
 };
 }  //namespace CryDRS

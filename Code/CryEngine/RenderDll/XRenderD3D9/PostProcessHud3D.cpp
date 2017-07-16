@@ -68,7 +68,7 @@ int C3DHud::CreateResources()
 {
 	SAFE_RELEASE(m_pNoise);
 
-	m_pNoise = CTexture::ForName("EngineAssets/Textures/vector_noise.dds", FT_DONT_STREAM, eTF_Unknown);
+	m_pNoise = CTexture::ForName("%ENGINE%/EngineAssets/Textures/vector_noise.dds", FT_DONT_STREAM, eTF_Unknown);
 
 	return true;
 }
@@ -274,7 +274,7 @@ void C3DHud::SetTextures(SHudData& pData)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void C3DHud::RenderMesh(const CRendElementBase* pRE, SShaderPass* pPass)
+void C3DHud::RenderMesh(const CRenderElement* pRE, SShaderPass* pPass)
 {
 	CD3D9Renderer* const __restrict rd = gcpRendD3D;
 	CREMesh* pRenderMesh = (CREMeshImpl*) pRE;
@@ -288,7 +288,7 @@ void C3DHud::RenderMesh(const CRendElementBase* pRE, SShaderPass* pPass)
 		rd->m_RP.m_CurVFormat = pRenderMesh->m_pRenderMesh->_GetVertexFormat();
 	}
 
-	rd->m_RP.m_pRE = const_cast<CRendElementBase*>(pRE);
+	rd->m_RP.m_pRE = const_cast<CRenderElement*>(pRE);
 	if (rd->FX_CommitStreams(pPass, true))
 	{
 		rd->m_RP.m_FirstVertex = pRenderMesh->m_nFirstVertId;
@@ -695,7 +695,7 @@ void C3DHud::RenderFinalPass()
 			vHudEffectParams[1].z = 0.0f;
 			vHudEffectParams[1].w = m_interferenceRandNums.w;
 
-			GetUtils().SetTexture(m_pNoise, 2, FILTER_POINT, TADDR_WRAP);
+			GetUtils().SetTexture(m_pNoise, 2, FILTER_POINT, eSamplerAddressMode_Wrap);
 		}
 
 #if !defined(_RELEASE) && !defined(CONSOLE_CONST_CVAR_MODE)
@@ -795,7 +795,8 @@ void C3DHud::Render()
 
 	// If post-stereo not enabled, update flash player
 	// NanoGlass also updates Flash
-	if ((!bPostProcStereo && !PostEffectMgr()->GetEffect(ePFX_NanoGlass)->IsActive()) || m_pHUD_RT == NULL)
+	if (gcpRendD3D->m_nGraphicsPipeline == 0
+	    && ((!bPostProcStereo && !PostEffectMgr()->GetEffect(ePFX_NanoGlass)->IsActive()) || m_pHUD_RT == NULL))
 	{
 		FlashUpdateRT();
 	}

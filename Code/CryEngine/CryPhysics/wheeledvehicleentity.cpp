@@ -51,9 +51,8 @@ CWheeledVehicleEntity::CWheeledVehicleEntity(CPhysicalWorld *pworld, IGeneralMem
 	, m_pullTilt(0.0f)
 	, m_drivingTorque(0.0f)
 	, m_maxTilt(0.866f)
+	, m_wheelMassScale(0.0f)
 {
-	ZeroArray(m_susp);
-
 	m_engineMinw = m_engineMaxw*0.05f;
 	m_wengine = m_engineIdlew = m_engineMaxw*0.1f;
 	m_engineShiftUpw = m_engineMaxw*0.5f;
@@ -97,10 +96,15 @@ int CWheeledVehicleEntity::SetParams(pe_params *_params, int bThreadSafe)
 			else i = params->ipart;
 			if (i>=m_nParts)
 				return 0;
-			if (i>=m_nHullParts && (!is_unused(params->pPhysGeom) || !is_unused(params->pPhysGeomProxy))) {
-				m_susp[i-m_nHullParts].q0 = m_parts[i].q;
-				m_susp[i-m_nHullParts].pos0 = m_parts[i].pos;
-				m_susp[i-m_nHullParts].ptc0 = m_parts[i].q*m_parts[i].pPhysGeomProxy->origin + m_parts[i].pos;
+			if (i>=m_nHullParts) {
+				if (!is_unused(params->pPhysGeom) || !is_unused(params->pPhysGeomProxy)) {
+					m_susp[i-m_nHullParts].q0 = m_parts[i].q;
+					m_susp[i-m_nHullParts].pos0 = m_parts[i].pos;
+					m_susp[i-m_nHullParts].ptc0 = m_parts[i].q*m_parts[i].pPhysGeomProxy->origin + m_parts[i].pos;
+				}
+				(m_susp[i-m_nHullParts].flags0 &= params->flagsAND) |= params->flagsOR;
+				(m_susp[i-m_nHullParts].flagsCollider0 &= params->flagsColliderAND) |= params->flagsColliderOR;
+				m_parts[i].flagsCollider = 0;
 			}
 		}
 		return res;
@@ -141,6 +145,7 @@ int CWheeledVehicleEntity::SetParams(pe_params *_params, int bThreadSafe)
     if (!is_unused(params->pullTilt)) m_pullTilt = params->pullTilt; 
 		if (!is_unused(params->maxTilt)) m_maxTilt = params->maxTilt;
 		if (!is_unused(params->bKeepTractionWhenTilted)) m_bKeepTractionWhenTilted = params->bKeepTractionWhenTilted;
+		if (!is_unused(params->wheelMassScale)) m_wheelMassScale = params->wheelMassScale;
 		return 1;
 	}
 
@@ -214,6 +219,7 @@ int CWheeledVehicleEntity::GetParams(pe_params *_params) const
 		params->nWheels = m_nParts-m_nHullParts;
 		params->maxTilt = m_maxTilt;
 		params->bKeepTractionWhenTilted = m_bKeepTractionWhenTilted;
+		params->wheelMassScale = m_wheelMassScale;
 		return 1;
 	}
 
@@ -243,7 +249,14 @@ int CWheeledVehicleEntity::GetParams(pe_params *_params) const
 		return 1;
 	}
 
-	return CRigidEntity::GetParams(_params);
+	int res = CRigidEntity::GetParams(_params);
+	if (res && _params->type==pe_params_part::type_id && ((pe_params_part*)_params)->ipart>=m_nHullParts) {
+		pe_params_part *params = (pe_params_part*)_params;
+		params->flagsOR=params->flagsAND = m_susp[params->ipart-m_nHullParts].flags0;
+		params->flagsColliderOR=params->flagsColliderAND = m_susp[params->ipart-m_nHullParts].flagsCollider0;
+	}
+
+	return res;
 }
 
 
@@ -289,7 +302,7 @@ int CWheeledVehicleEntity::Action(pe_action *_action, int bThreadSafe)
 					// maxY, y-position of most forward wheel, minY, y-position of furthest back wheel
 					const int numWheels = m_nParts - m_nHullParts;
 					float ackermanOffset, maxX=0.f, maxY=-10.f, minY=+10.f, dir=fsgnf(m_steer);
-					for (int j=0;j<numWheels;j++) if (m_susp[j].iAxle>=0) {
+					for (int j=0;j<numWheels;j++) if (m_susp[j].iAxle>=0 && m_susp[j].bCanSteer) {
 						minY = min(minY, m_susp[j].pt.y); maxY = max(maxY, m_susp[j].pt.y); maxX = max(maxX, fabsf(m_susp[j].pt.x));
 					}
 					ackermanOffset = minY + m_ackermanOffset*(maxY - minY);
@@ -297,16 +310,23 @@ int CWheeledVehicleEntity::Action(pe_action *_action, int bThreadSafe)
 					if (maxY>0.01f) {
 						float tanSteer = tanf(fabsf(m_steer));  // NB: turningRadius = maxY / tanf(fabsf(m_steer));
 						for (int j=0;j<numWheels;j++) if (m_susp[j].iAxle>=0 && m_susp[j].bCanSteer) {
-							float y = m_susp[j].pt.y-ackermanOffset;
+							float y = m_susp[j].pt.y-ackermanOffset, steer0=m_susp[j].steer;
 							m_susp[j].steer = dir*atanf( y*tanSteer / (maxY + tanSteer*(maxX - m_susp[j].pt.x*dir)));
+							if (m_wheelMassScale && max(fabs_tpl(steer0),fabs_tpl(m_susp[j].steer))>0.01f) {
+								Vec3 axis0(ZERO),axis1(ZERO); 
+								sincos_tpl(-steer0, &axis0.y,&axis0.x);
+								sincos_tpl(-m_susp[j].steer, &axis1.y,&axis1.x);
+								m_body.L -= m_qrot*(axis1-axis0)*(-m_susp[j].w*m_wheelMassScale/m_susp[j].Iinv);
+							}
 						}
+						if (m_wheelMassScale)
+							m_body.w = m_body.Iinv*m_body.L;
 					}
 				} else for(i=0;i<m_nParts-m_nHullParts;i++) m_susp[i].steer=0;
 
 				{ WriteLock lock(m_lockUpdate); 
 					for(i=0;i<m_nParts-m_nHullParts;i++) {
 						m_susp[i].q=m_parts[i+m_nHullParts].q = Quat::CreateRotationAA(m_susp[i].steer,Vec3(0,0,-1))*m_susp[i].q0;
-						//GetRotationAA(m_susp[i].steer,Vec3(0,0,-1))*GetRotationAA(m_susp[i].rot,Vec3(-1,0,0))*m_susp[i].q0;
 						Vec3 ptc1 = m_parts[i+m_nHullParts].q*m_parts[i+m_nHullParts].pPhysGeomProxy->origin + m_susp[i].pos0;
 						(m_parts[i+m_nHullParts].pos = m_susp[i].pos0+m_susp[i].ptc0-ptc1).z -= m_susp[i].curlen-m_susp[i].len0;
 						m_susp[i].pos = m_parts[i+m_nHullParts].pos;
@@ -347,7 +367,6 @@ int CWheeledVehicleEntity::GetStatus(pe_status* _status) const
 		Vec3 prevpos,ptc1; 
 		quaternionf prevq;
 		iwheel = i-m_nHullParts;
-		assert(iwheel < NMAXWHEELS);
 		if ((unsigned int)iwheel<(unsigned int)(m_nParts-m_nHullParts)) {
 			// only rotate wheels when status pos is requested; keep them unrotated internally
 			SpinLock(&m_lockUpdate,0,iLock=WRITE_LOCK_VAL);
@@ -466,7 +485,8 @@ void CWheeledVehicleEntity::RecalcSuspStiffness()
 	if (m_body.Minv<=0)
 		return;
 	Vec3 cm=(m_body.pos-m_pos)*m_qrot, sz=(m_BBox[1]-m_BBox[0]), r;
-	int i,j, idx[NMAXWHEELS]; const int numWheels = m_nParts - m_nHullParts;
+	const int numWheels = m_nParts - m_nHullParts;
+	int i,j, *idx = (int*)alloca(numWheels*sizeof(int)); 
 	float scale[2]={0.f,0.f}, force[2]={0.f,0.f}, torque[2]={0.f,0.f}, y, w, denom;
 	float e = max(max(sz.x,sz.y),sz.z)*0.02f;
 	Matrix33 R,Iinv; 
@@ -481,25 +501,34 @@ void CWheeledVehicleEntity::RecalcSuspStiffness()
 
 	for(i=0;i<numWheels;i++) m_susp[i].iBuddy = -1;
 	// first, force nearly symmetrical wheels to be symmetrical (if they are on the same axle)
-	for(i=0;i<numWheels;i++) for(j=i+1;j<numWheels;j++) 
-	if (m_susp[j].iAxle==m_susp[i].iAxle) {
-		if (fabs_tpl(m_susp[i].pt.y-m_susp[j].pt.y)<e && fabs_tpl(m_susp[i].pt.x+m_susp[j].pt.x)<e) {
-			m_susp[j].pt(-m_susp[i].pt.x, m_susp[i].pt.y, m_susp[i].pt.z);
-			m_susp[j].ptc0(-m_susp[i].ptc0.x, m_susp[i].ptc0.y, m_susp[i].ptc0.z);
+	for(i=0;i<numWheels;i++) {
+		Vec3 ptc0 = m_susp[i].ptc0;
+		for(j=i+1;j<numWheels;j++) if (m_susp[j].iAxle==max(0,(int)m_susp[i].iAxle)) {
+			if (fabs_tpl(m_susp[i].pt.y-m_susp[j].pt.y)<e && fabs_tpl(m_susp[i].pt.x+m_susp[j].pt.x)<e) {
+				m_susp[j].pt.Set(-m_susp[i].pt.x, m_susp[i].pt.y, m_susp[i].pt.z);
+				m_susp[j].ptc0.Set(-m_susp[i].ptc0.x, m_susp[i].ptc0.y, m_susp[i].ptc0.z);
+			}
+			m_susp[i].iBuddy = j;	m_susp[j].iBuddy = i;
+			break;
 		}
-		m_susp[i].iBuddy = j;	m_susp[j].iBuddy = i;
-		break;
+		if (m_susp[i].iBuddy<0 && m_susp[i].iAxle>=0 && fabs_tpl(m_susp[i].ptc0.x)<e) {
+			m_susp[i].pt.x -= m_susp[i].ptc0.x;
+			m_susp[i].ptc0.x = 0;
+		}
+		m_parts[m_nHullParts+i].pos = (m_susp[i].pos += m_susp[i].ptc0-ptc0);
 	}
+	if (m_wheelMassScale>0)
+		RecomputeMassDistribution();
 
-	// Auto calculate the suspension stiffness by balancing the left-right torque
-	for(i=0;i<numWheels;i++) if (m_susp[i].iAxle>=0) {
+	// Auto calculate the suspension stiffness by balancing the front-back torque
+	for(i=0;i<numWheels;i++) {
 		y = m_susp[i].pt.y - cm.y;
-		w = max(0.f, m_susp[i].kStiffnessWeight);
+		w = max(0.f, m_susp[i].kStiffnessWeight)*isneg(-m_susp[i].iAxle-1);
 		idx[i] = (m_susp[i].pt.y - cm.y)>=0.f ? 1:0;
 		force[idx[i]] += w;
 		torque[idx[i]] += y*w;
 	}
-	// Solve for (force[0] * scale_left  + force[1] * scale_right == 1.0) && (torque[0] * scale_left + torque[1] * scale_right == 0.0)
+	// Solve for (force[0] * scale_back  + force[1] * scale_front == 1.0) && (torque[0] * scale_back + torque[1] * scale_front == 0.0)
 	denom = torque[1]*force[0] - torque[0]*force[1];
 	if (denom>1e-4f) {
 		float mg = -m_body.M*m_gravity.z;
@@ -508,8 +537,7 @@ void CWheeledVehicleEntity::RecalcSuspStiffness()
 		scale[1] = -mg*torque[0] * denom;
 		for(i=0;i<numWheels;i++)
 			m_susp[i].kStiffness = (m_susp[i].kStiffnessWeight>0.f) ? (scale[idx[i]] * m_susp[i].kStiffnessWeight) : (-mg * m_susp[i].kStiffnessWeight/(float)numWheels);
-	}
-	else for(i=0;i<numWheels;i++)
+	} else for(i=0;i<numWheels;i++)
 		m_susp[i].kStiffness = m_susp[i].Mpt*-m_gravity.z;			
 
 	for(i=0;i<numWheels;i++) if (m_susp[i].fullen>0) {
@@ -551,7 +579,7 @@ int CWheeledVehicleEntity::AddGeometry(phys_geometry *pgeom, pe_geomparams *_par
 		}
 		params->flags |= geom_car_wheel;//geom_colltype_player|geom_colltype_ray;
 		params->flagsCollider = 0;
-		params->density = params->mass = 0;
+		params->density*=m_wheelMassScale; params->mass*=m_wheelMassScale;
 	}
 
 	int nPartsOld=m_nParts,i;
@@ -560,7 +588,7 @@ int CWheeledVehicleEntity::AddGeometry(phys_geometry *pgeom, pe_geomparams *_par
 	m_parts[m_nParts-1].flags |= geom_monitor_contacts;
 	pgeom = m_parts[m_nParts-1].pPhysGeom;
 
-	if (params->bDriving<0 || m_nParts-m_nHullParts>NMAXWHEELS) {
+	if (params->bDriving<0) {
 		if (m_nParts > nPartsOld) {
 			if (m_nHullParts < m_nParts-1) {
 				geom defpart;
@@ -575,6 +603,11 @@ int CWheeledVehicleEntity::AddGeometry(phys_geometry *pgeom, pe_geomparams *_par
 		}
 	} else {
 		int idx = m_nParts-1-m_nHullParts;
+		if (idx>=m_suspAlloc) {
+			ReallocateList(m_susp, m_suspAlloc, idx+4&~3, true);
+			m_suspAlloc = idx+4 & ~3;
+			for(i=m_nHullParts; i<m_nParts; i++) m_parts[i].pNewCoords = (coord_block_BBox*)&m_susp[i-m_nHullParts].pos;
+		}
 		m_susp[idx].bDriving = params->bDriving;
 		m_susp[idx].iAxle = params->iAxle;
 		m_susp[idx].bCanBrake = params->bCanBrake;
@@ -605,29 +638,20 @@ int CWheeledVehicleEntity::AddGeometry(phys_geometry *pgeom, pe_geomparams *_par
 		m_susp[idx].contact.Pspare = 0;
 		m_susp[idx].pCollEvent = 0;
 		box bbox; pgeom->pGeom->GetBBox(&bbox);
-		float diff,maxdiff=-1.0f;
-		for(i=0;i<3;i++) 
-		if ((diff = min(fabs_tpl(bbox.size[i]-bbox.size[inc_mod3[i]]),fabs_tpl(bbox.size[i]-bbox.size[dec_mod3[i]])))>maxdiff)
-		{ maxdiff=diff; m_susp[idx].r=bbox.size[inc_mod3[i]]; m_susp[idx].width=bbox.size[i]; }
+		m_susp[idx].r = max(max(bbox.size.x,bbox.size.y),bbox.size.z);
+		m_susp[idx].width = min(min(bbox.size.x,bbox.size.y),bbox.size.z);
 		assert(density);
-		m_susp[idx].Iinv = 1.0f/(pgeom->Ibody.z*density);
+		m_susp[idx].Iinv = 1.0f/(max(max(pgeom->Ibody.x,pgeom->Ibody.y),pgeom->Ibody.z)*density);
 		m_susp[idx].rinv = 1.0f/m_susp[idx].r;
 
 		Vec3 r = m_susp[idx].pt-m_body.pos+m_pos;
 		Matrix33 R,Iinv; 
-		//(!m_qrot*m_body.q).getmatrix(R); //Q2M_IVO
 		R = Matrix33(!m_qrot*m_body.q);
 		Iinv = R*m_body.Ibody_inv*R.T();
 		if (m_body.Minv>0)
 			m_susp[idx].Mpt = 1.0f/(m_body.Minv+(Iinv*Vec3(r.y,-r.x,0)^r).z);
 
 		m_susp[idx].kDamping0 = params->kDamping;
-		if (params->kStiffness==0)
-			RecalcSuspStiffness();
-		else {
-			m_susp[idx].kStiffness = params->kStiffness;
-			m_susp[idx].kDamping = params->kDamping;
-		}
 		m_susp[idx].bSlip = 0;
 		m_parts[idx+m_nHullParts].pNewCoords = (coord_block_BBox*)&m_susp[idx].pos;
 		m_susp[idx].pos = m_parts[idx+m_nHullParts].pos;
@@ -636,6 +660,12 @@ int CWheeledVehicleEntity::AddGeometry(phys_geometry *pgeom, pe_geomparams *_par
 		m_susp[idx].BBox[0] = m_parts[idx+m_nHullParts].BBox[0]; 
 		m_susp[idx].BBox[1] = m_parts[idx+m_nHullParts].BBox[1];
     m_susp[idx].vrel.zero();
+		if (params->kStiffness==0)
+			RecalcSuspStiffness();
+		else {
+			m_susp[idx].kStiffness = params->kStiffness;
+			m_susp[idx].kDamping = params->kDamping;
+		}
 	}
 	m_iVarPart0 = m_nHullParts;
 
@@ -709,12 +739,12 @@ void CWheeledVehicleEntity::CheckAdditionalGeometry(float time_interval)
 			r = m_BBox[1]-m_BBox[0]; r.x = max(max(r.x,r.y),r.z);
 			BBoxEnt[0]=Vec3(r.x); BBoxEnt[1]=Vec3(-r.x);
 			for(j1=0; j1<pentlist[i]->m_nParts; j1++) {
+				pentlist[i]->GetPartTransform(j1, gwd[1].offset,gwd[1].R,gwd[1].scale, this);
 				pentlist[i]->m_parts[j1].pPhysGeomProxy->pGeom->GetBBox(&abox);
-				gwd[1].R = Matrix33(!m_qNew*pentlist[i]->m_qrot*pentlist[i]->m_parts[j1].q);
-				abox.Basis *= gwd[1].R.T();
+				//gwd[1].R = Matrix33(!m_qNew*pentlist[i]->m_qrot*pentlist[i]->m_parts[j1].q);
+				abox.Basis *= gwd[1].R.T() * Matrix33(m_qNew);
 				r = (abox.size*abox.Basis.Fabs())*pentlist[i]->m_parts[j1].scale;
-				ptcw = (pentlist[i]->m_pos + pentlist[i]->m_qrot*(pentlist[i]->m_parts[j1].pos + 
-					pentlist[i]->m_parts[j1].q*abox.center*pentlist[i]->m_parts[j1].scale) - m_posNew)*m_qNew;
+				ptcw = (gwd[1].offset + gwd[1].R*abox.center*gwd[1].scale - m_posNew)*m_qNew;
 				BBoxEnt[0] = min(BBoxEnt[0], ptcw-r);
 				BBoxEnt[1] = max(BBoxEnt[1], ptcw+r);
 			}
@@ -808,15 +838,13 @@ void CWheeledVehicleEntity::CheckAdditionalGeometry(float time_interval)
 			gwd[0].centerOfMass = m_body.pos;
 			ip.time_interval = time_interval*1.4f;
 		}
+		Vec3 partBBox[2];
 
 		for(ient=0;ient<nents;ient++) for(j=0; j<pentlist[ient]->m_nParts; j++) 
 		if (pentlist[ient]->m_parts[j].flags & m_susp[iwheel].flagsCollider0 && 
-				((pentlist[ient]->m_parts[j].BBox[1]-pentlist[ient]->m_parts[j].BBox[0]).len2()==0 || AABB_overlap(pentlist[ient]->m_parts[j].BBox,BBoxWheel))) 
+				((pentlist[ient]->m_parts[j].BBox[1]-pentlist[ient]->m_parts[j].BBox[0]).len2()==0 || AABB_overlap(pentlist[ient]->GetPartBBox(j,partBBox,this),BBoxWheel))) 
 		{
-			gwd[1].offset = pentlist[ient]->m_pos + pentlist[ient]->m_qrot*pentlist[ient]->m_parts[j].pos;
-			gwd[1].R = Matrix33(pentlist[ient]->m_qrot*pentlist[ient]->m_parts[j].q);
-			gwd[1].scale = pentlist[ient]->m_parts[j].scale;
-
+			pentlist[ient]->GetPartTransform(j, gwd[1].offset,gwd[1].R,gwd[1].scale, this);
 			if (!bRayCast)
 				ncontacts = m_parts[i].pPhysGeomProxy->pGeom->Intersect(pentlist[ient]->m_parts[j].pPhysGeomProxy->pGeom, gwd+0,gwd+1, &ip, pcontacts);
 			else {
@@ -845,11 +873,13 @@ void CWheeledVehicleEntity::CheckAdditionalGeometry(float time_interval)
 						m_susp[iwheel].pbody = pentlist[ient]->GetRigidBody(j);
 						m_susp[iwheel].surface_idx[0] = GetMatId(pcontacts[icont].id[0],i);
 						m_susp[iwheel].surface_idx[1] = pentlist[ient]->GetMatId(pcontacts[icont].id[1],j);
-						// always project contact point to the outer wheel edge
-						m_susp[iwheel].ptcontact = pcontacts[icont].pt + axis*(m_susp[iwheel].width-axis*(pcontacts[icont].pt-ptcw)); 
+						// project contact point to the outer wheel edge if the wheel has a buddy on the opposite side of the axle, and to the center otherwise
+						m_susp[iwheel].ptcontact = pcontacts[icont].pt + axis*(m_susp[iwheel].width*isneg(-m_susp[iwheel].iBuddy-1)-axis*(pcontacts[icont].pt-ptcw)); 
 						m_susp[iwheel].ncontact = -pcontacts[icont].n;
-						if (bHasMatSubst && m_susp[iwheel].pent->m_id==-1) for(ient1=0;ient1<nents;ient1++) for(int j2=0;j2<pentlist[ient1]->GetUsedPartsCount(iCaller);j2++)
+						int scMask = (2<<m_susp[iwheel].pent->m_iSimClass)-(m_susp[iwheel].pent->m_id>>31);
+						if (bHasMatSubst & scMask) for(ient1=0;ient1<nents;ient1++) for(int j2=0;j2<pentlist[ient1]->GetUsedPartsCount(iCaller);j2++)
 							if (pentlist[ient1]->m_parts[j1=pentlist[ient1]->GetUsedPart(iCaller,j2)].flags & geom_mat_substitutor && 
+									pentlist[ient1]->m_parts[j1].flagsCollider & scMask &&
 									pentlist[ient1]->m_parts[j1].pPhysGeom->pGeom->PointInsideStatus(
 										((m_susp[iwheel].ptcontact-pentlist[ient1]->m_pos)*pentlist[ient1]->m_qrot-pentlist[ient1]->m_parts[j1].pos)*pentlist[ient1]->m_parts[j1].q))
 							m_susp[iwheel].surface_idx[1] = pentlist[ient1]->GetMatId(pentlist[ient1]->m_parts[j1].pPhysGeom->surface_idx,j1);
@@ -861,7 +891,7 @@ void CWheeledVehicleEntity::CheckAdditionalGeometry(float time_interval)
 					tmaxTilted = max_safe(tmaxTilted,tcur);
 			}
 		} else 
-			bHasMatSubst |= pentlist[ient]->m_parts[j].flags & geom_mat_substitutor;
+			bHasMatSubst |= pentlist[ient]->m_parts[j].flagsCollider & -((int)pentlist[ient]->m_parts[j].flags & geom_mat_substitutor)>>31;
 
 		//endwheel:
 		if (tmaxTilted>tmax*1.01f) {
@@ -896,6 +926,7 @@ void CWheeledVehicleEntity::CheckAdditionalGeometry(float time_interval)
 		}
 		m_susp[iwheel].curlen = min(newlen, m_susp[iwheel].curlen+time_interval*7.0f);
 		m_susp[iwheel].pos.z += m_susp[iwheel].fullen-m_susp[iwheel].curlen;
+		m_parts[iwheel+m_nHullParts].pos = m_susp[iwheel].pos;
 	}
 
 	if (bFakeInnerWheels) {
@@ -929,6 +960,7 @@ void CWheeledVehicleEntity::CheckAdditionalGeometry(float time_interval)
 				if (m_susp[iwheel].pbody)
 					m_susp[iwheel].vrel -= m_susp[iwheel].pbody->v + (m_susp[iwheel].pbody->w^m_susp[iwheel].ptcontact-m_susp[iwheel].pbody->pos);
 				m_susp[iwheel].contact.vreq.zero();
+				m_parts[iwheel+m_nHullParts].pos = m_susp[iwheel].pos;
 			}
 	}
 
@@ -1283,6 +1315,13 @@ void CWheeledVehicleEntity::AddAdditionalImpulses(float time_interval)
 	if (m_kSteerToTrack!=0) for(i=0;i<m_nParts-m_nHullParts;i++) {
 		m_susp[i].w = m_susp[iDriver[iside = isneg(m_susp[i].pt.x)]].w;
 		m_susp[i].bSlipPull = m_susp[iDriver[iside]].bSlipPull;
+	}
+
+	if (m_wheelMassScale) for(i=0;i<m_nParts-m_nHullParts;i++) {
+		axis = ortx;
+		if (fabs_tpl(m_susp[i].steer)>0.01f)
+			sincos_tpl(-m_susp[i].steer, &axis.y,&axis.x);
+		Lexp -= (m_qNew*axis-m_body.q*m_body.qfb*axis)*(-m_susp[i].w*m_wheelMassScale/m_susp[i].Iinv);
 	}
 
 	m_body.v = (m_body.P+=Pexp)*m_body.Minv; 
@@ -1662,24 +1701,12 @@ int CWheeledVehicleEntity::SetStateFromSnapshot(CStream &stm, int flags)
 
 void SWheeledVehicleEntityNetSerialize::Serialize( TSerialize ser, int nSusp )
 {
-	assert(nSusp <= NMAXWHEELS);
-	
-#if 0
-	// There is little reason to serialise the wheel speeds,
-	// which saves a large amount of bandwidth
-
-	ser.BeginGroup("wheels");
-	for (int i=0; i<nSusp; i++)
-	{
-		ser.Value( numbered_tag("suspension",i), pSusp[i].w, 'pSus');
+	if (ser.GetSerializationTarget()!=eST_Network) {
+		ser.BeginGroup("wheels");
+		for (int i=0; i<nSusp; i++)
+			ser.Value(numbered_tag("suspension",i), pSusp[i].curlen);
+		ser.EndGroup();
 	}
-	for (int i=nSusp; i<NMAXWHEELS; i++)
-	{
-		float virtualSuspW = 0;
-		ser.Value(numbered_tag("suspension",i), virtualSuspW, 'pSus');
-	}
-	ser.EndGroup();
-#endif
 
 	ser.Value("pedal", pedal, 'pPed');
 	ser.Value("steer", steer, 'pStr');
@@ -1707,12 +1734,12 @@ int CWheeledVehicleEntity::GetStateSnapshot(TSerialize ser, float time_back, int
 
 int CWheeledVehicleEntity::SetStateFromSnapshot(TSerialize ser, int flags)
 {
-	static suspension_point susp[NMAXWHEELS];
+	static suspension_point suspDummy;
 
 	bool commit = ser.ShouldCommitValues();
 
 	SWheeledVehicleEntityNetSerialize helper;
-	helper.pSusp = commit? m_susp : susp;
+	helper.pSusp = commit? strided_pointer<suspension_point>(m_susp) : strided_pointer<suspension_point>(&suspDummy,0);
 	helper.Serialize( ser, m_nParts - m_nHullParts );
 
 	if (ser.ShouldCommitValues())
@@ -1725,11 +1752,9 @@ int CWheeledVehicleEntity::SetStateFromSnapshot(TSerialize ser, int flags)
 		m_wengine = helper.wengine;
 		m_iCurGear = helper.curGear;
 #if USE_IMPROVED_RIGID_ENTITY_SYNCHRONISATION
-		if (!m_hasAuthority)
+		if (!m_hasAuthority || ser.GetSerializationTarget()!=eST_Network)
 #endif
-		{
 			Action( &ad, 0 );
-		}
 	}
 
 	return CRigidEntity::SetStateFromSnapshot( ser, flags );
@@ -1749,7 +1774,8 @@ void CWheeledVehicleEntity::DrawHelperInformation(IPhysRenderer *pRenderer, int 
 
 void CWheeledVehicleEntity::GetMemoryStatistics(ICrySizer *pSizer) const
 {
-	CRigidEntity::GetMemoryStatistics(pSizer);
 	if (GetType()==PE_WHEELEDVEHICLE)
 		pSizer->AddObject(this, sizeof(CWheeledVehicleEntity));
+	CRigidEntity::GetMemoryStatistics(pSizer);
+	pSizer->AddObject(m_susp, (m_nParts-m_nHullParts)*sizeof(m_susp[0]));
 }

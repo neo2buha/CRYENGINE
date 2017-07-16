@@ -22,23 +22,24 @@ public:
 
 	virtual const char*         GetEntityClassName() const final;
 	virtual Vec3                GetPos(bool bWorldOnly = true) const final;
+	virtual float               GetScale() const;
 	virtual const char*         GetName() const final;
 	virtual bool                HasChanged();
 	virtual void                Render(const struct SRendParams& EntDrawParams, const SRenderingPassInfo& passInfo) final;
 	virtual CLodValue           ComputeLod(int wantedLod, const SRenderingPassInfo& passInfo) final;
-	void                        Render(const CLodValue& lodValue, const SRenderingPassInfo& passInfo, SSectorTextureSet* pTerrainTexInfo, uint32 nDynLMMask, PodArray<CDLight*>* pAffectingLights);
+	void                        Render(const CLodValue& lodValue, const SRenderingPassInfo& passInfo, SSectorTextureSet* pTerrainTexInfo, PodArray<CDLight*>* pAffectingLights);
 
-	virtual struct IStatObj*    GetEntityStatObj(unsigned int nPartId = 0, unsigned int nSubPartId = 0, Matrix34A* pMatrix = NULL, bool bReturnOnlyVisible = false) final;
+	virtual struct IStatObj*    GetEntityStatObj(unsigned int nSubPartId = 0, Matrix34A* pMatrix = NULL, bool bReturnOnlyVisible = false) final;
 
 	virtual bool                GetLodDistances(const SFrameLodInfo& frameLodInfo, float* distances) const final;
 
-	virtual void                SetEntityStatObj(unsigned int nSlot, IStatObj* pStatObj, const Matrix34A* pMatrix = NULL) final;
+	virtual void                SetEntityStatObj(IStatObj* pStatObj, const Matrix34A* pMatrix = NULL) final;
 
 	virtual IRenderNode*        Clone() const final;
 
 	virtual void                SetCollisionClassIndex(int tableIndex) final { m_collisionClassIdx = tableIndex; }
 
-	virtual void                SetLayerId(uint16 nLayerId) final            { m_nLayerId = nLayerId; Get3DEngine()->C3DEngine::UpdateObjectsLayerAABB(this); }
+	virtual void                SetLayerId(uint16 nLayerId) final;
 	virtual uint16              GetLayerId() final                           { return m_nLayerId; }
 	virtual struct IRenderMesh* GetRenderMesh(int nLod) final;
 
@@ -60,7 +61,7 @@ public:
 
 	virtual float      GetMaxViewDist() final;
 
-	virtual EERType    GetRenderNodeType() final;
+	virtual EERType    GetRenderNodeType();
 
 	void               SetStatObj(IStatObj* pStatObj);
 
@@ -78,38 +79,58 @@ public:
 	virtual void       FillBBox(AABB& aabb) final;
 	virtual void       OffsetPosition(const Vec3& delta) final;
 
+	virtual void SetCameraSpacePos( Vec3* pCameraSpacePos ) final;
+	virtual void SetSubObjectHideMask( hidemask subObjHideMask ) final;
+
 	virtual bool       CanExecuteRenderAsJob() final;
+	
+	virtual void       DisablePhysicalization(bool bDisable) final;
 
 	//private:
 	void CalcBBox();
 	void UpdatePhysicalMaterials(int bThreadSafe = 0);
 
-	void OnRenderNodeBecomeVisible(const SRenderingPassInfo& passInfo) final;
-
-	void UpdateExecuteAsPreProcessJobFlag();
+	virtual void OnRenderNodeBecomeVisibleAsync(const SRenderingPassInfo& passInfo) final;
 
 	bool HasDeformableData() const { return m_pDeform != NULL; }
 
-	Matrix34         m_Matrix;
-	float            m_fMatrixScale;
-	IPhysicalEntity* m_pPhysEnt;
 
-	//! final material.
+private:
+	void CalcNearestTransform( Matrix34 &transformMatrix,const SRenderingPassInfo& passInfo );
+	void InvalidatePermanentRenderObjectMatrix();
+
+public:
+	// Transformation Matrix
+	Matrix34         m_Matrix;
+
+	// Physical Entity, when this node is physicalized.
+	IPhysicalEntity* m_pPhysEnt = nullptr;
+
+	//! Override material, will override default material assigned to the Geometry.
 	_smart_ptr<IMaterial> m_pMaterial;
 
-	uint16                m_collisionClassIdx;
-	uint16                m_nLayerId;
+	uint16                m_collisionClassIdx = 0;
+	uint16                m_nLayerId = 0;
 
-	_smart_ptr<IStatObj>  m_pStatObj;
-	CDeformableNode*      m_pDeform;
+	// Geometry referenced and rendered by this node.
+	_smart_ptr<CStatObj>  m_pStatObj;
 
-	bool                  m_bVehicleOnlyPhysics;
+	CDeformableNode*      m_pDeform = nullptr;
+	IFoliage*             m_pFoliage = nullptr;
 
-	bool                  m_bMerged;
-	bool                  m_bExecuteAsPreprocessJob;
-	bool                  m_bDrawLast;
+	uint32 m_bVehicleOnlyPhysics : 1;
+	uint32 m_bDrawLast : 1;
+	uint32 m_bNoPhysicalize : 1;
 
-	AABB                  m_WSBBox;
+	// World space bounding box for this node.
+	AABB m_WSBBox;
+
+	// Last frame this object moved
+	uint32 m_lastMoveFrameId = 0;
+	// Hide mask disable individual sub-objects rendering in the compound static objects
+	hidemask m_nSubObjHideMask;
+
+	Vec3*    m_pCameraSpacePos = nullptr;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -117,5 +138,18 @@ inline const AABB CBrush::GetBBox() const
 {
 	return m_WSBBox;
 }
+
+///////////////////////////////////////////////////////////////////////////////
+class CMovableBrush : public CBrush
+{
+	virtual void     SetOwnerEntity(struct IEntity* pEntity) final { m_pOwnerEntity = pEntity; }
+	virtual IEntity* GetOwnerEntity() const final                  { return m_pOwnerEntity; }
+	virtual EERType  GetRenderNodeType() final                     { return eERType_MovableBrush; }
+	virtual bool     IsAllocatedOutsideOf3DEngineDLL()             { return GetOwnerEntity() != nullptr; }
+
+private:
+	// When render node is created by the entity, pointer to the owner entity.
+	IEntity* m_pOwnerEntity = 0;
+};
 
 #endif // _3DENGINE_BRUSH_H_

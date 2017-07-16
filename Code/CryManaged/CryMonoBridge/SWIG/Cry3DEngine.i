@@ -1,6 +1,7 @@
 %include "CryEngine.swig"
 
 %import "CryCommon.i"
+%import "CryAudio.i"
 
 %{
 #include <CrySystem/IStreamEngine.h>
@@ -13,7 +14,9 @@
 #include <Cry3DEngine/I3DEngine.h>
 #include <CryParticleSystem/IParticles.h>
 #include <CryEntitySystem/IEntity.h>
+#include <Cry3DEngine/ITimeOfDay.h>
 %}
+%ignore I3DEngineModule;
 %ignore ITimeOfDay::NetSerialize;
 %ignore I3DEngine::SerializeState;
 %ignore I3DEngine::SaveStatObj;
@@ -23,6 +26,13 @@
 %template(IStatObjPtr) _smart_ptr<IStatObj>;
 %template(IReadStreamPtr) _smart_ptr<IReadStream>;
 %template(IRenderMeshPtr) _smart_ptr<IRenderMesh>;
+
+%typemap(cscode) IParticleEffect
+%{
+	public string Name { get { return GetName (); } }
+%}
+
+%include "../../../../CryEngine/CryCommon/Cry3DEngine/ITimeOfDay.h"
 %import "../../../../CryEngine/CryCommon/Cry3DEngine/CGF/CryHeaders.h"
 %include "../../../../CryEngine/CryCommon/Cry3DEngine/IMaterial.h"
 %include "../../../../CryEngine/CryCommon/CryRenderer/IRenderMesh.h"
@@ -46,7 +56,10 @@
 %ignore PQLog::blendPQ;
 %include "../../../../CryEngine/CryCommon/Cry3DEngine/CGF/CGFContent.h"
 %include "../../../../CryEngine/CryCommon/Cry3DEngine/CGF/IChunkFile.h"
-%include "../../../../CryEngine/CryCommon/CryEntitySystem/IEntityRenderState.h"
+
+%typemap(csbase) ERenderNodeFlags "long"
+
+%include "../../../../CryEngine/CryCommon/Cry3DEngine/IRenderNode.h"
 %include "../../../../CryEngine/CryCommon/CryPhysics/IDeferredCollisionEvent.h"
 %include "../../../../CryEngine/CryCommon/CrySystem/IProcess.h"
 %include "../../../../CryEngine/CryCommon/Cry3DEngine/IStatObj.h"

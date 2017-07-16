@@ -13,7 +13,7 @@ namespace gpu
 
 struct CounterReadbackEmpty
 {
-	int Readback(ID3D11UnorderedAccessView* uav)
+	int Readback(CDeviceBuffer* pBuffer)
 	{
 		assert(0);
 		return 0;
@@ -23,15 +23,20 @@ struct CounterReadbackEmpty
 struct CounterReadbackUsed
 {
 	CounterReadbackUsed();
-	void Readback(ID3D11UnorderedAccessView* uav);
+	void Readback(CDeviceBuffer* pBuffer);
 	int  Retrieve();
 
 private:
-	ID3D11Buffer* m_countReadbackBuffer;
+	CGpuBuffer* m_countReadbackBuffer;
 #ifdef DURANGO
-	void*         m_basePtr;
+	void*       m_basePtr;
 #endif
-	bool          m_readbackCalled;
+
+#if CRY_RENDERER_VULKAN
+	uint64      m_readbackFence;
+#endif
+
+	bool        m_readbackCalled;
 };
 
 struct DataReadbackEmpty
@@ -47,17 +52,24 @@ struct DataReadbackEmpty
 
 struct DataReadbackUsed
 {
-	DataReadbackUsed(int size, int stride);
-	void        Readback(ID3D11Buffer* buf);
-	const void* Map();
-	void        Unmap();
+	DataReadbackUsed(uint32 size, uint32 stride);
+	void Readback(CGpuBuffer* buf, uint32 readLength);
+	const void* Map(uint32 readLength);
+	void Unmap();
 
 private:
-	ID3D11Buffer* m_readback;
+	CGpuBuffer* m_readback;
 #ifdef DURANGO
-	void*         m_basePtr;
+	void*       m_basePtr;
 #endif
-	bool          m_readbackCalled;
+
+#if CRY_RENDERER_VULKAN
+	uint64      m_readbackFence;
+#endif
+
+	uint32      m_stride;
+	uint32      m_size;
+	bool        m_readbackCalled;
 };
 
 struct HostDataEmpty
@@ -78,7 +90,7 @@ struct BufferFlagsReadWrite
 {
 	enum
 	{
-		flags = DX11BUF_STRUCTURED | DX11BUF_BIND_SRV | DX11BUF_BIND_UAV
+		flags = CDeviceObjectFactory::USAGE_STRUCTURED | CDeviceObjectFactory::BIND_SHADER_RESOURCE | CDeviceObjectFactory::BIND_UNORDERED_ACCESS
 	};
 	typedef CounterReadbackEmpty CounterReadback;
 	typedef DataReadbackEmpty    DataReadback;
@@ -89,7 +101,7 @@ struct BufferFlagsReadWriteReadback
 {
 	enum
 	{
-		flags = DX11BUF_STRUCTURED | DX11BUF_BIND_SRV | DX11BUF_BIND_UAV
+		flags = CDeviceObjectFactory::USAGE_STRUCTURED | CDeviceObjectFactory::BIND_SHADER_RESOURCE | CDeviceObjectFactory::BIND_UNORDERED_ACCESS | CDeviceObjectFactory::USAGE_UAV_OVERLAP
 	};
 	typedef CounterReadbackEmpty CounterReadback;
 	typedef DataReadbackUsed     DataReadback;
@@ -100,17 +112,18 @@ struct BufferFlagsReadWriteAppend
 {
 	enum
 	{
-		flags = DX11BUF_STRUCTURED | DX11BUF_BIND_SRV | DX11BUF_BIND_UAV | DX11BUF_UAV_COUNTER
+		flags = CDeviceObjectFactory::USAGE_STRUCTURED | CDeviceObjectFactory::BIND_SHADER_RESOURCE | CDeviceObjectFactory::BIND_UNORDERED_ACCESS | CDeviceObjectFactory::USAGE_UAV_COUNTER
 	};
 	typedef CounterReadbackUsed CounterReadback;
 	typedef DataReadbackEmpty   DataReadback;
 	typedef HostDataEmpty       HostData;
 };
+
 struct BufferFlagsDynamic
 {
 	enum
 	{
-		flags = DX11BUF_STRUCTURED | DX11BUF_BIND_SRV | DX11BUF_DYNAMIC
+		flags = CDeviceObjectFactory::USAGE_STRUCTURED | CDeviceObjectFactory::BIND_SHADER_RESOURCE | CDeviceObjectFactory::USAGE_CPU_WRITE
 	};
 	typedef CounterReadbackEmpty CounterReadback;
 	typedef DataReadbackEmpty    DataReadback;
@@ -121,7 +134,7 @@ struct BufferFlagsDynamicTyped
 {
 	enum
 	{
-		flags = DX11BUF_BIND_SRV | DX11BUF_DYNAMIC
+		flags = CDeviceObjectFactory::BIND_SHADER_RESOURCE | CDeviceObjectFactory::USAGE_CPU_WRITE
 	};
 	typedef CounterReadbackEmpty CounterReadback;
 	typedef DataReadbackEmpty    DataReadback;
@@ -132,7 +145,7 @@ struct BufferFlagsReadWriteTyped
 {
 	enum
 	{
-		flags = DX11BUF_BIND_SRV | DX11BUF_BIND_UAV
+		flags = CDeviceObjectFactory::BIND_SHADER_RESOURCE | CDeviceObjectFactory::BIND_UNORDERED_ACCESS
 	};
 	typedef CounterReadbackEmpty CounterReadback;
 	typedef DataReadbackEmpty    DataReadback;
@@ -147,17 +160,19 @@ public:
 	{
 		m_buffer.Create(size, stride, DXGI_FORMAT_UNKNOWN, BFlags::flags, NULL);
 	}
-	ID3D11UnorderedAccessView* GetUAV()    { return m_buffer.GetUAV(); };
+#if 0
+	ID3D11UnorderedAccessView* GetUAV()    { return m_buffer.GetDeviceUAV(); };
 	ID3D11ShaderResourceView*  GetSRV()    { return m_buffer.GetSRV(); };
 	ID3D11Buffer*              GetBuffer() { return m_buffer.GetBuffer(); };
+#endif
 
 	void                       UpdateBufferContent(void* pData, size_t nSize)
 	{
 		m_buffer.UpdateBufferContent(pData, m_stride * nSize);
 	};
-	void        ReadbackCounter() { return m_counterReadback.Readback(m_buffer.GetUAV()); };
+	void        ReadbackCounter() { return m_counterReadback.Readback(m_buffer.GetDevBuffer()); };
 	int         RetrieveCounter() { return m_counterReadback.Retrieve(); };
-	void        Readback()        { return m_dataReadback.Readback(m_buffer.GetBuffer()); };
+	void        Readback()        { return m_dataReadback.Readback(m_buffer.GetDevBuffer()); };
 	const void* Map()             { return (const void*)m_dataReadback.Map(); };
 	void        Unmap()           { return m_dataReadback.Unmap(); };
 
@@ -188,11 +203,9 @@ public:
 	{
 		m_buffer.Release();
 	}
-	ID3D11UnorderedAccessView* GetUAV()    { return m_buffer.GetUAV(); };
-	ID3D11ShaderResourceView*  GetSRV()    { return m_buffer.GetSRV(); };
-	ID3D11Buffer*              GetBuffer() { return m_buffer.GetBuffer(); };
+	CGpuBuffer& GetBuffer() { return m_buffer; };
 
-	T&                         operator[](size_t i)
+	T&          operator[](size_t i)
 	{
 		return *reinterpret_cast<T*>(m_hostData.Get() + i * sizeof(T));
 	}
@@ -201,17 +214,20 @@ public:
 	{
 		UpdateBufferContent(m_hostData.Get(), m_size);
 	};
-
 	void UpdateBufferContent(void* pData, size_t nSize)
 	{
 		m_buffer.UpdateBufferContent(pData, sizeof(T) * nSize);
 	};
-	void     ReadbackCounter()         { return m_counterReadback.Readback(m_buffer.GetUAV()); };
-	int      RetrieveCounter()         { return m_counterReadback.Retrieve(); };
-	void     Readback()                { return m_dataReadback.Readback(m_buffer.GetBuffer()); };
-	const T* Map()                     { return (const T*)m_dataReadback.Map(); };
-	void     Unmap()                   { return m_dataReadback.Unmap(); };
-	bool     IsDeviceBufferAllocated() { return m_buffer.GetBuffer() != nullptr; }
+	void UpdateBufferContentAligned(void* pData, size_t nSize)
+	{
+		m_buffer.UpdateBufferContent(pData, Align(sizeof(T) * nSize, CRY_PLATFORM_ALIGNMENT));
+	};
+	void     ReadbackCounter()           { return m_counterReadback.Readback(m_buffer.GetDevBuffer()); };
+	int      RetrieveCounter()           { return m_counterReadback.Retrieve(); };
+	void     Readback(uint32 readLength) { return m_dataReadback.Readback(&m_buffer, readLength); };
+	const T* Map(uint32 readLength)      { return (const T*)m_dataReadback.Map(readLength); };
+	void     Unmap()                     { return m_dataReadback.Unmap(); };
+	bool     IsDeviceBufferAllocated()   { return m_buffer.GetDevBuffer() != nullptr; }
 private:
 	const int  m_size;
 	CGpuBuffer m_buffer;
@@ -224,15 +240,10 @@ private:
 	HostData        m_hostData;
 };
 
-template<typename T, int constantBufferSlot> class CTypedConstantBuffer : public ::CTypedConstantBuffer<T>
+template<typename T> class CTypedConstantBuffer : public ::CTypedConstantBuffer<T>
 {
 	typedef typename ::CTypedConstantBuffer<T> TBase;
 public:
-	void Bind()                    { gcpRendD3D.m_DevMan.BindConstantBuffer(CDeviceManager::TYPE_CS, TBase::m_constantBuffer, constantBufferSlot); }
-	void BindVertexShader()        { gcpRendD3D.m_DevMan.BindConstantBuffer(CDeviceManager::TYPE_VS, TBase::m_constantBuffer, constantBufferSlot); }
-	void BindPixelShader()         { gcpRendD3D.m_DevMan.BindConstantBuffer(CDeviceManager::TYPE_PS, TBase::m_constantBuffer, constantBufferSlot); }
-	void BindGeometryShader()      { gcpRendD3D.m_DevMan.BindConstantBuffer(CDeviceManager::TYPE_GS, TBase::m_constantBuffer, constantBufferSlot); }
-
 	bool IsDeviceBufferAllocated() { return TBase::m_constantBuffer != nullptr; }
 	T&   operator=(const T& hostData)
 	{
@@ -282,6 +293,7 @@ public:
 		if (m_isDoubleBuffered)
 			m_current = !m_current;
 	}
+	int GetCurrentBufferId() const { return m_current; }
 
 private:
 	std::unique_ptr<T> m_buffers[2];
@@ -290,24 +302,4 @@ private:
 	bool               m_isDoubleBuffered;
 };
 
-class CComputeBackend
-{
-public:
-	CComputeBackend(const char* shaderName);
-	~CComputeBackend();
-
-	bool RunTechnique(CCryNameTSCRC tech, UINT x, UINT y, UINT z, uint64 flags = 0);
-	void SetUAVs(UINT offset, UINT numUAVs, ID3D11UnorderedAccessView** ppUnorderedAccessViews);
-	void SetSRVs(UINT offset, UINT numSRVs, ID3D11ShaderResourceView** ppShaderResourceViews);
-	void SetFloatArray(CCryNameR name, Vec4* value, int number);
-	void SetFloat(CCryNameR name, Vec4 value);
-
-	bool IsReady() { return m_pCurrentShader != nullptr; }
-
-private:
-	void SetFlags(uint64 flags);
-	const std::string          m_shaderName;
-	std::map<uint64, CShader*> m_computeShaderMap;
-	CShader*                   m_pCurrentShader;
-};
 }

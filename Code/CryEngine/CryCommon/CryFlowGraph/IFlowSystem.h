@@ -2,15 +2,18 @@
 
 #pragma once
 
-#include <CryCore/BoostHelpers.h>
+#include <CryCore/CryVariant.h>
 #include <CryMemory/CrySizer.h>
 #include <CryNetwork/SerializeFwd.h>
 #include <CryNetwork/ISerialize.h>
+
+#include <CryEntitySystem/IEntity.h>
 
 #define _UICONFIG(x) x
 
 struct IFlowGraphModuleManager;
 struct IFlowGraphDebugger;
+struct IGameTokenSystem;
 
 typedef uint8  TFlowPortId;
 typedef uint16 TFlowNodeId;
@@ -36,25 +39,85 @@ inline bool operator==(const SFlowSystemVoid& a, const SFlowSystemVoid& b)
 	return true;
 }
 
-struct FlowVec3 : public Vec3
-{
-	FlowVec3() : Vec3(ZERO) {}
-	FlowVec3(float x, float y, float z) : Vec3(x, y, z) {}
-};
-
 //! By adding types to this list, we can extend the flow system to handle new data types.
 //! Important: If types need to be added, add them at the end, otherwise it breaks serialization.
 //! \note CFlowData::ConfigureInputPort must be updated simultaneously.
 //! \see CFlowData::ConfigureInputPort.
-typedef boost::mpl::vector<
-    SFlowSystemVoid,
-    int,
-    float,
-    EntityId,
-    Vec3,
-    string,
-    bool
-    > TFlowSystemDataTypes;
+typedef CryVariant<
+	SFlowSystemVoid,
+	int,
+	float,
+	EntityId,
+	Vec3,
+	string,
+	bool
+	> TFlowInputDataVariant;
+
+enum EFlowDataTypes
+{
+	eFDT_Any = -1,
+	eFDT_Void = cry_variant::get_index<SFlowSystemVoid, TFlowInputDataVariant>::value,
+	eFDT_Int = cry_variant::get_index<int, TFlowInputDataVariant>::value,
+	eFDT_Float = cry_variant::get_index<float, TFlowInputDataVariant>::value,
+	eFDT_EntityId = cry_variant::get_index<EntityId, TFlowInputDataVariant>::value,
+	eFDT_Vec3 = cry_variant::get_index<Vec3, TFlowInputDataVariant>::value,
+	eFDT_String = cry_variant::get_index<string, TFlowInputDataVariant>::value,
+	eFDT_Bool = cry_variant::get_index<bool, TFlowInputDataVariant>::value,
+};
+
+inline EFlowDataTypes FlowNameToType(const char *typeName)
+{
+	EFlowDataTypes flowDataType = eFDT_Any;
+	if (0 == strcmp(typeName, "Void"))
+		flowDataType = eFDT_Void;
+	else if (0 == strcmp(typeName, "Int"))
+		flowDataType = eFDT_Int;
+	else if (0 == strcmp(typeName, "Float"))
+		flowDataType = eFDT_Float;
+	else if (0 == strcmp(typeName, "EntityId"))
+		flowDataType = eFDT_EntityId;
+	else if (0 == strcmp(typeName, "Vec3"))
+		flowDataType = eFDT_Vec3;
+	else if (0 == strcmp(typeName, "String"))
+		flowDataType = eFDT_String;
+	else if (0 == strcmp(typeName, "Bool"))
+		flowDataType = eFDT_Bool;
+
+	return flowDataType;
+}
+
+inline const char* FlowTypeToName(EFlowDataTypes flowDataType)
+{
+	switch (flowDataType)
+	{
+	case eFDT_Any:
+		return "Any";
+	case eFDT_Void:
+		return "Void";
+	case eFDT_Int:
+		return "Int";
+	case eFDT_Float:
+		return "Float";
+	case eFDT_EntityId:
+		return "EntityId";
+	case eFDT_Vec3:
+		return "Vec3";
+	case eFDT_String:
+		return "String";
+	case eFDT_Bool:
+		return "Bool";
+	}
+	return "";
+}
+
+inline const char* FlowTypeToHumanName(EFlowDataTypes flowDataType)
+{
+	const char* szTypeName = FlowTypeToName(flowDataType);
+	if (*szTypeName == '\0')
+		return "Unrecognized Flow Data type";
+	else
+		return szTypeName;
+}
 
 //! Default conversion uses C++ rules.
 template<class From, class To>
@@ -62,8 +125,157 @@ struct SFlowSystemConversion
 {
 	static ILINE bool ConvertValue(const From& from, To& to)
 	{
-		to = (To)from;
+		to = static_cast<To>(from);
 		return true;
+	}
+};
+
+namespace cry_variant
+{
+	template<class To, size_t I = 0>
+	ILINE bool ConvertVariant(const TFlowInputDataVariant& from, To& to)
+	{
+		if (from.index() == I)
+		{
+			return SFlowSystemConversion<typename stl::variant_alternative<I, TFlowInputDataVariant>::type, To>::ConvertValue(stl::get<I>(from), to);
+		}
+		else
+		{
+			return ConvertVariant<To, I + 1>(from, to);
+		}
+	}
+
+	template<size_t I = 0>
+	ILINE bool ConvertVariant(const TFlowInputDataVariant& from, Vec3& to)
+	{
+		if (stl::holds_alternative<Vec3>(from))
+		{
+			to = stl::get<Vec3>(from);
+		}
+		else
+		{
+			float temp;
+			if (from.index() == I)
+			{
+				if (!SFlowSystemConversion<typename stl::variant_alternative<I, TFlowInputDataVariant>::type, float>::ConvertValue(stl::get<I>(from), temp))
+					return false;
+			}
+			else
+			{
+				return ConvertVariant<float, I + 1>(from, temp);
+			}
+			to.x = to.y = to.z = temp;
+		}
+		return true;
+	}
+
+	template<size_t I = 0>
+	ILINE bool ConvertVariant(const TFlowInputDataVariant& from, TFlowInputDataVariant& to)
+	{
+		if (from.index() == I)
+		{
+			typename stl::variant_alternative<I, TFlowInputDataVariant>::type temp;
+			if (!ConvertVariant(from, temp))
+				return false;
+			to = temp;
+			return true;
+		}
+		else
+		{
+			return ConvertVariant<TFlowInputDataVariant, I + 1>(from, to);
+		}
+	}
+
+#define FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION(T) \
+template<> \
+ILINE bool ConvertVariant<T, stl::variant_size<TFlowInputDataVariant>::value>(const TFlowInputDataVariant&, T&) \
+{ \
+	CRY_ASSERT_MESSAGE(false, "Invalid variant index."); \
+	return false; \
+}
+	FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION(SFlowSystemVoid);
+	FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION(int);
+	FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION(float);
+	FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION(EntityId);
+	FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION(Vec3);
+	FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION(string);
+	FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION(bool);
+	FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION(TFlowInputDataVariant);
+#undef FLOWSYSTEM_CONVERTVARIANT_SPECIALIZATION
+
+	template<class From, size_t I = 0>
+	ILINE bool ConvertToVariant(const From& from, TFlowInputDataVariant& to)
+	{
+		if (to.index() == I)
+		{
+			typedef typename stl::variant_alternative<I, TFlowInputDataVariant>::type TypeInVariant;
+			if (std::is_same<TypeInVariant, From>::value)
+			{
+				to = from;
+			}
+			else
+			{
+				TypeInVariant temp;
+				if (!SFlowSystemConversion<From, TypeInVariant>::ConvertValue(from, temp))
+					return false;
+				to = temp;
+			}
+			return true;
+		}
+		else
+		{
+			return ConvertToVariant<From, I + 1>(from, to);
+		}
+	}
+#define FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION(T) \
+template<> \
+ILINE bool ConvertToVariant<T, stl::variant_size<TFlowInputDataVariant>::value>(const T&, TFlowInputDataVariant&) \
+{ \
+	CRY_ASSERT_MESSAGE(false, "Invalid variant index."); \
+	return false; \
+}
+	FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION(SFlowSystemVoid);
+	FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION(int);
+	FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION(float);
+	FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION(EntityId);
+	FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION(Vec3);
+	FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION(string);
+	FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION(bool);
+	FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION(TFlowInputDataVariant);
+#undef FLOWSYSTEM_CONVERTTOVARIANT_SPECIALIZATION
+}
+template<class To>
+struct SFlowSystemConversion<TFlowInputDataVariant, To>
+{
+	static ILINE bool ConvertValue(const TFlowInputDataVariant& from, To& to)
+	{
+		return cry_variant::ConvertVariant(from, to);
+	}
+};
+
+//! Special cases to avoid ambiguity.
+template<>
+struct SFlowSystemConversion<TFlowInputDataVariant, bool>
+{
+	static ILINE bool ConvertValue(const TFlowInputDataVariant& from, bool& to)
+	{
+		return cry_variant::ConvertVariant(from, to);
+	}
+};
+template<>
+struct SFlowSystemConversion<TFlowInputDataVariant, Vec3>
+{
+	static ILINE bool ConvertValue(const TFlowInputDataVariant& from, Vec3& to)
+	{
+		return cry_variant::ConvertVariant(from, to);
+	}
+};
+template<>
+struct SFlowSystemConversion<TFlowInputDataVariant, TFlowInputDataVariant>
+{
+	static ILINE bool ConvertValue(const TFlowInputDataVariant& from, TFlowInputDataVariant& to)
+	{
+		return cry_variant::ConvertVariant(from, to);
 	}
 };
 
@@ -138,37 +350,6 @@ struct SFlowSystemConversion<From, SFlowSystemVoid>
 	}
 };
 
-//! Vec3 conversions.
-template<class To>
-struct SFlowSystemConversion<Vec3, To>
-{
-	static ILINE bool ConvertValue(const Vec3& from, To& to)
-	{
-		return SFlowSystemConversion<float, To>::ConvertValue(from.x, to);
-	}
-};
-template<class From>
-struct SFlowSystemConversion<From, Vec3>
-{
-	static ILINE bool ConvertValue(const From& from, Vec3& to)
-	{
-		float temp;
-		if (!SFlowSystemConversion<From, float>::ConvertValue(from, temp))
-			return false;
-		to.x = to.y = to.z = temp;
-		return true;
-	}
-};
-template<>
-struct SFlowSystemConversion<Vec3, bool>
-{
-	static ILINE bool ConvertValue(const Vec3& from, bool& to)
-	{
-		to = from.GetLengthSquared() > 0;
-		return true;
-	}
-};
-
 #define FLOWSYSTEM_STRING_CONVERSION(type, fmt)                   \
   template<>                                                      \
   struct SFlowSystemConversion<type, string>                      \
@@ -213,18 +394,24 @@ struct SFlowSystemConversion<string, bool>
 		int to_i;
 		if (1 == sscanf(from.c_str(), "%d", &to_i))
 		{
-			to = !!to_i;
-			return true;
+			if (to_i == 0 || to_i == 1)
+			{
+				to = (to_i == 1);
+				return true;
+			}
 		}
-		if (0 == stricmp(from.c_str(), "true"))
+		else
 		{
-			to = true;
-			return true;
-		}
-		if (0 == stricmp(from.c_str(), "false"))
-		{
-			to = false;
-			return true;
+			if (0 == stricmp(from.c_str(), "true"))
+			{
+				to = true;
+				return true;
+			}
+			if (0 == stricmp(from.c_str(), "false"))
+			{
+				to = false;
+				return true;
+			}
 		}
 		return false;
 	}
@@ -249,19 +436,62 @@ struct SFlowSystemConversion<string, Vec3>
 	}
 };
 
-enum EFlowDataTypes
+//! Vec3 conversions.
+template<class To>
+struct SFlowSystemConversion<Vec3, To>
 {
-	eFDT_Any      = -1,
-	eFDT_Void     = boost::mpl::find<TFlowSystemDataTypes, SFlowSystemVoid>::type::pos::value,
-	eFDT_Int      = boost::mpl::find<TFlowSystemDataTypes, int>::type::pos::value,
-	eFDT_Float    = boost::mpl::find<TFlowSystemDataTypes, float>::type::pos::value,
-	eFDT_EntityId = boost::mpl::find<TFlowSystemDataTypes, EntityId>::type::pos::value,
-	eFDT_Vec3     = boost::mpl::find<TFlowSystemDataTypes, Vec3>::type::pos::value,
-	eFDT_String   = boost::mpl::find<TFlowSystemDataTypes, string>::type::pos::value,
-	eFDT_Bool     = boost::mpl::find<TFlowSystemDataTypes, bool>::type::pos::value
+	static ILINE bool ConvertValue(const Vec3& from, To& to)
+	{
+		return SFlowSystemConversion<float, To>::ConvertValue(from.x, to);
+	}
+};
+template<class From>
+struct SFlowSystemConversion<From, Vec3>
+{
+	static ILINE bool ConvertValue(const From& from, Vec3& to)
+	{
+		float temp;
+		if (!SFlowSystemConversion<From, float>::ConvertValue(from, temp))
+			return false;
+		to.x = to.y = to.z = temp;
+		return true;
+	}
+};
+template<>
+struct SFlowSystemConversion<Vec3, bool>
+{
+	static ILINE bool ConvertValue(const Vec3& from, bool& to)
+	{
+		to = from.GetLengthSquared() > 0;
+		return true;
+	}
 };
 
-typedef boost::make_variant_over<TFlowSystemDataTypes>::type TFlowInputDataVariant;
+//! Conversions to variant
+template<class From>
+struct SFlowSystemConversion<From, TFlowInputDataVariant>
+{
+	static ILINE bool ConvertValue(const From& from, TFlowInputDataVariant& to)
+	{
+		return cry_variant::ConvertToVariant(from, to);
+	}
+};
+template<>
+struct SFlowSystemConversion<SFlowSystemVoid, TFlowInputDataVariant>
+{
+	static ILINE bool ConvertValue(const SFlowSystemVoid& from, TFlowInputDataVariant& to)
+	{
+		return cry_variant::ConvertToVariant(from, to);
+	}
+};
+template<>
+struct SFlowSystemConversion<Vec3, TFlowInputDataVariant>
+{
+	static ILINE bool ConvertValue(const Vec3& from, TFlowInputDataVariant& to)
+	{
+		return cry_variant::ConvertToVariant(from, to);
+	}
+};
 
 template<class T>
 struct DefaultInitialized
@@ -275,89 +505,83 @@ struct DefaultInitialized<Vec3>
 	Vec3 operator()() const { return Vec3(ZERO); }
 };
 
-template<class Iter>
 struct DefaultInitializedForTag
 {
-	bool operator()(int tag, TFlowInputDataVariant& v) const
+	bool operator()(EFlowDataTypes type, TFlowInputDataVariant& v) const
 	{
-		if (tag == boost::mpl::distance<typename boost::mpl::begin<TFlowSystemDataTypes>::type, Iter>::type::value)
+		return Initialize(type, v);
+	}
+
+private:
+	template<size_t I = 0>
+	bool Initialize(EFlowDataTypes type, TFlowInputDataVariant& var) const
+	{
+		if (type == I)
 		{
-			DefaultInitialized<typename boost::mpl::deref<Iter>::type> create;
-			v = create();
+			DefaultInitialized<typename stl::variant_alternative<I, TFlowInputDataVariant>::type> create;
+			var = create();
 			return true;
 		}
 		else
 		{
-			DefaultInitializedForTag<typename boost::mpl::next<Iter>::type> create;
-			return create(tag, v);
+			return Initialize<I + 1>(type, var);
 		}
 	}
 };
-
 template<>
-struct DefaultInitializedForTag<typename boost::mpl::end<TFlowSystemDataTypes>::type>
+inline bool DefaultInitializedForTag::Initialize<stl::variant_size<TFlowInputDataVariant>::value>(EFlowDataTypes type, TFlowInputDataVariant& var) const
 {
-	bool operator()(int tag, TFlowInputDataVariant& v) const
+	if (type == EFlowDataTypes::eFDT_Any)
 	{
-		return false;
+		return true;
 	}
-};
+
+	CRY_ASSERT_MESSAGE(var.index() == stl::variant_npos, "Invalid variant index.");
+	return false;
+}
 
 class TFlowInputData
 {
 	class IsSameType
 	{
-		class StrictlyEqual : public boost::static_visitor<bool>
+		class StrictlyEqual
 		{
 		public:
-			template<typename T, typename U>
-			bool operator()(const T&, const U&) const
+			bool operator()(const TFlowInputDataVariant& a, const TFlowInputDataVariant& b)
 			{
-				return false; // cannot compare different types
-			}
-
-			template<typename T>
-			bool operator()(const T&, const T&) const
-			{
-				return true;
+				return a.index() == b.index();
 			}
 		};
 
 	public:
 		bool operator()(const TFlowInputData& a, const TFlowInputData& b) const
 		{
-			return boost::apply_visitor(StrictlyEqual(), a.m_variant, b.m_variant);
+			return stl::visit(StrictlyEqual(), a.m_variant, b.m_variant);
 		}
 	};
 
 	template<typename Ref>
 	class IsSameTypeExpl
 	{
-		class StrictlyEqual : public boost::static_visitor<bool>
+		class StrictlyEqual
 		{
 		public:
-			template<typename T>
-			bool operator()(const T&) const
+			bool operator()(const TFlowInputDataVariant& variant) const
 			{
-				return false; // cannot compare different types
-			}
-
-			bool operator()(const Ref&) const
-			{
-				return true;
+				return stl::holds_alternative<Ref>(variant);
 			}
 		};
 
 	public:
 		bool operator()(const TFlowInputData& a) const
 		{
-			return boost::apply_visitor(StrictlyEqual(), a.m_variant);
+			return stl::visit(StrictlyEqual(), a.m_variant);
 		}
 	};
 
 	class IsEqual
 	{
-		class StrictlyEqual : public boost::static_visitor<bool>
+		class StrictlyEqual
 		{
 		public:
 			template<typename T, typename U>
@@ -376,22 +600,12 @@ class TFlowInputData
 	public:
 		bool operator()(const TFlowInputData& a, const TFlowInputData& b) const
 		{
-			return boost::apply_visitor(StrictlyEqual(), a.m_variant, b.m_variant);
-		}
-	};
-
-	class ExtractType : public boost::static_visitor<EFlowDataTypes>
-	{
-	public:
-		template<typename T>
-		EFlowDataTypes operator()(const T& value) const
-		{
-			return (EFlowDataTypes) boost::mpl::find<TFlowSystemDataTypes, T>::type::pos::value;
+			return stl::visit(StrictlyEqual(), a.m_variant, b.m_variant);
 		}
 	};
 
 	template<typename To>
-	class ConvertType_Get : public boost::static_visitor<bool>
+	class ConvertType_Get
 	{
 	public:
 		ConvertType_Get(To& to_) : to(to_) {}
@@ -406,7 +620,7 @@ class TFlowInputData
 	};
 
 	template<typename From>
-	class ConvertType_Set : public boost::static_visitor<bool>
+	class ConvertType_Set
 	{
 	public:
 		ConvertType_Set(const From& from_) : from(from_) {}
@@ -420,7 +634,7 @@ class TFlowInputData
 		const From& from;
 	};
 
-	class ConvertType_SetFlexi : public boost::static_visitor<bool>
+	class ConvertType_SetFlexi
 	{
 	public:
 		ConvertType_SetFlexi(TFlowInputData& to_) : to(to_) {}
@@ -428,58 +642,99 @@ class TFlowInputData
 		template<typename From>
 		bool operator()(const From& from) const
 		{
-			return boost::apply_visitor(ConvertType_Set<From>(from), to.m_variant);
+			return stl::visit(ConvertType_Set<From>(from), to.m_variant);
 		}
 
 		TFlowInputData& to;
 	};
 
-	class WriteType : public boost::static_visitor<void>
+	class WriteType
 	{
 	public:
 		WriteType(TSerialize ser, bool userFlag) : m_ser(ser), m_userFlag(userFlag) {}
 
-		template<class T>
-		void operator()(T& v)
+		void operator()(TFlowInputDataVariant& var)
 		{
-			int tag = boost::mpl::find<TFlowSystemDataTypes, T>::type::pos::value;
-			m_ser.Value("tag", tag);
+			int index = var.index();
+			m_ser.Value("tag", index);
 			m_ser.Value("ud", m_userFlag);
-			m_ser.Value("v", v);
+			SerializeVariant(var);
 		}
 
 	private:
+		template<size_t I = 0>
+		void SerializeVariant(TFlowInputDataVariant& var)
+		{
+			if (var.index() == I)
+			{
+				m_ser.Value("v", stl::get<I>(var));
+			}
+			else
+			{
+				SerializeVariant<I + 1>(var);
+			}
+		}
+
 		TSerialize m_ser;
 		bool       m_userFlag;
 	};
 
-	class LoadType : public boost::static_visitor<void>
+	class LoadType
 	{
 	public:
 		LoadType(TSerialize ser) : m_ser(ser) {}
 
-		template<class T>
-		void operator()(T& v)
+		void operator()(TFlowInputDataVariant& var)
 		{
-			m_ser.Value("v", v);
+			int index;
+			m_ser.Value("tag", index);
+			if (index >= 0)
+				SerializeVariant(var);
 		}
 
 	private:
+		template<size_t I = 0>
+		void SerializeVariant(TFlowInputDataVariant& var)
+		{
+			if (var.index() == I)
+			{
+				typename stl::variant_alternative<I, TFlowInputDataVariant>::type value;
+				m_ser.Value("v", value);
+				var.emplace<I>(value);
+			}
+			else
+			{
+				SerializeVariant<I + 1>(var);
+			}
+		}
+
 		TSerialize m_ser;
 	};
 
-	class MemStatistics : public boost::static_visitor<void>
+	class MemStatistics
 	{
 	public:
 		MemStatistics(ICrySizer* pSizer) : m_pSizer(pSizer) {}
 
-		template<class T>
-		void operator()(T& v)
+		void operator()(const TFlowInputDataVariant& var)
 		{
-			m_pSizer->AddObject(v);
+			AddVariant(var);
 		}
 
 	private:
+		template<size_t I = 0>
+		void AddVariant(const TFlowInputDataVariant& var)
+		{
+			if (var.index() == I)
+			{
+				m_pSizer->AddObject(stl::get<I>(var));
+			}
+			else
+			{
+				AddVariant<I + 1>(var);
+			}
+		}
+
 		ICrySizer* m_pSizer;
 	};
 
@@ -513,8 +768,8 @@ public:
 	static TFlowInputData CreateDefaultInitializedForTag(int tag, bool locked = false)
 	{
 		TFlowInputDataVariant v;
-		DefaultInitializedForTag<boost::mpl::begin<TFlowSystemDataTypes>::type> create;
-		create(tag, v);
+		DefaultInitializedForTag create;
+		create(static_cast<EFlowDataTypes>(tag), v);
 		return TFlowInputData(v, locked);
 	}
 
@@ -543,8 +798,8 @@ public:
 
 	bool SetDefaultForTag(int tag)
 	{
-		DefaultInitializedForTag<boost::mpl::begin<TFlowSystemDataTypes>::type> set;
-		return set(tag, m_variant);
+		DefaultInitializedForTag set;
+		return set(static_cast<EFlowDataTypes>(tag), m_variant);
 	}
 
 	template<typename T>
@@ -568,7 +823,7 @@ public:
 		IsSameTypeExpl<T> isSameType;
 		if (IsLocked() && !isSameType(*this))
 		{
-			return boost::apply_visitor(ConvertType_Set<T>(value), m_variant);
+			return stl::visit(ConvertType_Set<T>(value), m_variant);
 		}
 		else
 		{
@@ -582,7 +837,7 @@ public:
 		IsSameType isSameType;
 		if (IsLocked() && !isSameType(*this, value))
 		{
-			return boost::apply_visitor(ConvertType_SetFlexi(*this), value.m_variant);
+			return stl::visit(ConvertType_SetFlexi(*this), value.m_variant);
 		}
 		else
 		{
@@ -591,8 +846,79 @@ public:
 		}
 	}
 
-	template<typename T> T*       GetPtr()       { return boost::get<T>(&m_variant); }
-	template<typename T> const T* GetPtr() const { return boost::get<const T>(&m_variant); }
+	//! Checks if the current value matches the given string or if it would require a conversion due to incompatible with the datatype
+	// eg. setting a Bool with '1' is valid, setting it with '12' is not (so this will return true). For both cases the FlowData will be set to true
+	bool CheckIfForcedConversionOfCurrentValueWithString(const string& valueStr)
+	{
+		string convertedValueStr;
+		/*return !*/ GetValueWithConversion(convertedValueStr); // Note: ideally that return value should be used
+		// but the internal conversions are currently accepting some conversions that we really want a warning for
+		// (eg float to int truncates and is accepted)
+
+		// value was transformed, check if it is accepted for the type
+		if (convertedValueStr.compare(valueStr) != 0)
+		{
+			switch (GetType())
+			{
+			case eFDT_Bool:
+				{
+					// ignore "0" and "1" for bools: conversion will ret "false" and "true" but this accepted as valid
+					if (valueStr.compare("0") == 0 || valueStr.compare("1") == 0)
+					{
+						return false;
+					}
+
+					// "True" and "False" are valid with any casing
+					if (valueStr.compareNoCase("true") == 0 || valueStr.compareNoCase("false") == 0)
+					{
+						return false;
+					}
+				}
+				break;
+			case eFDT_Float:
+				{
+					// ignore trailing zeros. eg input of '-1.0' will be '-1'
+					size_t lastNotZero = valueStr.find_last_not_of('0');
+					if (lastNotZero != string::npos)
+					{
+						size_t dotPos = valueStr.rfind('.');
+						if (dotPos != string::npos)
+						{
+							if (dotPos == lastNotZero)
+							{
+								lastNotZero--;
+							}
+							if (strncmp(convertedValueStr, valueStr.c_str(), lastNotZero + 1) == 0)
+							{
+								return false;
+							}
+						}
+					}
+				}
+				// intentional fallthrough : float also checks for int leading zeros
+			case eFDT_Int:
+				{
+					// ignore leading zeros. eg input of '001' will be '1'
+					size_t firstNotZero = valueStr.find_first_not_of('0');
+					if (firstNotZero != string::npos)
+					{
+						if (strncmp(convertedValueStr, valueStr.c_str() + firstNotZero, valueStr.size() - firstNotZero) == 0)
+						{
+							return false;
+						}
+					}
+				}
+				break;
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
+	template<typename T> T*       GetPtr()       { return stl::get_if<T>(&m_variant); }
+	template<typename T> const T* GetPtr() const { return stl::get_if<const T>(&m_variant); }
 
 	template<typename T>
 	bool GetValueWithConversion(T& value) const
@@ -605,11 +931,11 @@ public:
 		}
 		else
 		{
-			return boost::apply_visitor(ConvertType_Get<T>(value), m_variant);
+			return stl::visit(ConvertType_Get<T>(value), m_variant);
 		}
 	}
 
-	EFlowDataTypes GetType() const         { return boost::apply_visitor(ExtractType(), m_variant); }
+	EFlowDataTypes GetType() const         { return static_cast<EFlowDataTypes>(m_variant.index()); }
 
 	bool           IsUserFlagSet() const   { return m_userFlag; }
 	void           SetUserFlag(bool value) { m_userFlag = value; }
@@ -626,7 +952,10 @@ public:
 		if (ser.IsWriting())
 		{
 			WriteType visitor(ser, IsUserFlagSet());
-			boost::apply_visitor(visitor, m_variant);
+			stl::visit(visitor, m_variant);
+
+			bool locked = m_locked;
+			ser.Value("locked", locked);
 		}
 		else
 		{
@@ -640,26 +969,33 @@ public:
 			m_userFlag = ud;
 
 			LoadType visitor(ser);
-			boost::apply_visitor(visitor, m_variant);
+			stl::visit(visitor, m_variant);
+
+			bool locked;
+			ser.Value("locked", locked);
+			m_locked = locked;
 		}
 	}
 
 	template<class Visitor>
 	void Visit(Visitor& visitor)
 	{
-		boost::apply_visitor(visitor, m_variant);
+		stl::visit(visitor, m_variant);
 	}
 
 	template<class Visitor>
 	void Visit(Visitor& visitor) const
 	{
-		boost::apply_visitor(visitor, m_variant);
+		stl::visit(visitor, m_variant);
 	}
+
+	TFlowInputDataVariant&       GetVariant() { return m_variant; }
+	const TFlowInputDataVariant& GetVariant() const { return m_variant; }
 
 	void GetMemoryStatistics(ICrySizer* pSizer) const
 	{
 		MemStatistics visitor(pSizer);
-		boost::apply_visitor(visitor, m_variant);
+		stl::visit(visitor, m_variant);
 	}
 
 	void GetMemoryUsage(ICrySizer* pSizer) const
@@ -675,6 +1011,21 @@ private:
 	bool                  m_userFlag : 1;
 	bool                  m_locked   : 1;
 };
+
+template<>
+ILINE void TFlowInputData::LoadType::SerializeVariant<stl::variant_size<TFlowInputDataVariant>::value>(TFlowInputDataVariant& var)
+{
+	CRY_ASSERT_MESSAGE(false, "Invalid variant index.");
+}
+template<>
+ILINE void TFlowInputData::WriteType::SerializeVariant<stl::variant_size<TFlowInputDataVariant>::value>(TFlowInputDataVariant& var)
+{
+}
+template<>
+ILINE void TFlowInputData::MemStatistics::AddVariant<stl::variant_size<TFlowInputDataVariant>::value>(const TFlowInputDataVariant&)
+{
+	CRY_ASSERT_MESSAGE(false, "Invalid variant index.");
+}
 
 struct SFlowAddress
 {
@@ -776,21 +1127,18 @@ struct SOutputPortConfig
 template<class T>
 ILINE SOutputPortConfig OutputPortConfig(const char* name, const char* description = NULL, const char* humanName = NULL)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-	SOutputPortConfig result = { name, humanName, description, boost::mpl::find<TFlowSystemDataTypes, T>::type::pos::value };
+	SOutputPortConfig result = { name, humanName, description, cry_variant::get_index<T, TFlowInputDataVariant>::value };
 	return result;
 }
 
 ILINE SOutputPortConfig OutputPortConfig_AnyType(const char* name, const char* description = NULL, const char* humanName = NULL)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
 	SOutputPortConfig result = { name, humanName, description, eFDT_Any };
 	return result;
 }
 
 ILINE SOutputPortConfig OutputPortConfig_Void(const char* name, const char* description = NULL, const char* humanName = NULL)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
 	SOutputPortConfig result = { name, humanName, description, eFDT_Void };
 	return result;
 }
@@ -798,7 +1146,6 @@ ILINE SOutputPortConfig OutputPortConfig_Void(const char* name, const char* desc
 template<class T>
 ILINE SInputPortConfig InputPortConfig(const char* name, const char* description = NULL, const char* humanName = NULL, const char* sUIConfig = NULL)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
 	SInputPortConfig result = { name, humanName, description, sUIConfig, TFlowInputData::CreateDefaultInitialized<T>(true) };
 	return result;
 }
@@ -806,21 +1153,18 @@ ILINE SInputPortConfig InputPortConfig(const char* name, const char* description
 template<class T, class ValueT>
 ILINE SInputPortConfig InputPortConfig(const char* name, const ValueT& value, const char* description = NULL, const char* humanName = NULL, const char* sUIConfig = NULL)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
 	SInputPortConfig result = { name, humanName, description, sUIConfig, TFlowInputData(T(value), true) };
 	return result;
 }
 
 ILINE SInputPortConfig InputPortConfig_AnyType(const char* name, const char* description = NULL, const char* humanName = NULL, const char* sUIConfig = NULL)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
 	SInputPortConfig result = { name, humanName, description, sUIConfig, TFlowInputData(0, false) };
 	return result;
 }
 
 ILINE SInputPortConfig InputPortConfig_Void(const char* name, const char* description = NULL, const char* humanName = NULL, const char* sUIConfig = NULL)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
 	SInputPortConfig result = { name, humanName, description, sUIConfig, TFlowInputData(SFlowSystemVoid(), false) };
 	return result;
 }
@@ -941,10 +1285,12 @@ struct IFlowNode;
 TYPEDEF_AUTOPTR(IFlowNode);
 typedef IFlowNode_AutoPtr IFlowNodePtr;
 
-struct IFlowNode
+struct IFlowNode : public _i_reference_target_t
 {
 	struct SActivationInfo
 	{
+		typedef void (*ActivateOutputCallback)(SActivationInfo *actInfo,int nOutputPort, const TFlowInputData& value);
+
 		SActivationInfo(IFlowGraph* pGraph = 0, TFlowNodeId myID = 0, void* pUserData = 0, TFlowInputData* pInputPorts = 0)
 		{
 			this->pGraph = pGraph;
@@ -960,6 +1306,10 @@ struct IFlowNode
 		TFlowPortId     connectPort;
 		TFlowInputData* pInputPorts;
 		void*           m_pUserData;
+		
+		//! Optional override for output activation callback
+		ActivateOutputCallback activateOutputCallback = nullptr;
+		
 
 		//! Mono-specific Helper.
 		TFlowInputData* GetInputPort(int idx) { return &pInputPorts[idx]; }
@@ -976,6 +1326,7 @@ struct IFlowNode
 		eFE_SetEntityId,            //!< This event is send to set the entity of the FlowNode. Might also be sent in conjunction (pre) other events (like eFE_Initialize).
 		eFE_Suspend,
 		eFE_Resume,
+		eFE_EditorInputPortDataSet,
 		eFE_ConnectInputPort,
 		eFE_DisconnectInputPort,
 		eFE_ConnectOutputPort,
@@ -983,10 +1334,36 @@ struct IFlowNode
 		eFE_DontDoAnythingWithThisPlease
 	};
 
+	IFlowNode() = default;
+
 	// <interfuscator:shuffle>
 	virtual ~IFlowNode(){}
-	virtual void         AddRef() = 0;
-	virtual void         Release() = 0;
+
+	//! Provides base copy and move semantic without copying ref count in _i_reference_target_t
+	IFlowNode(IFlowNode const&) { }
+
+	//! Provides base copy and move semantic without copying ref count in _i_reference_target_t
+	IFlowNode& operator= (IFlowNode const&) { return *this; }
+
+	//! notification to be overridden in C# flow node
+	virtual void OnDelete() {}
+	
+	//! override to kick off a notification for C# flow node.
+	//! to be removed when we get rid of C# flow node completely
+	virtual void Release() override
+	{
+		if (--m_nRefCounter == 0)
+		{
+			OnDelete();
+			delete this;
+		}
+		else if (m_nRefCounter < 0)
+		{
+			assert(0);
+			CryFatalError("Deleting Reference Counted Object Twice");
+		}
+	}
+
 	virtual IFlowNodePtr Clone(SActivationInfo*) = 0;
 
 	virtual void         GetConfiguration(SFlowNodeConfig&) = 0;
@@ -1029,6 +1406,9 @@ struct IFlowNodeData
 	virtual int      GetNumOutputPorts() const = 0;
 
 	virtual EntityId GetCurrentForwardingEntity() const = 0;
+
+	//! Access internal array of the node input data.
+	virtual TFlowInputData* GetInputData() const = 0;
 	// </interfuscator:shuffle>
 };
 
@@ -1215,12 +1595,18 @@ struct IFlowGraph : public NFlowSystemUtils::IFlowSystemTyped
 	virtual void SetActive(bool bActive) = 0;
 
 	//! Checks if flowgraph is currently active.
-	virtual bool                       IsActive() const = 0;
+	virtual bool IsActive() const = 0;
 
-	virtual void                       UnregisterFromFlowSystem() = 0;
+	virtual void UnregisterFromFlowSystem() = 0;
 
-	virtual void                       SetType(IFlowGraph::EFlowGraphType type) = 0;
+
+	virtual void SetType(IFlowGraph::EFlowGraphType type) = 0;
 	virtual IFlowGraph::EFlowGraphType GetType() const = 0;
+
+	//! Get a human readable name for debug purposes
+	virtual const char* GetDebugName() const = 0;
+	//! Set a human readable name for debug purposes
+	virtual void SetDebugName(const char* sName) = 0;
 
 	//! Primary game interface.
 
@@ -1352,22 +1738,6 @@ struct IFlowGraph : public NFlowSystemUtils::IFlowSystemTyped
 		ActivatePort(addr, value);
 	}
 
-	int GetPortInt(IFlowNode::SActivationInfo* pActInfo, int nPort)
-	{
-		return *(pActInfo->GetInputPort(nPort)->GetPtr<int>());
-	}
-	string GetPortString(IFlowNode::SActivationInfo* pActInfo, int nPort)
-	{
-		const string* p_x = (pActInfo->GetInputPort(nPort)->GetPtr<string>());
-		if (p_x)
-			return *p_x;
-		return "";
-	}
-	bool GetPortBool(IFlowNode::SActivationInfo* pActInfo, int nPort)
-	{
-		bool* p_x = pActInfo->GetInputPort(nPort)->GetPtr<bool>();
-		return (p_x != NULL) ? ((*p_x) == 1) : false;
-	}
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 	//! Graph tokens are gametokens which are unique to a particular flow graph.
@@ -1378,21 +1748,19 @@ struct IFlowGraph : public NFlowSystemUtils::IFlowSystemTyped
 		string         name;
 		EFlowDataTypes type;
 	};
-	virtual void                           RemoveGraphTokens() = 0;
-	virtual bool                           AddGraphToken(const SGraphToken& token) = 0;
-	virtual size_t                         GetGraphTokenCount() const = 0;
-	virtual const IFlowGraph::SGraphToken* GetGraphToken(size_t index) const = 0;
-	virtual string                         GetGlobalNameForGraphToken(const string& tokenName) const = 0;
+	virtual size_t                         GetGraphTokenCount() const = 0; //! Get the number of graph tokens for this graph
+	virtual const IFlowGraph::SGraphToken* GetGraphToken(size_t index) const = 0; //! Get a graph token by index
+	virtual const char*                    GetGlobalNameForGraphToken(const char* tokenName) const = 0; //! Get the corresponding name for the GTS registry
+	virtual bool                           AddGraphToken(const SGraphToken& token) = 0; //! Add a token from the SGraphToken definition to this graph and to the GTS
+	virtual void                           RemoveGraphTokens() = 0; //! Delete all token definitions from the graph and the corresponding tokens from the GTS registry
 
-	virtual TFlowGraphId                   GetGraphId() const = 0;
+	virtual TFlowGraphId                   GetGraphId() const = 0; //! ID with which this graph is registered in the IFlowSystem
 };
 
-struct IFlowNodeFactory
+struct IFlowNodeFactory : public _i_reference_target_t
 {
 	// <interfuscator:shuffle>
 	virtual ~IFlowNodeFactory(){}
-	virtual void         AddRef() = 0;
-	virtual void         Release() = 0;
 	virtual IFlowNodePtr Create(IFlowNode::SActivationInfo*) = 0;
 	virtual void         GetMemoryUsage(ICrySizer* s) const = 0;
 	virtual void         Reset() = 0;
@@ -1495,6 +1863,11 @@ typedef IFlowGraphInspector_AutoPtr           IFlowGraphInspectorPtr;
 
 typedef std::shared_ptr<IFlowSystemContainer> IFlowSystemContainerPtr;
 
+struct IFlowSystemEngineModule : public Cry::IDefaultModule
+{
+	CRYINTERFACE_DECLARE(IFlowSystemEngineModule, 0x96B193486AD3427F, 0x9A8F7764052A5536);
+};
+
 struct IFlowSystem
 {
 	// <interfuscator:shuffle>
@@ -1522,6 +1895,10 @@ struct IFlowSystem
 
 	//! Unregister previously registered type, keeps internal type ids valid
 	virtual bool UnregisterType(const char* typeName) = 0;
+
+	//! Checks whether the flow system has finished registering all node types and sent ESYSTEM_EVENT_REGISTER_FLOWNODES
+	//! If this is true flow nodes have to be manually registered via the RegisterType function.
+	virtual bool HasRegisteredDefaultFlowNodes() = 0;
 
 	//! Gets a type name from a flow node type ID.
 	virtual const char* GetTypeName(TFlowNodeTypeId typeId) = 0;
@@ -1561,6 +1938,9 @@ struct IFlowSystem
 	//! Gets the module manager.
 	virtual IFlowGraphModuleManager* GetIModuleManager() = 0;
 
+	//! Gets the game tokens system
+	virtual IGameTokenSystem* GetIGameTokenSystem() = 0;
+
 	//! Create, Delete and access flowsystem's global containers.
 	virtual bool                    CreateContainer(TFlowSystemContainerId id) = 0;
 	virtual void                    DeleteContainer(TFlowSystemContainerId id) = 0;
@@ -1568,6 +1948,9 @@ struct IFlowSystem
 	virtual IFlowSystemContainerPtr GetContainer(TFlowSystemContainerId id) = 0;
 
 	virtual void                    Serialize(TSerialize ser) = 0;
+
+	//! Creates an instance of IFlowNode by specified type.
+	virtual IFlowNodePtr            CreateNodeOfType(IFlowNode::SActivationInfo*, TFlowNodeTypeId typeId) = 0;
 	// </interfuscator:shuffle>
 };
 
@@ -1588,47 +1971,40 @@ ILINE const TFlowInputData& GetPortAny(IFlowNode::SActivationInfo* pActInfo, int
 
 ILINE bool GetPortBool(IFlowNode::SActivationInfo* pActInfo, int nPort)
 {
-	bool* p_x = (pActInfo->pInputPorts[nPort].GetPtr<bool>());
-	return (p_x != 0) ? *p_x : 0;
+	bool result;
+	return pActInfo->pInputPorts[nPort].GetValueWithConversion(result) ? result : false;
 }
 
 ILINE int GetPortInt(IFlowNode::SActivationInfo* pActInfo, int nPort)
 {
-	int x = *(pActInfo->pInputPorts[nPort].GetPtr<int>());
-	return x;
+	int result;
+	return pActInfo->pInputPorts[nPort].GetValueWithConversion(result) ? result : 0;
 }
 
 ILINE EntityId GetPortEntityId(IFlowNode::SActivationInfo* pActInfo, int nPort)
 {
-	EntityId x = *(pActInfo->pInputPorts[nPort].GetPtr<EntityId>());
-	return x;
+	EntityId result;
+	return pActInfo->pInputPorts[nPort].GetValueWithConversion(result) ? result : INVALID_ENTITYID;
 }
 
 ILINE float GetPortFloat(IFlowNode::SActivationInfo* pActInfo, int nPort)
 {
-	float x = *(pActInfo->pInputPorts[nPort].GetPtr<float>());
-	return x;
+	float result;
+	return pActInfo->pInputPorts[nPort].GetValueWithConversion(result) ? result : 0.0f;
 }
 
 ILINE Vec3 GetPortVec3(IFlowNode::SActivationInfo* pActInfo, int nPort)
 {
-	Vec3 x = *(pActInfo->pInputPorts[nPort].GetPtr<Vec3>());
-	return x;
+	Vec3 result;
+	return pActInfo->pInputPorts[nPort].GetValueWithConversion(result) ? result : Vec3Constants<float>::fVec3_Zero;
 }
 
-ILINE const string& GetPortString(IFlowNode::SActivationInfo* pActInfo, int nPort)
+ILINE string GetPortString(IFlowNode::SActivationInfo* pActInfo, int nPort)
 {
-	const string* p_x = (pActInfo->pInputPorts[nPort].GetPtr<string>());
-
-	if (p_x)
-	{
-		return *p_x;
-	}
-	else
-	{
-		const static string empty("");
-		return empty;
-	}
+	string result;
+	if (!pActInfo->pInputPorts[nPort].GetValueWithConversion(result))
+		result.clear();
+	return result;
 }
 
 ILINE bool IsBoolPortActive(IFlowNode::SActivationInfo* pActInfo, int nPort)
@@ -1643,7 +2019,17 @@ template<class T>
 ILINE void ActivateOutput(IFlowNode::SActivationInfo* pActInfo, int nPort, const T& value)
 {
 	SFlowAddress addr(pActInfo->myID, nPort, true);
-	pActInfo->pGraph->ActivatePort(addr, value);
+	if (!pActInfo->activateOutputCallback)
+	{
+		pActInfo->pGraph->ActivatePort(addr, value);
+	}
+	else
+	{
+		TFlowInputData valueData;
+		valueData.SetUserFlag(true);
+		valueData.SetValueWithConversion(value);
+		pActInfo->activateOutputCallback(pActInfo,nPort,valueData);
+	}
 }
 
 ILINE bool IsOutputConnected(IFlowNode::SActivationInfo* pActInfo, int nPort)

@@ -42,9 +42,14 @@ void CStatObj::Refresh(int nFlags)
 			GetObjManager()->UnregisterForGarbage(this);
 		}
 
+		const int oldModificationId = m_nModificationId;
+
 		ShutDown();
 		Init();
 		bool bRes = LoadCGF(m_szFileName, false, 0, 0, 0);
+
+		// Shutdown/Init sequence might produce same modification id as before, so we make sure to store a different value.
+		m_nModificationId = oldModificationId + 1;
 
 		LoadLowLODs(false, 0);
 		TryMergeSubObjects(false);
@@ -440,7 +445,7 @@ bool CStatObj::LoadStreamRenderMeshes(const char* filename, const void* pData, c
 	// Merge sub-objects for the new lod.
 	if (GetCVars()->e_StatObjMerge)
 	{
-		CStatObj* pLod0 = (m_pLod0) ? m_pLod0 : this;
+		CStatObj* pLod0 = (m_pLod0 != 0) ? (CStatObj*)m_pLod0 : this;
 		pLod0->TryMergeSubObjects(true);
 	}
 	//////////////////////////////////////////////////////////////////////////
@@ -696,6 +701,12 @@ bool CStatObj::LoadCGF_Int(const char* filename, bool bLod, unsigned long nLoadi
 				m_pMaterial = ::LoadCGFMaterial(GetMatMan(), pCGF->GetCommonMaterial()->name, m_szFileName.c_str(), nLoadingFlags);
 			}
 		}
+	}
+
+	// Prepare material and mesh for the billboards
+	if (GetCVars()->e_VegetationBillboards >= 0)
+	{
+		CheckCreateBillboardMaterial();
 	}
 
 	// Fail if mesh was not complied by RC
@@ -1158,21 +1169,16 @@ bool CStatObj::LoadCGF_Int(const char* filename, bool bLod, unsigned long nLoadi
 		m_eStreamingStatus = ecss_Ready;
 
 	const std::vector<CStatObj*> allObjects = GatherAllObjects();
-
-	// Determine if the cgf is deformable
 	for (CStatObj* obj : allObjects)
 	{
+		// Determine if the cgf is deformable
 		if (stristr(obj->m_szGeomName.c_str(), "bendable") && stristr(obj->m_szProperties.c_str(), "mergedmesh_deform"))
 		{
 			obj->m_isDeformable = 1;
 			obj->DisableStreaming();
 		}
 
-	}
-
-	// Read the depth sort offset
-	for (CStatObj* obj : allObjects)
-	{
+		// Read the depth sort offset
 		Vec3 depthSortOffset;
 		if (std::sscanf(obj->m_szProperties.c_str(), "depthoffset(x:%f,y:%f,z:%f)", &depthSortOffset.x, &depthSortOffset.y, &depthSortOffset.z) == 3)
 		{
@@ -1180,9 +1186,8 @@ bool CStatObj::LoadCGF_Int(const char* filename, bool bLod, unsigned long nLoadi
 		}
 	}
 
-	SMeshLodInfo lodInfo;
-	ComputeGeometricMean(lodInfo);
-	m_fLodDistance = sqrt(lodInfo.fGeometricMean);
+	// Recursive computation of m_fLODDistance for compound- and sub-objects
+	ComputeAndStoreLodDistances();
 
 	return true;
 }
@@ -1344,7 +1349,7 @@ _smart_ptr<IRenderMesh> CStatObj::MakeRenderMesh(CMesh* pMesh, bool bDoRenderMes
 	_smart_ptr<IRenderMesh> pOutRenderMesh;
 
 	// Create renderable mesh.
-	if (!gEnv->IsDedicated())
+	if (gEnv->pRenderer)
 	{
 		if (!pMesh)
 			return 0;
@@ -1608,6 +1613,48 @@ void CStatObj::ParseProperties()
 				}
 				//////////////////////////////////////////////////////////////////////////
 			}
+		}
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+void CStatObj::CheckCreateBillboardMaterial()
+{
+	// Check if billboard textures exist
+	const char * arrTextureSuffixes[2] = { "_billbalb.dds", "_billbnorm.dds" };
+	int nBillboardTexturesFound = 0;
+	assert(EFTT_DIFFUSE == 0 && EFTT_NORMALS == 1);
+	for (int nSlot = EFTT_DIFFUSE; nSlot <= EFTT_NORMALS; nSlot++)
+	{
+		string szTextureName = m_szFileName;
+		if (szTextureName.find(".cgf") != string::npos)
+		{
+			szTextureName.replace(".cgf", arrTextureSuffixes[nSlot]);
+			if (gEnv->pCryPak->IsFileExist(szTextureName.c_str()))
+				nBillboardTexturesFound++;
+		}
+	}
+
+	// create billboard material and cgf
+	if (nBillboardTexturesFound == 2)
+	{
+		m_pBillboardMaterial = GetMatMan()->LoadMaterial("%ENGINE%/EngineAssets/Materials/billboard_default", false);
+
+		if (m_pBillboardMaterial)
+		{
+			// clone reference material and assign new textures
+			m_pBillboardMaterial = GetMatMan()->CloneMaterial(m_pBillboardMaterial);
+
+			SShaderItem& shaderItem = m_pBillboardMaterial->GetShaderItem();
+			SInputShaderResources* inputShaderResources = gEnv->pRenderer->EF_CreateInputShaderResource(shaderItem.m_pShaderResources);
+			for (int nSlot = EFTT_DIFFUSE; nSlot <= EFTT_NORMALS; nSlot++)
+			{
+				string szTextureName = m_szFileName;
+				szTextureName.replace(".cgf", arrTextureSuffixes[nSlot]);
+				inputShaderResources->m_Textures[nSlot].m_Name = szTextureName;
+			}
+			SShaderItem newShaderItem = gEnv->pRenderer->EF_LoadShaderItem(shaderItem.m_pShader->GetName(), false, 0, inputShaderResources, shaderItem.m_pShader->GetGenerationMask());
+			m_pBillboardMaterial->AssignShaderItem(newShaderItem);
 		}
 	}
 }

@@ -267,7 +267,7 @@ struct STagState
 	template<typename T>
 	void SetFromInteger(const T& value)
 	{
-		COMPILE_TIME_ASSERT(sizeof(T) == NUM_BYTES);
+		static_assert(sizeof(T) == NUM_BYTES, "Invalid type size!");
 
 #ifdef NEED_ENDIAN_SWAP
 		const uint8* pIn = ((const uint8*)&value) + NUM_BYTES;
@@ -283,7 +283,7 @@ struct STagState
 	template<typename T>
 	void GetToInteger(T& value) const
 	{
-		COMPILE_TIME_ASSERT(sizeof(T) == NUM_BYTES);
+		static_assert(sizeof(T) == NUM_BYTES, "Invalid type size!");
 		GetToInteger(value, sizeof(T) * 8);
 	}
 
@@ -566,7 +566,6 @@ public:
 
 	uint32 GetPriority(TagID tagID) const
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return 0;
 
@@ -575,7 +574,6 @@ public:
 
 	void SetPriority(TagID tagID, uint32 priority)
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return;
 
@@ -595,7 +593,6 @@ public:
 
 	const CTagDefinition* GetSubTagDefinition(TagID tagID) const
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return NULL;
 
@@ -604,7 +601,6 @@ public:
 
 	void SetSubTagDefinition(TagID tagID, const CTagDefinition* pTagDef)
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (IsValidTagID(tagID))
 		{
 			m_tags[tagID].m_pTagDefinition = pTagDef;
@@ -920,7 +916,6 @@ public:
 
 	TagGroupID GetGroupID(TagID tagID) const
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return GROUP_ID_NONE;
 
@@ -1025,17 +1020,14 @@ public:
 
 	uint32 GetTagCRC(TagID tagID) const
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return 0;
 
 		return m_tags[tagID].m_name.crc;
 	}
 
-	//#if STORE_TAG_STRINGS
 	const char* GetTagName(TagID tagID) const
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return "<invalid>";
 
@@ -1044,17 +1036,14 @@ public:
 
 	void SetTagName(TagID tagID, const char* szTag)
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return;
 
 		m_tags[tagID].m_name.SetByString(szTag);
 	}
-	//#endif //STORE_TAG_STRINGS
 
 	void SetTagGroup(TagID tagID, TagGroupID groupID)
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return;
 
@@ -1136,6 +1125,26 @@ public:
 		return state.AreAnySet(m_defData.groupMasks[groupID]);
 	}
 
+	TagID GetTagInGroup(const STagStateBase& state, const TagGroupID& groupID) const
+	{
+		CRY_ASSERT(IsValidTagGroupID(groupID));
+		if (!IsValidTagGroupID(groupID))
+			return TAG_ID_INVALID;
+
+		const uint8 groupMask = state & m_defData.groupMasks[groupID];
+		const TagID numTags = m_tags.size();
+		for (TagID itTags = 0; itTags < numTags; ++itTags)
+		{
+			const STag& tag = m_tags[itTags];
+			const STagMask& tagMask = m_defData.tagMasks[itTags];
+			if ((tag.m_groupID == groupID) && (groupMask == tagMask.mask))
+			{
+				return itTags;
+			}
+		}
+		return TAG_ID_INVALID;
+	}
+
 	void SetGroup(STagStateBase state, const TagGroupID groupID, const TagID tagID) const
 	{
 		CRY_ASSERT(IsValidTagGroupID(groupID));
@@ -1169,7 +1178,6 @@ public:
 	template<typename T>
 	bool IsSet(const T& state, const TagID tagID) const
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return false;
 
@@ -1179,7 +1187,6 @@ public:
 	template<typename T>
 	void Set(T& state, const TagID tagID, bool set) const
 	{
-		CRY_ASSERT(IsValidTagID(tagID));
 		if (!IsValidTagID(tagID))
 			return;
 
@@ -1574,9 +1581,8 @@ class CTagState
 {
 public:
 	CTagState(const CTagDefinition& defs, TagState state = TAG_STATE_EMPTY)
-		:
-		m_defs(defs),
-		m_state(state)
+		: m_defs(defs)
+		, m_state(state)
 	{
 #ifndef _RELEASE
 		const size_t maxSupportedBits = sizeof(TagState) * 8;
@@ -1586,6 +1592,12 @@ public:
 			CryWarning(VALIDATOR_MODULE_GAME, VALIDATOR_ERROR, "!Number of bits required for tag definition '%s' (%" PRISIZE_T " bits) is greater than %" PRISIZE_T " bits. To fix this, group mutually exclusive tags together, remove unnecessary tags or increase the size of TagState.", defs.GetFilename(), definitionBits, maxSupportedBits);
 		}
 #endif
+	}
+
+	CTagState(const CTagState& other) 
+		: m_defs(other.m_defs)
+		, m_state(other.m_state)
+	{
 	}
 
 	void Clear()
@@ -1649,6 +1661,12 @@ public:
 	CTagState& operator=(const TagState& tagState)
 	{
 		m_state = tagState;
+		return *this;
+	}
+
+	CTagState& operator=(const CTagState& cTagState)
+	{
+		m_state = cTagState.m_state;
 		return *this;
 	}
 

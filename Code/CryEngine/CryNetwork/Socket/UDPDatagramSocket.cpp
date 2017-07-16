@@ -9,8 +9,7 @@
 	#include "Protocol/PacketRateCalculator.h"
 #endif
 
-#include "Lobby/ICryMatchMakingPrivate.h"
-#include "Lobby/CryLobby.h"
+#include <CryLobby/CommonICryMatchMaking.h>
 #include <CryNetwork/CrySocks.h>
 
 #if CRY_PLATFORM_ORBIS
@@ -56,7 +55,7 @@ union USockAddr
 };
 
 #if ENABLE_UDP_PACKET_FRAGMENTATION
-static TNetAddress g_nullAddress;
+static TNetAddress g_nullAddress = TNetAddress(SNullAddr());
 #endif // ENABLE_UDP_PACKET_FRAGMENTATION
 
 CUDPDatagramSocket::CUDPDatagramSocket()
@@ -423,15 +422,15 @@ void CUDPDatagramSocket::GetSocketAddresses(TNetAddressVec& addrs)
 		{
 			TNetAddress addr = ConvertAddr((CRYSOCKADDR*)addrBuf, addrLen);
 			bool valid = true;
-			if (boost::get<SNullAddr>(&addr))
+			if (stl::get_if<SNullAddr>(&addr))
 				valid = false;
-			else if (SIPv4Addr* pIPv4 = boost::get<SIPv4Addr>(&addr))
+			else if (SIPv4Addr* pIPv4 = stl::get_if<SIPv4Addr>(&addr))
 			{
 				if (!pIPv4->addr)
 					valid = false;
 			}
 	#if USE_SOCKADDR_STORAGE_ADDR
-			else if (SSockAddrStorageAddr* pSockAddrStorage = boost::get<SSockAddrStorageAddr>(&addr))
+			else if (SSockAddrStorageAddr* pSockAddrStorage = stl::get_if<SSockAddrStorageAddr>(&addr))
 			{
 				switch (pSockAddrStorage->addr.ss_family)
 				{
@@ -526,19 +525,19 @@ void CUDPDatagramSocket::GetSocketAddresses(TNetAddressVec& addrs)
 	}
 }
 
-void CUDPDatagramSocket::RegisterBackoffAddress(TNetAddress addr)
+void CUDPDatagramSocket::RegisterBackoffAddress(const TNetAddress& addr)
 {
 	m_pSockIO->RegisterBackoffAddressForSocket(addr, m_sockid);
 }
 
-void CUDPDatagramSocket::UnregisterBackoffAddress(TNetAddress addr)
+void CUDPDatagramSocket::UnregisterBackoffAddress(const TNetAddress& addr)
 {
 	m_pSockIO->UnregisterBackoffAddressForSocket(addr, m_sockid);
 }
 
 ESocketError CUDPDatagramSocket::Send(const uint8* pBuffer, size_t nLength, const TNetAddress& to)
 {
-	if (boost::get<const TLocalNetAddress>(&to))
+	if (stl::get_if<TLocalNetAddress>(&to))
 	{
 		return eSE_Ok;
 	}
@@ -607,7 +606,7 @@ void CUDPDatagramSocket::OnRecvFromComplete(const TNetAddress& from, const uint8
 	pData = ReceiveFragmented(from, pData, len);    // No point checking for fragmented packets if support for them is off
 	if (pData == NULL)
 	{
-		if (boost::get<const LobbyIdAddr>(&from) == NULL)
+		if (stl::get_if<LobbyIdAddr>(&from) == NULL)
 		{
 			m_pSockIO->RequestRecvFrom(m_sockid);       // prevent drain of recv counter
 		}
@@ -617,7 +616,7 @@ void CUDPDatagramSocket::OnRecvFromComplete(const TNetAddress& from, const uint8
 #endif
 
 	OnPacket(from, pData, len);
-	if (boost::get<const LobbyIdAddr>(&from) == NULL)
+	if (stl::get_if<LobbyIdAddr>(&from) == NULL)
 	{
 		m_pSockIO->RequestRecvFrom(m_sockid);
 	}
@@ -666,8 +665,8 @@ void CUDPDatagramSocket::ClearFragmentationEntry(uint32 index, TFragPacketId id,
 	m_pFragmentedPackets[index].m_Id = id;
 	m_pFragmentedPackets[index].m_ReconstitutionMask = 0;
 	m_pFragmentedPackets[index].m_Length = 0;
-	m_pFragmentedPackets[index].m_inUse = (boost::get<const SNullAddr>(&from)) ? false : true;
-	m_pFragmentedPackets[index].m_sequence_num = (boost::get<const SNullAddr>(&from)) ? 0 : ++m_packet_sequence_num;
+	m_pFragmentedPackets[index].m_inUse = (stl::get_if<SNullAddr>(&from)) ? false : true;
+	m_pFragmentedPackets[index].m_sequence_num = (stl::get_if<SNullAddr>(&from)) ? 0 : ++m_packet_sequence_num;
 }
 
 void CUDPDatagramSocket::SendFragmented(const uint8* pBuffer, size_t nLength, const TNetAddress& to)
@@ -694,7 +693,7 @@ void CUDPDatagramSocket::SendFragmented(const uint8* pBuffer, size_t nLength, co
 
 	while (nLength)
 	{
-		int blkSize = MIN(nLength, FRAG_MAX_MTU_SIZE - fho_FragHeaderSize);
+		int blkSize = std::min(nLength, (size_t) FRAG_MAX_MTU_SIZE - fho_FragHeaderSize);
 
 		m_pUDPFragBuffer[fho_HeaderID] = Frame_IDToHeader[eH_Fragmentation];
 		memcpy(&m_pUDPFragBuffer[fho_PacketID], &m_RollingIndex, sizeof(m_RollingIndex));
@@ -934,10 +933,10 @@ uint8 CUDPDatagramSocket::FindBufferIndex(const TNetAddress& from, TFragPacketId
 
 void CUDPDatagramSocket::SocketSend(const uint8* pBuffer, size_t nLength, const TNetAddress& to)
 {
-	if (boost::get<const LobbyIdAddr>(&to) && gEnv->pLobby && gEnv->pLobby->GetMatchMaking())
+	ICryMatchMakingPrivate* pMMPrivate = gEnv->pLobby ? gEnv->pLobby->GetMatchMakingPrivate() : nullptr;
+	if (stl::get_if<LobbyIdAddr>(&to) && pMMPrivate)
 	{
-		ICryMatchMakingPrivate* pMatchmakingPriv8 = (ICryMatchMakingPrivate*)gEnv->pLobby->GetMatchMaking();
-		pMatchmakingPriv8->LobbyAddrIDSend(pBuffer, nLength, to);
+		pMMPrivate->LobbyAddrIDSend(pBuffer, nLength, to);
 #if NET_MINI_PROFILE || NET_PROFILE_ENABLE
 		CSocketIOManager* pSockIO = (CSocketIOManager*)m_pSockIO;
 		pSockIO->RecordPacketSendStatistics(pBuffer, nLength);     // Lobby Sends don't hit the io manager for Send - this ensures they still record the stats

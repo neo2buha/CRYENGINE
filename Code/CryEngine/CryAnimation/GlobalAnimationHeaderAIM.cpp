@@ -36,7 +36,7 @@ uint32 GlobalAnimationHeaderAIM::LoadAIM()
 	OnAssetNotFound();
 
 	stack_string strPath = m_FilePath.c_str();
-	CryStringUtils::UnifyFilePath(strPath);
+	PathUtil::UnifyFilePath(strPath);
 
 	if (!pChunkFile->Read(m_FilePath))
 	{
@@ -320,7 +320,7 @@ bool GlobalAnimationHeaderAIM::ReadController(IChunkFile::ChunkDesc* pChunkDesc,
 
 			const uint32 trackAlignment = pCtrlChunk->TracksAligned ? 4 : 1;
 
-			RotationControllerPtr pRotation = nullptr;
+			IRotationController* pRotation = nullptr;
 			if (pCtrlChunk->numRotationKeys > 0)
 			{
 				ITrackRotationStorage* pStorage = ControllerHelper::GetRotationControllerPtr(pCtrlChunk->RotationFormat);
@@ -345,12 +345,12 @@ bool GlobalAnimationHeaderAIM::ReadController(IChunkFile::ChunkDesc* pChunkDesc,
 				}
 #endif         //_RELEASE
 
-				pRotation = RotationControllerPtr(new RotationTrackInformation);
+				pRotation = new RotationTrackInformation;
 				pRotation->SetRotationStorage(pStorage);
 				pRotation->SetKeyTimesInformation(pRotTimeKeys);
 			}
 
-			PositionControllerPtr pPosition = nullptr;
+			IPositionController* pPosition = nullptr;
 			if (pCtrlChunk->numPositionKeys > 0)
 			{
 				ITrackPositionStorage* pStorage = ControllerHelper::GetPositionControllerPtr(pCtrlChunk->PositionFormat);
@@ -383,7 +383,7 @@ bool GlobalAnimationHeaderAIM::ReadController(IChunkFile::ChunkDesc* pChunkDesc,
 #endif           //_RELEASE
 				}
 
-				pPosition = PositionControllerPtr(new PositionTrackInformation);
+				pPosition = new PositionTrackInformation;
 				pPosition->SetPositionStorage(pStorage);
 				pPosition->SetKeyTimesInformation(pPosTimeKeys);
 			}
@@ -1720,9 +1720,6 @@ void VExampleInit::RecursiveTest(const Vec2d& ControlPoint, GlobalAnimationHeade
 				break;
 		}
 
-		uint32 sum = o0 + o1 + o2 + o3;
-		assert(sum);
-
 		m_nIterations++;
 		if (m_nIterations > 50)
 			return;
@@ -1792,9 +1789,9 @@ uint32 VExampleInit::PointInQuat(const Vec2d& ControlPoint, GlobalAnimationHeade
 	weight[0] = w0;
 	f64 maxstep = 0.250f;
 
-	f64 angle0 = MAX(acos_tpl(MIN(tq1 | tq2, 1.0)), 0.01);
+	f64 angle0 = std::max(acos_tpl(tq1 | tq2), 0.01);
 	assert(angle0 >= 0.009);
-	f64 step0 = MIN((1.0 / (angle0 * angle0 * 30.0)), maxstep);
+	f64 step0 = std::min((1.0 / (angle0 * angle0 * 30.0)), maxstep);
 	for (f64 i = step0; i < 3.0; i += step0)
 	{
 		c++;
@@ -1802,15 +1799,15 @@ uint32 VExampleInit::PointInQuat(const Vec2d& ControlPoint, GlobalAnimationHeade
 		if (i > 0.999) t = 1.0;
 		NLerp2AimPose(rRot, rPos, m_arrRelPose0, m_arrRelPose1, t, m_arrAbsPose);
 		Quatd qt = mid * m_arrAbsPose[nWBone].q;
-		polar[c] = Vec2(PolarCoordinate(qt));
+		polar[c] = Vec2d(PolarCoordinate(qt));
 		weight[c].SetLerp(w0, w1, t);
 		;
 		if (t == 1.0) break;
 	}
 
-	f64 angle1 = MAX(acos_tpl(MIN(tq1 | tq2, 1.0)), 0.01f);
+	f64 angle1 = std::max(acos_tpl(tq1 | tq2), 0.01);
 	assert(angle1 >= 0.009);
-	f64 step1 = MIN((1.0 / (angle1 * angle1 * 30.0)), maxstep);
+	f64 step1 = std::min((1.0 / (angle1 * angle1 * 30.0)), maxstep);
 	for (f64 i = step1; i < 3.0; i += step1)
 	{
 		c++;
@@ -1824,9 +1821,9 @@ uint32 VExampleInit::PointInQuat(const Vec2d& ControlPoint, GlobalAnimationHeade
 		if (t == 1.0) break;
 	}
 
-	f64 angle2 = MAX(acos_tpl(MIN(tq2 | tq3, 1.0)), 0.01);
+	f64 angle2 = std::max(acos_tpl(tq2 | tq3), 0.01);
 	assert(angle2 >= 0.009);
-	f64 step2 = MIN((1.0 / (angle2 * angle2 * 30.0)), maxstep);
+	f64 step2 = std::min((1.0 / (angle2 * angle2 * 30.0)), maxstep);
 	for (f64 i = step2; i < 3.0; i += step2)
 	{
 		c++;
@@ -1840,9 +1837,9 @@ uint32 VExampleInit::PointInQuat(const Vec2d& ControlPoint, GlobalAnimationHeade
 		if (t == 1.0) break;
 	}
 
-	f64 angle3 = MAX(acos_tpl(MIN(tq3 | tq0, 1.0)), 0.01);
+	f64 angle3 = std::max(acos_tpl(tq3 | tq0), 0.01);
 	assert(angle3 >= 0.009);
-	f64 step3 = MIN((1.0 / (angle3 * angle3 * 30.0)), maxstep);
+	f64 step3 = std::min((1.0 / (angle3 * angle3 * 30.0)), maxstep);
 	for (f64 i = step3; i < 3.0; i += step3)
 	{
 		c++;

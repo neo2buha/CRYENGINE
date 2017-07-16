@@ -8,7 +8,7 @@
 #include "Utils/SpatialHashGrid.h"
 
 #include <Cry3DEngine/I3DEngine.h>
-#include <CryEntitySystem/IEntityRenderState.h>
+#include <Cry3DEngine/IRenderNode.h>
 #include <CryParticleSystem/IParticles.h>
 #include <CryRenderer/IRenderAuxGeom.h>
 
@@ -90,7 +90,7 @@ CREBreakableGlass::CREBreakableGlass()
 	TGlassDefFragmentArray sizeTestArray1;
 	TGlassFragmentIndexArray sizeTestArray2;
 
-	COMPILE_TIME_ASSERT(GLASSCFG_FRAGMENT_ARRAY_SIZE <= 32);
+	static_assert(GLASSCFG_FRAGMENT_ARRAY_SIZE <= 32, "Invalid array size!");
 	CRY_ASSERT(POLY_ARRAY_SIZE == sizeTestArray1.max_size());
 	CRY_ASSERT(POLY_ARRAY_SIZE == sizeTestArray2.max_size());
 #endif
@@ -1094,7 +1094,7 @@ uint CREBreakableGlass::GenerateRadialCracks(const float totalEnergy, const uint
 					sincos_tpl(angle, &sinA, &cosA);
 
 					const Vec2 nextPt(pStartPt->x + cosA, pStartPt->y + sinA);
-					const Vec2 nextDir = (nextPt - *pCenterPt).Normalize();
+					const Vec2 nextDir = (nextPt - *pCenterPt).GetNormalized();
 					const float cosAngle = nextDir.Dot(initialDir);
 
 					if (cosAngle < halfCosAngleInc)
@@ -1121,7 +1121,7 @@ uint CREBreakableGlass::GenerateRadialCracks(const float totalEnergy, const uint
 				// Record initial direction
 				if (crackStepIndex == 1)
 				{
-					initialDir = (*pStartPt - *pCenterPt).Normalize();
+					initialDir = (*pStartPt - *pCenterPt).GetNormalized();
 				}
 
 				// Assert boundaries

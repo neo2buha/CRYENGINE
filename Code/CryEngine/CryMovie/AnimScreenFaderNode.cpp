@@ -50,11 +50,11 @@ bool CalculateIsolatedKeyColor(const SScreenFaderKey& key, SAnimTime time, Vec4&
 
 		if (key.m_fadeType == SScreenFaderKey::eFT_FadeIn)
 		{
-			colorOut.w = MAX(0.f, 1.f - floatRatio);
+			colorOut.w = std::max(0.f, 1.f - floatRatio);
 		}
 		else
 		{
-			colorOut.w = MIN(1.f, floatRatio);
+			colorOut.w = std::min(1.f, floatRatio);
 		}
 	}
 
@@ -134,7 +134,7 @@ void CAnimScreenFaderNode::Animate(SAnimContext& animContext)
 
 				if (ratio < 0.f) { ratio = 0.f; }
 
-				ratio = MIN(ratio, 1.f);
+				ratio = std::min(ratio, 1.f);
 
 				switch (key.m_fadeChangeType)
 				{
@@ -218,10 +218,7 @@ void CAnimScreenFaderNode::OnReset()
 
 void CAnimScreenFaderNode::Activate(bool bActivate)
 {
-	if (bActivate)
-	{
-		m_bActive = false;
-	}
+	m_bActive = false;
 
 	if (m_texPrecached == false)
 	{
@@ -283,7 +280,7 @@ void CAnimScreenFaderNode::Render()
 		{
 			CScreenFaderTrack* pTrack = static_cast<CScreenFaderTrack*>(GetTrackForParameter(eAnimParamType_ScreenFader, paramIndex));
 
-			if (!pTrack)
+			if (!pTrack || (pTrack->GetFlags() & IAnimTrack::eAnimTrackFlags_Disabled) != 0)
 			{
 				continue;
 			}

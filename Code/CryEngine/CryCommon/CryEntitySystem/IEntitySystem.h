@@ -17,7 +17,7 @@
 // from a DLL simpler. All files within this DLL are compiled with the CRYENTITYDLL_EXPORTS
 // symbol defined on the command line. this symbol should not be defined on any project
 // that uses this DLL. This way any other project whose source files include this file see
-// CRYENTITYDLL_API functions as being imported from a DLL, wheras this DLL sees symbols
+// CRYENTITYDLL_API functions as being imported from a DLL, whereas this DLL sees symbols
 // defined with this macro as being exported.
 #ifdef CRYENTITYDLL_EXPORTS
 	#define CRYENTITYDLL_API DLL_EXPORT
@@ -27,76 +27,7 @@
 
 #define _DISABLE_AREASOLID_
 
-#include <CryEntitySystem/IComponent.h>
-#if !defined(_RELEASE) && CRY_PLATFORM_WINDOWS
-	#define ENABLE_ENTITYEVENT_DEBUGGING 1
-#else
-	#define ENABLE_ENTITYEVENT_DEBUGGING 0
-#endif
-
-// entity event listener debug output macro
-#if ENABLE_ENTITYEVENT_DEBUGGING
-	#define ENTITY_EVENT_LISTENER_DEBUG                                      \
-	  {                                                                      \
-	    if (gEnv && gEnv->pConsole)                                          \
-	    {                                                                    \
-	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners"); \
-	      if (pCvar && pCvar->GetIVal())                                     \
-	        CryLog("Entity Event listener %s '%p'", __FUNCTION__, this);     \
-	    }                                                                    \
-	  }
-
-	#define ENTITY_EVENT_ENTITY_DEBUG(pEntity)                                          \
-	  {                                                                                 \
-	    if (gEnv && gEnv->pConsole)                                                     \
-	    {                                                                               \
-	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners");            \
-	      if (pCvar && pCvar->GetIVal())                                                \
-	        CryLog("Event for entity '%s' pointer '%p'", pEntity->GetName(), pEntity);  \
-	    }                                                                               \
-	  }
-
-	#define ENTITY_EVENT_ENTITY_LISTENER(pListener)                          \
-	  {                                                                      \
-	    if (gEnv && gEnv->pConsole)                                          \
-	    {                                                                    \
-	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners"); \
-	      if (pCvar && pCvar->GetIVal())                                     \
-	        CryLog("Event listener '%p'", pListener);                        \
-	    }                                                                    \
-	  }
-
-	#define ENTITY_EVENT_LISTENER_ADDED(pEntity, pListener)                                                                                 \
-	  {                                                                                                                                     \
-	    if (gEnv && gEnv->pConsole)                                                                                                         \
-	    {                                                                                                                                   \
-	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners");                                                                \
-	      if (pCvar && pCvar->GetIVal())                                                                                                    \
-	        CryLog("Adding Entity Event listener for entity '%s' pointer '%p' for listener '%p'", pEntity->GetName(), pEntity, pListener);  \
-	    }                                                                                                                                   \
-	  }
-
-	#define ENTITY_EVENT_LISTENER_REMOVED(nEntity, pListener)                                                                               \
-	  {                                                                                                                                     \
-	    if (gEnv && gEnv->pConsole)                                                                                                         \
-	    {                                                                                                                                   \
-	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners");                                                                \
-	      if (pCvar && pCvar->GetIVal())                                                                                                    \
-	      {                                                                                                                                 \
-	        CEntity* pCEntity = (CEntity*)GetEntity(nEntity);                                                                               \
-	        CryLog("Removing Entity Event listener for entity '%s' for listener '%p'", pCEntity ? pCEntity->GetName() : "null", pListener); \
-	      }                                                                                                                                 \
-	    }                                                                                                                                   \
-	  }
-
-#else
-	#define ENTITY_EVENT_LISTENER_DEBUG
-	#define ENTITY_EVENT_ENTITY_DEBUG(pEntity)
-	#define ENTITY_EVENT_ENTITY_LISTENER(pListener)
-	#define ENTITY_EVENT_LISTENER_ADDED(pEntity, pListener)
-	#define ENTITY_EVENT_LISTENER_REMOVED(nEntity, pListener)
-#endif
-
+#include <CryEntitySystem/IEntityComponent.h>
 #include <CryEntitySystem/IEntity.h>
 #include <CryEntitySystem/IEntityClass.h>
 #include <CryEntitySystem/IEntityLayer.h>
@@ -118,8 +49,6 @@ struct IBreakableManager;
 struct SComponentRegisteredEvents;
 class CEntity;
 
-struct IEntityPoolManager;
-
 //! SpecType for entity layers.
 //! Add new bits to update. Do not just rename, cause values are used for saving levels.
 enum ESpecType
@@ -136,7 +65,7 @@ struct IArea
 	// <interfuscator:shuffle>
 	virtual ~IArea(){}
 	virtual size_t         GetEntityAmount() const = 0;
-	virtual const EntityId GetEntityByIdx(int index) const = 0;
+	virtual const EntityId GetEntityByIdx(size_t const index) const = 0;
 	virtual void           GetMinMax(Vec3** min, Vec3** max) const = 0;
 	virtual int            GetGroup() const = 0;
 	virtual int            GetPriority() const = 0;
@@ -179,17 +108,23 @@ public:
 struct SAudioAreaInfo
 {
 	SAudioAreaInfo()
-		: pArea(nullptr)
-		, amount(0.0f)
-		, audioEnvironmentId(INVALID_AUDIO_ENVIRONMENT_ID)
+		: amount(0.0f)
+		, audioEnvironmentId(CryAudio::InvalidEnvironmentId)
 		, envProvidingEntityId(INVALID_ENTITYID)
-	{
-	}
+	{}
 
-	IArea*             pArea;
-	float              amount;
-	AudioEnvironmentId audioEnvironmentId;
-	EntityId           envProvidingEntityId;
+	explicit SAudioAreaInfo(
+	  float const _amount,
+	  CryAudio::EnvironmentId const _audioEnvironmentId,
+	  EntityId const _envProvidingEntityId)
+		: amount(_amount)
+		, audioEnvironmentId(_audioEnvironmentId)
+		, envProvidingEntityId(_envProvidingEntityId)
+	{}
+
+	float                   amount;
+	CryAudio::EnvironmentId audioEnvironmentId;
+	EntityId                envProvidingEntityId;
 };
 
 struct IBSPTree3D
@@ -213,9 +148,10 @@ struct IAreaManager
 	virtual IArea const* const GetArea(size_t const nAreaIndex) const = 0;
 	virtual size_t             GetOverlappingAreas(const AABB& bb, PodArray<IArea*>& list) const = 0;
 
-	//! Additional Query based on position. Returns only the areas that have AudioProxies and valid AudioEnvironmentIDs.
-	//! Needs preallocated space to write nMaxResults to pResults.
-	//! The actual number of results filled is returned in rNumResults.
+	//! Additional Query based on position. Returns only the areas that provide audio environments.
+	//! Needs preallocated space to write numMaxResults to pResults.
+	//! The number of found areas is returned in numResults.
+	//! Note: This method is currently only called by the audio thread and not thread safe!
 	//! \return True on success or false on error or if provided structure was too small.
 	virtual bool QueryAudioAreas(Vec3 const& pos, SAudioAreaInfo* const pResults, size_t const numMaxResults, size_t& numResults) = 0;
 
@@ -237,10 +173,10 @@ struct IAreaManager
 	virtual void SetAreaDirty(IArea* pArea) = 0;
 
 	//! Passed in entity exits all areas. Intended for when players are killed.
-	virtual void ExitAllAreas(IEntity const* const pEntity) = 0;
+	virtual void ExitAllAreas(EntityId const entityId) = 0;
 
 	//! Puts the passed entity ID into the update list for the next update.
-	virtual void MarkEntityForUpdate(EntityId const nEntityID) = 0;
+	virtual void MarkEntityForUpdate(EntityId const entityId) = 0;
 
 	//! Forces an audio listener update against the passed area.
 	virtual void TriggerAudioListenerUpdate(IArea const* const _pArea) = 0;
@@ -324,16 +260,33 @@ struct IEntityArchetype
 	virtual ~IEntityArchetype(){}
 
 	//! Retrieve entity class of the archetype.
-	virtual IEntityClass*                GetClass() const = 0;
+	virtual IEntityClass* GetClass() const = 0;
 
-	virtual const char*                  GetName() const = 0;
-	virtual IScriptTable*                GetProperties() = 0;
-	virtual XmlNodeRef                   GetObjectVars() = 0;
-	virtual void                         LoadFromXML(XmlNodeRef& propertiesNode, XmlNodeRef& objectVarsNode) = 0;
-	virtual const TEntityAttributeArray& GetAttributes() const = 0;
-	virtual void                         LoadEntityAttributesFromXML(const XmlNodeRef& entityAttributes) = 0;
-	virtual void                         SaveEntityAttributesToXML(XmlNodeRef& entityAttributes) = 0;
+	virtual const char*   GetName() const = 0;
+	virtual IScriptTable* GetProperties() = 0;
+	virtual XmlNodeRef    GetObjectVars() = 0;
+	virtual void          LoadFromXML(XmlNodeRef& propertiesNode, XmlNodeRef& objectVarsNode) = 0;
 	// </interfuscator:shuffle>
+};
+
+//! Interface entity archetype manager extension. Allows to react to archetype changes.
+struct IEntityArchetypeManagerExtension
+{
+	virtual ~IEntityArchetypeManagerExtension() = default;
+
+	//! Called when new archetype is added.
+	virtual void OnArchetypeAdded(IEntityArchetype& archetype) = 0;
+	//! Called when an archetype is about to be removed.
+	virtual void OnArchetypeRemoved(IEntityArchetype& archetype) = 0;
+	//! Called when all archetypes are about to be removed.
+	virtual void OnAllArchetypesRemoved() = 0;
+
+	//! Called during archetype serialization, allows to inject extra data.
+	virtual void Serialize(IEntityArchetype& archetype, Serialization::IArchive& archive) = 0;
+	//! Called to load archetype extension data from the XML.
+	virtual void LoadFromXML(IEntityArchetype& archetype, XmlNodeRef& archetypeNode) = 0;
+	//! Called to save archetype extension data to the XML.
+	virtual void SaveToXML(IEntityArchetype& archetype, XmlNodeRef& archetypeNode) = 0;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -343,6 +296,20 @@ struct IEntityEventListener
 	virtual ~IEntityEventListener(){}
 	virtual void OnEntityEvent(IEntity* pEntity, SEntityEvent& event) = 0;
 	// </interfuscator:shuffle>
+};
+
+struct IEntityLayerSetUpdateListener
+{
+	virtual void LayerEnablingEvent(const char* szLayerName, bool bEnabled, bool bSerialized) = 0;
+protected:
+	~IEntityLayerSetUpdateListener() {}
+};
+
+struct IEntityLayerListener
+{
+	virtual void LayerEnabled(bool bActivated) = 0;
+protected:
+	~IEntityLayerListener() {}
 };
 
 //! Structure used by proximity query in entity system.
@@ -367,6 +334,11 @@ struct SEntityProximityQuery
 	}
 };
 
+struct IEntitySystemEngineModule : public Cry::IDefaultModule
+{
+	CRYINTERFACE_DECLARE(IEntitySystemEngineModule, 0xBBBB58B0FF9749CF, 0xBFFE254420CD166F);
+};
+
 //! Interface to the system that manages the entities in the game.
 //! Interface to the system that manages the entities in the game, their creation, deletion and upkeep.
 //! The entities are kept in a map indexed by their unique entity ID. The entity system updates only unbound entities every frame (bound entities
@@ -374,7 +346,7 @@ struct SEntityProximityQuery
 //! The entity system also keeps track of entities that have to be drawn last and with more zbuffer resolution.
 struct IEntitySystem
 {
-	enum SinkEventSubscriptions
+	enum SinkEventSubscriptions : uint32
 	{
 		OnBeforeSpawn = BIT(0),
 		OnSpawn       = BIT(1),
@@ -392,8 +364,6 @@ struct IEntitySystem
 
 	// <interfuscator:shuffle>
 	virtual ~IEntitySystem(){}
-
-	virtual void RegisterCharactersForRendering() = 0;
 
 	//! Releases entity system.
 	virtual void Release() = 0;
@@ -437,13 +407,6 @@ struct IEntitySystem
 	//! \return Entity if one with such an ID exists, and NULL if no entity could be matched with the id
 	virtual IEntity* GetEntity(EntityId id) const = 0;
 
-	//! Converts an original entity id to that of a cloned version of it.
-	//! This should be called on any serialized entity ids after loading is complete, to make sure they account for runtime cloning.
-	//! \param origId Unique ID of the original entity.
-	//! \param refId Id of a cloned entity from the same layer of the original entity (in this case "same layer" means the root layer and any children).
-	//! \return Id of the cloned enity, or the original entity if it wasn't cloned
-	virtual EntityId GetClonedEntityId(EntityId origId, EntityId refId) const = 0;
-
 	//! Find first entity with given name.
 	//! \param sEntityName Name to look for.
 	//! \return The entity if found, 0 if failed.
@@ -471,10 +434,6 @@ struct IEntitySystem
 	//! Sends the same event to all entities in Entity System.
 	//! \param event Event to send.
 	virtual void SendEventToAll(SEntityEvent& event) = 0;
-
-	//! Sends the same event to the entity in Entity System using the EntityEvent system
-	//! \param event Event to send.
-	virtual void SendEventViaEntityEvent(IEntity* piEntity, SEntityEvent& event) = 0;
 
 	//! Get all entities within proximity of the specified bounding box.
 	//! \note Query is not exact, entities reported can be a few meters away from the bounding box.
@@ -540,35 +499,18 @@ struct IEntitySystem
 	virtual void LoadEntities(XmlNodeRef& objectsNode, bool bIsLoadingLevelFile) = 0;
 	virtual void LoadEntities(XmlNodeRef& objectsNode, bool bIsLoadingLevelFile, const Vec3& segmentOffest, std::vector<IEntity*>* outGlobalEntityIds, std::vector<IEntity*>* outLocalEntityIds) = 0;
 
-	//! During the loading process, don't add any entities from this layer to the world, and instead cache off their creation info for later use.
-	//! \param pLayerName The name of the top-level layer, will include any sub-layers too.
-	virtual void HoldLayerEntities(const char* pLayerName) = 0;
-
-	//! Add clones of held entities for the specified layer to the world.  This can be
-	//! called multiple times for the same layer.
-	//! \param localOffset Point the entities are transformed relative to when they are added (typically, the center of the layer).
-	//! \param l2w Transform to apply to all entities in the layer.
-	//! \param pIncludeLayers Optionally, an array of names of sub-layers to include when cloning (should only be NULL when numIncludeLayers is 0).
-	//! \param numIncludeLayers Number of included layers.
-	virtual void CloneHeldLayerEntities(const char* pLayerName, const Vec3& localOffset, const Matrix34& l2w, const char** pIncludeLayers = NULL, int numIncludeLayers = 0) = 0;
-
-	//! Releases all the held entities.
-	virtual void ReleaseHeldEntities() = 0;
-
 	//! Registers Entity Event's listeners.
 	virtual void AddEntityEventListener(EntityId nEntity, EEntityEvent event, IEntityEventListener* pListener) = 0;
 	virtual void RemoveEntityEventListener(EntityId nEntity, EEntityEvent event, IEntityEventListener* pListener) = 0;
+
+	//! Register entity layer listener
+	virtual void AddEntityLayerListener(const char* szLayerName, IEntityLayerListener* pListener, const bool bCaseSensitive = true) = 0;
+	virtual void RemoveEntityLayerListener(const char* szLayerName, IEntityLayerListener* pListener, const bool bCaseSensitive = true) = 0;
 
 	// Entity GUIDs
 
 	//! Finds entity by Entity GUID.
 	virtual EntityId FindEntityByGuid(const EntityGUID& guid) const = 0;
-
-	//! Finds entity by editor GUID.
-	//! This is a special case for runtime prefabs, since they use the editor guids.
-	//! It is only valid to call in between BeginCreateEntities and EndCreateEntities.
-	//! \param guid GUID string (ie {ABCD1234-...}) of the entity required.
-	virtual EntityId FindEntityByEditorGuid(const char* pGuid) const = 0;
 
 	//! Generates new entity id based on Entity GUID.
 	virtual EntityId GenerateEntityIdFromGuid(const EntityGUID& guid) = 0;
@@ -579,16 +521,15 @@ struct IEntitySystem
 	//! \return The breakable manager interface.
 	virtual IBreakableManager* GetBreakableManager() const = 0;
 
-	//! \return The entity pool manager interface.
-	virtual IEntityPoolManager* GetIEntityPoolManager() const = 0;
-
 	//////////////////////////////////////////////////////////////////////////
 	//! Entity archetypes.
-	virtual IEntityArchetype* LoadEntityArchetype(XmlNodeRef oArchetype) = 0;
-	virtual IEntityArchetype* LoadEntityArchetype(const char* sArchetype) = 0;
-	virtual void              UnloadEntityArchetype(const char* sArchetype) = 0;
-	virtual IEntityArchetype* CreateEntityArchetype(IEntityClass* pClass, const char* sArchetype) = 0;
-	virtual void              RefreshEntityArchetypesInRegistry() = 0;
+	virtual IEntityArchetype*                 LoadEntityArchetype(XmlNodeRef oArchetype) = 0;
+	virtual IEntityArchetype*                 LoadEntityArchetype(const char* sArchetype) = 0;
+	virtual void                              UnloadEntityArchetype(const char* sArchetype) = 0;
+	virtual IEntityArchetype*                 CreateEntityArchetype(IEntityClass* pClass, const char* sArchetype) = 0;
+	virtual void                              RefreshEntityArchetypesInRegistry() = 0;
+	virtual void                              SetEntityArchetypeManagerExtension(IEntityArchetypeManagerExtension* pEntityArchetypeManagerExtension) = 0;
+	virtual IEntityArchetypeManagerExtension* GetEntityArchetypeManagerExtension() const = 0;
 	//////////////////////////////////////////////////////////////////////////
 
 	//! Serializes basic entity system members (timers etc. ) to/from a savegame;
@@ -636,11 +577,14 @@ struct IEntitySystem
 	//! Enable entity layer.
 	virtual void EnableLayer(const char* layer, bool isEnable, bool isSerialized = true) = 0;
 
+	//! Enable entity layers specified in the layer set and hide all other known layers.
+	virtual void EnableLayerSet(const char* const * pLayers, size_t layerCount, bool isSerialized = true, IEntityLayerSetUpdateListener* pListener = nullptr) = 0;
+
 	//! Find a layer with a given name.
-	virtual IEntityLayer* FindLayer(const char* szLayer) const = 0;
+	virtual IEntityLayer* FindLayer(const char* szLayerName, const bool bCaseSensitive = true) const = 0;
 
 	//! Is layer with given name enabled ?.
-	virtual bool IsLayerEnabled(const char* layer, bool bMustBeLoaded) const = 0;
+	virtual bool IsLayerEnabled(const char* layer, bool bMustBeLoaded, bool bCaseSensitive = true) const = 0;
 
 	//! Returns true if entity is not in a layer or the layer is enabled/serialized.
 	virtual bool ShouldSerializedEntity(IEntity* pEntity) = 0;
@@ -650,9 +594,6 @@ struct IEntitySystem
 	virtual void UnregisterPhysicCallbacks() = 0;
 
 	virtual void PurgeDeferredCollisionEvents(bool bForce = false) = 0;
-
-	//! Component APIs.
-	virtual void ComponentEnableEvent(const EntityId id, const int eventID, const bool enable) = 0;
 
 	virtual bool EntitiesUseGUIDs() const = 0;
 	virtual void SetEntitiesUseGUIDs(const bool bEnable) = 0;
@@ -690,7 +631,6 @@ struct IEntitySystem
 
 	virtual IBSPTree3D* CreateBSPTree3D(const IBSPTree3D::FaceList& faceList) = 0;
 	virtual void        ReleaseBSPTree3D(IBSPTree3D*& pTree) = 0;
-
 	// </interfuscator:shuffle>
 };
 
@@ -700,3 +640,110 @@ extern "C"
 }
 
 typedef struct IEntitySystem* (* PFNCREATEENTITYSYSTEM)(ISystem* pISystem);
+
+#if !defined(_RELEASE) && CRY_PLATFORM_WINDOWS
+	#define ENABLE_ENTITYEVENT_DEBUGGING 1
+#else
+	#define ENABLE_ENTITYEVENT_DEBUGGING 0
+#endif
+
+// entity event listener debug output macro
+#if ENABLE_ENTITYEVENT_DEBUGGING
+	#define ENTITY_EVENT_LISTENER_DEBUG                                      \
+	  {                                                                      \
+	    if (gEnv && gEnv->pConsole)                                          \
+	    {                                                                    \
+	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners"); \
+	      if (pCvar && pCvar->GetIVal())                                     \
+	        CryLog("Entity Event listener %s '%p'", __FUNCTION__, this);     \
+	    }                                                                    \
+	  }
+
+	#define ENTITY_EVENT_ENTITY_DEBUG(pEntity)                                          \
+	  {                                                                                 \
+	    if (gEnv && gEnv->pConsole)                                                     \
+	    {                                                                               \
+	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners");            \
+	      if (pCvar && pCvar->GetIVal())                                                \
+	        CryLog("Event for entity '%s' pointer '%p'", pEntity->GetName(), pEntity);  \
+	    }                                                                               \
+	  }
+
+	#define ENTITY_EVENT_ENTITY_LISTENER(pListener)                          \
+	  {                                                                      \
+	    if (gEnv && gEnv->pConsole)                                          \
+	    {                                                                    \
+	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners"); \
+	      if (pCvar && pCvar->GetIVal())                                     \
+	        CryLog("Event listener '%p'", pListener);                        \
+	    }                                                                    \
+	  }
+
+	#define ENTITY_EVENT_LISTENER_ADDED(pEntity, pListener)                                                                                 \
+	  {                                                                                                                                     \
+	    if (gEnv && gEnv->pConsole)                                                                                                         \
+	    {                                                                                                                                   \
+	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners");                                                                \
+	      if (pCvar && pCvar->GetIVal())                                                                                                    \
+	        CryLog("Adding Entity Event listener for entity '%s' pointer '%p' for listener '%p'", pEntity->GetName(), pEntity, pListener);  \
+	    }                                                                                                                                   \
+	  }
+
+	#define ENTITY_EVENT_LISTENER_REMOVED(nEntity, pListener)                                                                               \
+	  {                                                                                                                                     \
+	    if (gEnv && gEnv->pConsole)                                                                                                         \
+	    {                                                                                                                                   \
+	      ICVar* pCvar = gEnv->pConsole->GetCVar("es_debugEntityListeners");                                                                \
+	      if (pCvar && pCvar->GetIVal())                                                                                                    \
+	      {                                                                                                                                 \
+	        CEntity* pCEntity = (CEntity*)GetEntity(nEntity);                                                                               \
+	        CryLog("Removing Entity Event listener for entity '%s' for listener '%p'", pCEntity ? pCEntity->GetName() : "null", pListener); \
+	      }                                                                                                                                 \
+	    }                                                                                                                                   \
+	  }
+
+#else
+	#define ENTITY_EVENT_LISTENER_DEBUG
+	#define ENTITY_EVENT_ENTITY_DEBUG(pEntity)
+	#define ENTITY_EVENT_ENTITY_LISTENER(pListener)
+	#define ENTITY_EVENT_LISTENER_ADDED(pEntity, pListener)
+	#define ENTITY_EVENT_LISTENER_REMOVED(nEntity, pListener)
+#endif
+
+template<class T>
+inline IEntityClass* RegisterEntityClassWithDefaultComponent(
+	const char* name,
+	const CryGUID classGUID, // This is a guid for the Entity Class, not for component
+	const CryGUID componentUniqueGUID, // This is not a class type of component guid, but a unique guid of this unique component inside entity
+	bool bIconOnTop = false,
+	IFlowNodeFactory *pOptionalFlowNodeFactory = nullptr
+)
+{
+	const CEntityComponentClassDesc* pClassDesc = &Schematyc::GetTypeDesc<T>();
+
+	IEntityClassRegistry::SEntityClassDesc clsDesc;
+	clsDesc.sName = name;
+
+	clsDesc.editorClassInfo.sCategory = pClassDesc->GetEditorCategory();
+	clsDesc.editorClassInfo.sIcon = pClassDesc->GetIcon();
+	clsDesc.editorClassInfo.bIconOnTop = bIconOnTop;
+	clsDesc.pIFlowNodeFactory = pOptionalFlowNodeFactory;
+	
+	auto onSpawnLambda = [componentUniqueGUID, pClassDesc](IEntity& entity, SEntitySpawnParams& params) -> bool
+	{
+		string componentName = pClassDesc->GetName().c_str();
+		IEntityComponent::SInitParams initParams(
+			&entity,
+			componentUniqueGUID,
+			componentName,
+			pClassDesc,
+			EEntityComponentFlags::None,
+			nullptr,
+			nullptr);
+		entity.CreateComponentByInterfaceID(pClassDesc->GetGUID(), &initParams);
+		return true;
+	};
+	clsDesc.onSpawnCallback = onSpawnLambda;
+
+	return gEnv->pEntitySystem->GetClassRegistry()->RegisterStdClass(clsDesc);
+}

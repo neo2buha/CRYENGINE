@@ -10,10 +10,11 @@
 
 //#define CREATE_RENDERDOC_CAPTURE
 
-class CREBaker : public CRendElementBase
+#if !CRY_PLATFORM_CONSOLE && !CRY_PLATFORM_MOBILE
+class CREBaker : public CRenderElement
 {
 private:
-	CRendElementBase*                m_pSrc;
+	CRenderElement*                    m_pSrc;
 	std::vector<IIndexedMesh*>       m_pDst;
 	CMesh*                           m_pSrcMesh;
 	int                              m_nPhase;
@@ -22,7 +23,7 @@ private:
 	int                              m_numParams;
 
 public:
-	CREBaker(CRendElementBase* pSrc, CMesh* pSrcMesh, std::vector<IIndexedMesh*> pDst, int nPhase, const SMeshBakingMaterialParams* params, int numParams, bool bSmoothNormals)
+	CREBaker(CRenderElement* pSrc, CMesh* pSrcMesh, std::vector<IIndexedMesh*> pDst, int nPhase, const SMeshBakingMaterialParams* params, int numParams, bool bSmoothNormals)
 		: m_pSrc(pSrc)
 		, m_pDst(pDst)
 		, m_pSrcMesh(pSrcMesh)
@@ -37,14 +38,14 @@ public:
 	inline void                mfSetFlags(uint32 fl)                                                                   { m_pSrc->mfSetFlags(fl); }
 	inline void                mfUpdateFlags(uint32 fl)                                                                { m_pSrc->mfUpdateFlags(fl); }
 	inline void                mfClearFlags(uint32 fl)                                                                 { m_pSrc->mfClearFlags(fl); }
-	inline bool                mfCheckUpdate(EVertexFormat eVertFormat, int Flags, uint16 nFrame)                      { return m_pSrc->mfCheckUpdate(eVertFormat, Flags, nFrame); }
-	virtual void               mfPrepare(bool bCheckOverflow)                                                          { m_pSrc->mfPrepare(bCheckOverflow); gcpRendD3D->m_RP.m_CurVFormat = eVF_P3F_T2F_T3F; }
+	inline bool                mfCheckUpdate(InputLayoutHandle eVertFormat, int Flags, uint16 nFrame)                  { return m_pSrc->mfCheckUpdate(eVertFormat, Flags, nFrame); }
+	virtual void               mfPrepare(bool bCheckOverflow)                                                          { m_pSrc->mfPrepare(bCheckOverflow); gcpRendD3D->m_RP.m_CurVFormat = EDefaultInputLayouts::P3F_T2F_T3F; }
 	virtual CRenderChunk*      mfGetMatInfo()                                                                          { return m_pSrc->mfGetMatInfo(); }
 	virtual TRenderChunkArray* mfGetMatInfoList()                                                                      { return m_pSrc->mfGetMatInfoList(); }
 	virtual int                mfGetMatId()                                                                            { return m_pSrc->mfGetMatId(); }
 	virtual void               mfReset()                                                                               { m_pSrc->mfReset(); }
 	virtual bool               mfIsHWSkinned()                                                                         { return m_pSrc->mfIsHWSkinned(); }
-	virtual CRendElementBase*  mfCopyConstruct(void)                                                                   { return m_pSrc->mfCopyConstruct(); }
+	virtual CRenderElement*      mfCopyConstruct(void)                                                                   { return m_pSrc->mfCopyConstruct(); }
 	virtual void               mfCenter(Vec3& centr, CRenderObject* pObj)                                              { m_pSrc->mfCenter(centr, pObj); }
 	virtual void               mfGetBBox(Vec3& vMins, Vec3& vMaxs)                                                     { m_pSrc->mfGetBBox(vMins, vMaxs); }
 	virtual void               mfGetPlane(Plane& pl)                                                                   { m_pSrc->mfGetPlane(pl); }
@@ -52,7 +53,7 @@ public:
 	virtual bool               mfDraw(CShader* ef, SShaderPass* sfm);
 	virtual void*              mfGetPointer(ESrcPointer ePT, int* Stride, EParamType Type, ESrcPointer Dst, int Flags) { return m_pSrc->mfGetPointer(ePT, Stride, Type, Dst, Flags); }
 	virtual bool               mfPreDraw(SShaderPass* sl)                                                              { return m_pSrc->mfPreDraw(sl); }
-	virtual bool               mfUpdate(EVertexFormat eVertFormat, int Flags, bool bTessellation = false)              { bool bRet = m_pSrc->mfUpdate(eVertFormat, Flags, bTessellation); gcpRendD3D->m_RP.m_CurVFormat = eVF_P3F_T2F_T3F; return bRet; }
+	virtual bool               mfUpdate(InputLayoutHandle eVertFormat, int Flags, bool bTessellation = false)          { bool bRet = m_pSrc->mfUpdate(eVertFormat, Flags, bTessellation); gcpRendD3D->m_RP.m_CurVFormat = EDefaultInputLayouts::P3F_T2F_T3F; return bRet; }
 	virtual void               mfPrecache(const SShaderItem& SH)                                                       { m_pSrc->mfPrecache(SH); }
 	virtual void               mfExport(struct SShaderSerializeContext& SC)                                            { m_pSrc->mfExport(SC); }
 	virtual int                Size()                                                                                  { return m_pSrc->Size(); }
@@ -182,7 +183,7 @@ bool CREBaker::mfDraw(CShader* ef, SShaderPass* sfm)
 		rd->FX_SetStencilState(nStencilState, 1, 0xFFFFFFFF, 0xFFFFFFFF);
 		rd->FX_SetState(State);
 
-		if (!FAILED(rd->FX_SetVertexDeclaration(VSM_GENERAL | ((1 << VSF_TANGENTS)), eVF_P3F_T2F_T3F)))
+		if (!FAILED(rd->FX_SetVertexDeclaration(VSM_GENERAL | ((1 << VSF_TANGENTS)), EDefaultInputLayouts::P3F_T2F_T3F)))
 		{
 			CMesh* pInputMesh = m_pSrcMesh;
 			Vec3* pInPos = pInputMesh->GetStreamPtr<Vec3>(CMesh::POSITIONS);
@@ -272,7 +273,9 @@ bool CREBaker::mfDraw(CShader* ef, SShaderPass* sfm)
 					if (!rd->m_pRT || rd->m_pRT->IsRenderThread())
 					{
 						// Send the commands to the GPU to make sure we don't timeout the driver
+#ifdef RENDERER_ENABLE_LEGACY_PIPELINE
 						rd->GetDeviceContext().Flush();
+#endif
 						Sleep(1);
 					}
 				}
@@ -406,7 +409,7 @@ static void EtchAlphas(std::vector<IIndexedMesh*> outputList, IMaterial* pMateri
 			vb.Release();
 		}
 
-		if (!FAILED(rd->FX_SetVertexDeclaration(VSM_GENERAL, eVF_P3F_T2F_T3F)))
+		if (!FAILED(rd->FX_SetVertexDeclaration(VSM_GENERAL, EDefaultInputLayouts::P3F_T2F_T3F)))
 		{
 			rd->FX_Commit();
 			for (int ss = 0; ss < pOutputMesh->GetSubSetCount(); ss++)
@@ -423,7 +426,9 @@ static void EtchAlphas(std::vector<IIndexedMesh*> outputList, IMaterial* pMateri
 			if (!rd->m_pRT || rd->m_pRT->IsRenderThread())
 			{
 				// Send the commands to the GPU to make sure we don't timeout the driver
+#ifdef RENDERER_ENABLE_LEGACY_PIPELINE
 				rd->GetDeviceContext().Flush();
+#endif
 				Sleep(1);
 			}
 		}
@@ -460,9 +465,8 @@ static bool Dilate(CTexture* pTex, CTexture* pOutput, int nPhase, std::vector<II
 			bAlphaCutout = (nPhase == 0);
 	}
 
-	CTexture* pTemp = CTexture::CreateRenderTarget("MeshBaker_DilateTemp", uvMapWidth, uvMapHeight, ColorF(1.0f, 1.0f, 1.0f, 1.0f), eTT_2D, FT_STATE_CLAMP, pTex->GetTextureDstFormat());
+	CTexture* pTemp = CTexture::GetOrCreateRenderTarget("MeshBaker_DilateTemp", uvMapWidth, uvMapHeight, ColorF(1.0f, 1.0f, 1.0f, 1.0f), eTT_2D, FT_STATE_CLAMP, pTex->GetTextureDstFormat());
 	int TempX, TempY, TempWidth, TempHeight;
-	int nTexStateIdRepeat = CTexture::GetTexState(STexState(FILTER_TRILINEAR, false));
 	rd->GetViewport(&TempX, &TempY, &TempWidth, &TempHeight);
 	rd->RT_SetViewport(0, 0, uvMapWidth, uvMapHeight);
 
@@ -579,9 +583,11 @@ static bool IsRenderableSubObject(IStatObj* obj, int child)
 	       obj->GetSubObject(child)->pStatObj != NULL &&
 	       obj->GetSubObject(child)->pStatObj->GetRenderMesh() != NULL;
 }
+#endif
 
 bool CD3D9Renderer::BakeMesh(const SMeshBakingInputParams* pInputParams, SMeshBakingOutput* pReturnValues)
 {
+#if !CRY_PLATFORM_CONSOLE && !CRY_PLATFORM_MOBILE
 	if (gEnv->IsEditor())
 	{
 #if defined(CREATE_RENDERDOC_CAPTURE)
@@ -746,9 +752,9 @@ bool CD3D9Renderer::BakeMesh(const SMeshBakingInputParams* pInputParams, SMeshBa
 			char uniqueName[128];
 			const char* suffix[3] = { "Albedo", "Normal", "Refl" };
 			cry_sprintf(uniqueName, "MeshBaker_16Bit%s_%d%s", suffix[nPhase], pInputParams->nLodId, bAlphaCutout ? "_alpha" : "");
-			pHighPrecisionBuffer[nPhase] = CTexture::CreateRenderTarget(uniqueName, outputWidth, outputHeight, Clr_Phase, eTT_2D, FT_STATE_CLAMP, eTF_R16G16B16A16F /*, -1, 95*/);
+			pHighPrecisionBuffer[nPhase] = CTexture::GetOrCreateRenderTarget(uniqueName, outputWidth, outputHeight, Clr_Phase, eTT_2D, FT_STATE_CLAMP, eTF_R16G16B16A16F /*, -1, 95*/);
 			cry_sprintf(uniqueName, "MeshBaker_8Bit%s_%d%s", suffix[nPhase], pInputParams->nLodId, bAlphaCutout ? "_alpha" : "");
-			pOutputBuffer[nPhase] = CTexture::CreateRenderTarget(uniqueName, outputWidth, outputHeight, Clr_Phase, eTT_2D, FT_STATE_CLAMP | FT_STAGE_READBACK, eTF_R8G8B8A8 /*, -1, 95*/);
+			pOutputBuffer[nPhase] = CTexture::GetOrCreateRenderTarget(uniqueName, outputWidth, outputHeight, Clr_Phase, eTT_2D, FT_STATE_CLAMP | FT_STAGE_READBACK, eTF_R8G8B8A8 /*, -1, 95*/);
 
 			PROFILE_LABEL_SCOPE(suffix[nPhase]);
 
@@ -757,6 +763,7 @@ bool CD3D9Renderer::BakeMesh(const SMeshBakingInputParams* pInputParams, SMeshBa
 			FX_ClearTarget(pTmpDepthSurface, CLEAR_ZBUFFER | CLEAR_STENCIL, Clr_FarPlane_R.r, 0);
 			FX_PushRenderTarget(0, pHighPrecisionBuffer[nPhase], pTmpDepthSurface);
 			RT_SetViewport(0, 0, outputWidth, outputHeight);
+			m_RP.m_pCurrentRenderView = passInfo.GetRenderView();
 
 			int nThreadID = m_pRT->GetThreadList();
 
@@ -825,8 +832,7 @@ bool CD3D9Renderer::BakeMesh(const SMeshBakingInputParams* pInputParams, SMeshBa
 					int nThreadID = m_RP.m_nProcessThreadID;
 					ri[numChunks].nBatchFlags = EF_BatchFlags(pSH, pObj, pRE, passInfo, 1); // naughty
 					//ri[numChunks].nStencRef = pObj->m_nClipVolumeStencilRef+1;
-					uint32 nResID = pR ? pR->m_Id : 0;
-					ri[numChunks].SortVal = (nResID << 6) | (pShader->mfGetID() << 20) | (pSH.m_nTechnique & 0x3f);
+					ri[numChunks].SortVal = SRendItem::PackShaderItem(pSH);
 					ri[numChunks].pElem = pRE;
 					numChunks++;
 				}
@@ -893,6 +899,7 @@ bool CD3D9Renderer::BakeMesh(const SMeshBakingInputParams* pInputParams, SMeshBa
 		return true;
 	}
 	else
+#endif
 	{
 		CryWarning(VALIDATOR_MODULE_RENDERER, VALIDATOR_ERROR, "BakeMesh: Only exists within editor\n");
 		return false;

@@ -26,10 +26,7 @@
 #include "FogVolumeRenderNode.h"
 #include "ObjectsTree.h"
 #include "WaterWaveRenderNode.h"
-#include "CloudsManager.h"
 #include "MatMan.h"
-#include "VolumeObjectRenderNode.h"
-#include "GlobalIllumination.h"
 #include <CryString/CryPath.h>
 #include <CryMemory/ILocalMemoryUsage.h>
 #include <CryCore/BitFiddling.h>
@@ -48,6 +45,7 @@
 #include <CryAnimation/ICryAnimation.h>
 #include <CryAISystem/IAISystem.h>
 #include <CryCore/Platform/IPlatformOS.h>
+#include "WaterRippleManager.h"
 
 #if defined(FEATURE_SVO_GI)
 	#include "SVO/SceneTreeManager.h"
@@ -678,12 +676,17 @@ static std::vector<SDebugFrustrum> g_DebugFrustrums;
 void C3DEngine::DebugDraw_Draw()
 {
 #ifndef _RELEASE
+	if (!gEnv->pRenderer)
+	{
+		return;
+	}
+
 	if (m_DebugDrawListMgr.IsEnabled())
 		m_DebugDrawListMgr.Update();
 
 	CTimeValue CurrentTime = gEnv->pTimer->GetFrameStartTime();
 
-	IRenderAuxGeom* pAux = gEnv->pAuxGeomRenderer;
+	IRenderAuxGeom* pAux = IRenderAuxGeom::GetAux();
 
 	SAuxGeomRenderFlags oldFlags = pAux->GetRenderFlags();
 	SAuxGeomRenderFlags newFlags;
@@ -797,11 +800,11 @@ void C3DEngine::DebugDraw_UpdateDebugNode()
 
 			if (pEntity)
 			{
-				IEntityRenderProxy* pRenderProxy = (IEntityRenderProxy*)pEntity->GetProxy(ENTITY_PROXY_RENDER);
+				IEntityRender* pIEntityRender = pEntity->GetRenderInterface();
 
-				if (pRenderProxy)
+				
 				{
-					IRenderNode* pRenderNode = pRenderProxy->GetRenderNode();
+					IRenderNode* pRenderNode = pIEntityRender->GetRenderNode();
 
 					if (pRenderNode)
 					{
@@ -863,8 +866,8 @@ void C3DEngine::RenderWorld(const int nRenderFlags, const SRenderingPassInfo& pa
 
 		if (GetCVars()->e_DefaultMaterial)
 		{
-			_smart_ptr<IMaterial> pMat = GetMaterialManager()->LoadMaterial("EngineAssets/Materials/material_default");
-			_smart_ptr<IMaterial> pTerrainMat = GetMaterialManager()->LoadMaterial("EngineAssets/Materials/material_terrain_default");
+			_smart_ptr<IMaterial> pMat = GetMaterialManager()->LoadMaterial("%ENGINE%/EngineAssets/Materials/material_default");
+			_smart_ptr<IMaterial> pTerrainMat = GetMaterialManager()->LoadMaterial("%ENGINE%/EngineAssets/Materials/material_terrain_default");
 			GetRenderer()->SetDefaultMaterials(pMat, pTerrainMat);
 		}
 		else
@@ -913,7 +916,7 @@ void C3DEngine::RenderWorld(const int nRenderFlags, const SRenderingPassInfo& pa
 
 		float fYLine = 8.0f, fYStep = 20.0f;
 
-		GetRenderer()->Draw2dLabel(8.0f, fYLine += fYStep, 2.0f, fColor, false, "e_DebugDraw = %d", GetCVars()->e_DebugDraw);
+		IRenderAuxText::Draw2dLabel(8.0f, fYLine += fYStep, 2.0f, fColor, false, "e_DebugDraw = %d", GetCVars()->e_DebugDraw);
 
 		char* szMode = "";
 
@@ -999,16 +1002,16 @@ void C3DEngine::RenderWorld(const int nRenderFlags, const SRenderingPassInfo& pa
 			assert(0);
 		}
 
-		GetRenderer()->Draw2dLabel(8.0f, fYLine += fYStep, 2.0f, fColor, false, "   %s", szMode);
+		IRenderAuxText::Draw2dLabel(8.0f, fYLine += fYStep, 2.0f, fColor, false, "   %s", szMode);
 
 		if (GetCVars()->e_DebugDraw == 17)
 		{
-			GetRenderer()->Draw2dLabel(8.0f, fYLine += fYStep, 2.0f, fColor, false, "   StatObj geometry used: %.2fMb / %dMb", CObjManager::s_nLastStreamingMemoryUsage / (1024.f * 1024.f), GetCVars()->e_StreamCgfPoolSize);
+			IRenderAuxText::Draw2dLabel(8.0f, fYLine += fYStep, 2.0f, fColor, false, "   StatObj geometry used: %.2fMb / %dMb", CObjManager::s_nLastStreamingMemoryUsage / (1024.f * 1024.f), GetCVars()->e_StreamCgfPoolSize);
 
 			ICVar* cVar = GetConsole()->GetCVar("r_TexturesStreaming");
 			if (!cVar || !cVar->GetIVal())
 			{
-				GetRenderer()->Draw2dLabel(8.0f, fYLine += fYStep, 2.0f, fColor, false, "   You have to set r_TexturesStreaming = 1 to see texture information!");
+				IRenderAuxText::Draw2dLabel(8.0f, fYLine += fYStep, 2.0f, fColor, false, "   You have to set r_TexturesStreaming = 1 to see texture information!");
 			}
 		}
 	}
@@ -1020,13 +1023,19 @@ void C3DEngine::RenderWorld(const int nRenderFlags, const SRenderingPassInfo& pa
 
 void C3DEngine::PreWorldStreamUpdate(const CCamera& cam)
 {
-	if (m_szLevelFolder[0] != 0)
+	const int nGlobalSystemState = gEnv->pSystem->GetSystemGlobalState();
+	if (nGlobalSystemState == ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_END)
+	{
+		ClearPrecacheInfo();
+	}
+
+	if (m_szLevelFolder[0] != 0 && (nGlobalSystemState > ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_END))
 	{
 		m_nStreamingFramesSinceLevelStart++;
 	}
 
 	// force preload terrain data if camera was teleported more than 32 meters
-	if (!IsAreaActivationInUse() || m_bLayersActivated)
+	if (GetRenderer() && (!IsAreaActivationInUse() || m_bLayersActivated))
 	{
 		float fDistance = m_vPrevMainFrameCamPos.GetDistance(cam.GetPosition());
 
@@ -1064,6 +1073,7 @@ void C3DEngine::PreWorldStreamUpdate(const CCamera& cam)
 		if (GetCVars()->e_AutoPrecacheCameraJumpDist && fDistance > GetCVars()->e_AutoPrecacheCameraJumpDist)
 		{
 			m_bContentPrecacheRequested = true;
+			m_bResetRNTmpDataPool = true;
 
 			// Invalidate existing precache info
 			m_pObjManager->m_nUpdateStreamingPrioriryRoundIdFast += 8;
@@ -1122,9 +1132,18 @@ void C3DEngine::WorldStreamUpdate()
 				break;
 			}
 
-			int nGlobalSystemState = gEnv->pSystem->GetSystemGlobalState();
+			const int nGlobalSystemState = gEnv->pSystem->GetSystemGlobalState();
 
-			if ((nGlobalSystemState != ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_COMPLETE && (!bStarted || fTime >= 10.0f)) && m_nStreamingFramesSinceLevelStart > 16)
+			if (nGlobalSystemState == ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_END)
+			{
+				gEnv->pSystem->GetISystemEventDispatcher()->OnSystemEvent(ESYSTEM_EVENT_LEVEL_PRECACHE_START, 0, 0);
+
+				m_pSystem->SetThreadState(ESubsys_Physics, true);
+
+				gEnv->pSystem->SetSystemGlobalState(ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_ENDING);
+			}
+
+			if (nGlobalSystemState == ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_ENDING && (!bStarted || fTime >= 10.0f) && m_nStreamingFramesSinceLevelStart > 16)
 			{
 				gEnv->pSystem->SetSystemGlobalState(ESYSTEM_GLOBAL_STATE_LEVEL_LOAD_COMPLETE);
 
@@ -1191,10 +1210,6 @@ void C3DEngine::WorldStreamUpdate()
 				}
 #endif
 				// gEnv->pCryPak->GetFileReadSequencer()->EndSection(); // STREAMING
-			}
-			else if (m_szLevelFolder[0])
-			{
-				ProposeContentPrecache();
 			}
 		}
 	}
@@ -1447,11 +1462,6 @@ void C3DEngine::RenderInternal(const int nRenderFlags, const SRenderingPassInfo&
 
 	if (passInfo.IsGeneralPass() && passInfo.RenderClouds())
 	{
-		if (m_pCloudsManager)
-			m_pCloudsManager->MoveClouds();
-
-		CVolumeObjectRenderNode::MoveVolumeObjects();
-
 		// move procedural volumetric clouds with global wind.
 		{
 			Vec3 cloudParams(0, 0, 0);
@@ -1465,8 +1475,6 @@ void C3DEngine::RenderInternal(const int nRenderFlags, const SRenderingPassInfo&
 			m_vVolCloudTilingOffset.y -= wind.y * elapsedTime;
 		}
 	}
-
-	m_fInvDissolveDistBand = 1.0f / GetFloatCVar(e_DissolveDistband);
 
 	if (m_pObjManager)
 	{
@@ -1589,16 +1597,6 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 #endif
 
 	////////////////////////////////////////////////////////////////////////////////////////
-	// Define indoor visibility
-	////////////////////////////////////////////////////////////////////////////////////////
-
-	if (m_pVisAreaManager)
-	{
-		m_pVisAreaManager->DrawOcclusionAreasIntoCBuffer(passInfo);
-		m_pVisAreaManager->CheckVis(passInfo);
-	}
-
-	////////////////////////////////////////////////////////////////////////////////////////
 	// Draw potential occluders into z-buffer
 	////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1618,6 +1616,16 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 	////////////////////////////////////////////////////////////////////////////////////////
 
 	GetRenderer()->EF_StartEf(passInfo);
+
+	////////////////////////////////////////////////////////////////////////////////////////
+	// Define indoor visibility
+	////////////////////////////////////////////////////////////////////////////////////////
+
+	if (m_pVisAreaManager)
+	{
+		m_pVisAreaManager->DrawOcclusionAreasIntoCBuffer(passInfo);
+		m_pVisAreaManager->CheckVis(passInfo);
+	}
 
 	////////////////////////////////////////////////////////////////////////////////////////
 	// Add clip volumes to renderer
@@ -1680,7 +1688,7 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 		    (m_pVisAreaManager->m_pCurArea || m_pVisAreaManager->m_pCurPortal))
 		{
 			// enable multi-camera culling
-			const_cast<CCamera&>(passInfo.GetCamera()).m_pMultiCamera = &m_pVisAreaManager->m_lstOutdoorPortalCameras;
+			//const_cast<CCamera&>(passInfo.GetCamera()).m_pMultiCamera = &m_pVisAreaManager->m_lstOutdoorPortalCameras;
 		}
 
 		if (IsOutdoorVisible())
@@ -1751,7 +1759,7 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 		const AABB& objBox = pObj->GetBBox();
 		// don't frustum cull the HUD. When e.g. zooming the FOV for this camera is very different to the
 		// fixed HUD FOV, and this can cull incorrectly.
-		const unsigned int dwRndFlags = pObj->GetRndFlags();
+		auto dwRndFlags = pObj->GetRndFlags();
 		if (dwRndFlags & ERF_HUD || passInfo.GetCamera().IsAABBVisible_E(objBox))
 		{
 			FRAME_PROFILER("C3DEngine::RenderScene_DrawAlwaysVisible", GetSystem(), PROFILE_3DENGINE);
@@ -1769,6 +1777,11 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 
 	ProcessOcean(passInfo);
 
+	if (m_pWaterRippleManager)
+	{
+		m_pWaterRippleManager->Render(passInfo);
+	}
+
 	if (m_pDecalManager && passInfo.RenderDecals())
 		m_pDecalManager->Render(passInfo);
 
@@ -1785,6 +1798,14 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 	if (passInfo.IsGeneralPass() && GetCVars()->e_StatObjBufferRenderTasks && JobManager::InvokeAsJob("CheckOcclusion"))
 		m_pObjManager->RenderBufferedRenderMeshes(passInfo);
 
+	// Call postrender on the meshes that require it.
+	// Call it before InvokeShadowMapRenderJobs, otherwise render meshes are not constructed at the moment of shadow gen render calls
+	if (passInfo.IsGeneralPass())
+	{
+		m_pMergedMeshesManager->SortActiveInstances(passInfo);
+		m_pMergedMeshesManager->PostRenderMeshes(passInfo);
+	}
+
 	// start render jobs for shadow map
 	if (!passInfo.IsShadowPass() && passInfo.RenderShadows() && !passInfo.IsRecursivePass())
 	{
@@ -1799,26 +1820,19 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 	if (m_pTerrain)
 		m_pTerrain->DrawVisibleSectors(passInfo);
 
-	if (m_pParticleSystem)
-	{
-		pfx2::CParticleSystem* pCSystem = static_cast<pfx2::CParticleSystem*>(m_pParticleSystem.get());
-		pCSystem->SyncronizeUpdateKernels();
-	}
+	pfx2::CParticleSystem* pParticleSystem = static_cast<pfx2::CParticleSystem*>(m_pParticleSystem.get());
+	if (pParticleSystem)
+		pParticleSystem->SyncronizeUpdateKernels();
 	if (m_pPartManager)
 		m_pPartManager->FinishParticleRenderTasks(passInfo);
-
-	// Call postrender on the meshes that require it.
-	if (passInfo.IsGeneralPass())
-	{
-		m_pMergedMeshesManager->SortActiveInstances(passInfo);
-		m_pMergedMeshesManager->PostRenderMeshes(passInfo);
-	}
+	if (pParticleSystem)
+		pParticleSystem->DeferredRender();
 
 	if (passInfo.IsGeneralPass())
 		m_LightVolumesMgr.Update(passInfo);
 
-	if (gEnv->pGame)
-		gEnv->pGame->OnRenderScene(passInfo);
+	if (auto* pGame = gEnv->pGameFramework->GetIGame())
+		pGame->OnRenderScene(passInfo);
 
 	////////////////////////////////////////////////////////////////////////////////////////
 	// Start asynchronous cull queue processing if enabled
@@ -1880,7 +1894,7 @@ void C3DEngine::ProcessOcean(const SRenderingPassInfo& passInfo)
 {
 	FUNCTION_PROFILER_3DENGINE;
 
-	if (GetOceanRenderFlags() & OCR_NO_DRAW || !GetVisAreaManager() || GetCVars()->e_DefaultMaterial)
+	if (GetOceanRenderFlags() & OCR_NO_DRAW || !GetVisAreaManager() || GetCVars()->e_DefaultMaterial || !GetTerrain())
 		return;
 
 	bool bOceanIsForcedByVisAreaFlags = GetVisAreaManager()->IsOceanVisible();
@@ -1939,9 +1953,6 @@ void C3DEngine::ProcessOcean(const SRenderingPassInfo& passInfo)
 			}
 		}
 	}
-
-	if (GetCVars()->e_WaterRipplesDebug > 0)
-		GetRenderer()->EF_DrawWaterSimHits();
 }
 
 void C3DEngine::RenderSkyBox(IMaterial* pMat, const SRenderingPassInfo& passInfo)
@@ -2032,12 +2043,7 @@ void C3DEngine::DrawTextRightAligned(const float x, const float y, const char* f
 {
 	va_list args;
 	va_start(args, format);
-
-	SDrawTextInfo ti;
-	ti.flags = eDrawText_FixedSize | eDrawText_Right | eDrawText_2D | eDrawText_Monospace;
-	ti.xscale = ti.yscale = DISPLAY_INFO_SCALE;
-	GetRenderer()->DrawTextQueued(Vec3(x, y, 1.0f), ti, format, args);
-
+	IRenderAuxText::DrawText(Vec3(x, y, 1.0f), DISPLAY_INFO_SCALE, NULL, eDrawText_FixedSize | eDrawText_Right | eDrawText_2D | eDrawText_Monospace, format, args);
 	va_end(args);
 }
 
@@ -2045,15 +2051,7 @@ void C3DEngine::DrawTextAligned(int flags, const float x, const float y, const f
 {
 	va_list args;
 	va_start(args, format);
-
-	SDrawTextInfo ti;
-	ti.flags = flags;
-	ti.color[0] = color[0];
-	ti.color[1] = color[1];
-	ti.color[2] = color[2];
-	ti.color[3] = color[3];
-	ti.xscale = ti.yscale = scale;
-	GetRenderer()->DrawTextQueued(Vec3(x, y, 1.0f), ti, format, args);
+	IRenderAuxText::DrawText(Vec3(x, y, 1.0f), scale, color, flags, format, args);
 
 	va_end(args);
 }
@@ -2062,16 +2060,7 @@ void C3DEngine::DrawTextLeftAligned(const float x, const float y, const float sc
 {
 	va_list args;
 	va_start(args, format);
-
-	SDrawTextInfo ti;
-	ti.flags = eDrawText_FixedSize | eDrawText_2D | eDrawText_Monospace;
-	ti.color[0] = color[0];
-	ti.color[1] = color[1];
-	ti.color[2] = color[2];
-	ti.color[3] = color[3];
-	ti.xscale = ti.yscale = scale;
-	GetRenderer()->DrawTextQueued(Vec3(x, y, 1.0f), ti, format, args);
-
+	IRenderAuxText::DrawText(Vec3(x, y, 1.0f), scale, color, eDrawText_FixedSize | eDrawText_2D | eDrawText_Monospace, format, args);
 	va_end(args);
 
 }
@@ -2080,16 +2069,7 @@ void C3DEngine::DrawTextRightAligned(const float x, const float y, const float s
 {
 	va_list args;
 	va_start(args, format);
-
-	SDrawTextInfo ti;
-	ti.flags = eDrawText_FixedSize | eDrawText_Right | eDrawText_2D | eDrawText_Monospace;
-	ti.color[0] = color[0];
-	ti.color[1] = color[1];
-	ti.color[2] = color[2];
-	ti.color[3] = color[3];
-	ti.xscale = ti.yscale = scale;
-	GetRenderer()->DrawTextQueued(Vec3(x, y, 1.0f), ti, format, args);
-
+	IRenderAuxText::DrawText(Vec3(x, y, 1.0f), scale, color, eDrawText_FixedSize | eDrawText_Right | eDrawText_2D | eDrawText_Monospace, format, args);
 	va_end(args);
 }
 
@@ -2312,25 +2292,22 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 
 	switch (gEnv->pRenderer->GetRenderType())
 	{
-	case eRT_OpenGL:
-		pRenderType = "GL";
+	case ERenderType::Direct3D11:
+		pRenderType = STR_DX11_RENDERER;
 		break;
-	case eRT_DX11:
-		pRenderType = "DX11";
+	case ERenderType::Direct3D12:
+		pRenderType = STR_DX12_RENDERER;
 		break;
-	case eRT_DX12:
-		pRenderType = "DX12";
+	case ERenderType::OpenGL:
+		pRenderType = STR_GL_RENDERER;
 		break;
-	case eRT_XboxOne:
-		pRenderType = "XboxOne";
+	case ERenderType::Vulkan:
+		pRenderType = STR_VK_RENDERER;
 		break;
-	case eRT_PS4:
-		pRenderType = "PS4";
+	case ERenderType::GNM:
+		pRenderType = STR_GNM_RENDERER;
 		break;
-	case eRT_Null:
-		pRenderType = "Null";
-		break;
-	case eRT_Undefined:
+	case ERenderType::Undefined:
 	default:
 		assert(0);
 		pRenderType = "Undefined";
@@ -2383,8 +2360,10 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 	m_pRenderer->EF_Query(EFQ_AAMode, sAAMode);
 	AppendString(szFlagsEnd, sAAMode);
 
-	if (m_pGlobalIlluminationManager && m_pGlobalIlluminationManager->IsEnabled())
-		AppendString(szFlagsEnd, "GI");
+	#if defined(FEATURE_SVO_GI)
+	if (GetCVars()->e_svoTI_Apply)
+		AppendString(szFlagsEnd, "SVOGI");
+	#endif
 
 	if (IsAreaActivationInUse())
 		AppendString(szFlagsEnd, "LA");
@@ -2794,26 +2773,6 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 		}
 		else
 		{
-
-	#if TRACK_LEVEL_HEAP_USAGE
-			{
-				bool usingLevelHeap;
-				size_t lvlAllocs, lvlSize;
-				bool leaked = CryGetIMemoryManager()->GetLevelHeapViolationState(usingLevelHeap, lvlAllocs, lvlSize);
-				if (usingLevelHeap)
-				{
-					if (leaked)
-					{
-						DrawTextRightAligned(fTextPosX, fTextPosY += fTextStepY, 1.3f, Col_Red, "Level Heap Leaked (%i allocs, totalling %iKB)", (int) lvlAllocs, (int) (lvlSize / 1024));
-					}
-					else
-					{
-						DrawTextRightAligned(fTextPosX, fTextPosY += fTextStepY, 1.3f, Col_Green, "Level Heap Healthy");
-					}
-				}
-			}
-	#endif
-
 	#ifndef _RELEASE
 			// Checkpoint loading information
 			if (!gEnv->bMultiplayer)
@@ -3052,14 +3011,14 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 			                     DISPLAY_INFO_SCALE_SMALL, fTimeMS > maxVal ? Col_Red : Col_White, "%.2f ms        AI", fTimeMS);
 		}
 
-		if (gEnv->pGame && gEnv->pGame->GetIGameFramework())
+		if (gEnv->pGameFramework)
 		{
 	#if CRY_PLATFORM_MOBILE
 			const float maxVal = 4.f;
 	#else
 			const float maxVal = 50.f;
 	#endif
-			float fTimeMS = 1000.0f * gEnv->pTimer->TicksToSeconds(gEnv->pGame->GetIGameFramework()->GetPreUpdateTicks());
+			float fTimeMS = 1000.0f * gEnv->pTimer->TicksToSeconds(gEnv->pGameFramework->GetPreUpdateTicks());
 			DrawTextRightAligned(fTextPosX, fTextPosY += (fTextStepY - STEP_SMALL_DIFF),
 			                     DISPLAY_INFO_SCALE_SMALL, fTimeMS > maxVal ? Col_Red : Col_White, "%.2f ms    Action", fTimeMS);
 		}
@@ -3229,18 +3188,12 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 	{
 		// Show particle stats.
 		static SParticleCounts Counts;
-		static SParticleCounts Pfx2Counts;
 		SParticleCounts CurCounts;
-		SParticleCounts CurPfx2Counts;
 		if (m_pPartManager)
 			m_pPartManager->GetCounts(CurCounts);
-		if (m_pParticleSystem)
-			m_pParticleSystem->GetCounts(CurPfx2Counts);
 
 		// Blend stats.
 		for (float* pd = (float*)&Counts, * ps = (float*)&CurCounts; pd < (float*)(&Counts + 1); pd++, ps++)
-			Blend(*pd, *ps, fBlendCur);
-		for (float* pd = (float*)&Pfx2Counts, * ps = (float*)&CurPfx2Counts; pd < (float*)(&Pfx2Counts + 1); pd++, ps++)
 			Blend(*pd, *ps, fBlendCur);
 
 		float fScreenPix = (float)(GetRenderer()->GetWidth() * GetRenderer()->GetHeight());
@@ -3250,13 +3203,13 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 		                     Counts.ParticlesRendered, Counts.ParticlesActive, Counts.ParticlesAlloc,
 		                     Counts.EmittersRendered, Counts.EmittersActive, Counts.EmittersAlloc, Counts.SubEmittersActive,
 		                     Counts.PixelsRendered / fScreenPix, Counts.PixelsProcessed / fScreenPix);
+		fTextPosY += fTextStepY;
+
 		if (m_pParticleSystem)
 		{
-			DrawTextRightAligned(fTextPosX, fTextPosY += fTextStepY,
-			                     "pfx2 (Rendered/Active/Alloc): Particles %5.0f/%5.0f/%5.0f, Emitters %3.0f/%3.0f/%3.0f, Containers: %3.0f, Fill %5.2f/%5.2f",
-			                     Pfx2Counts.ParticlesRendered, Pfx2Counts.ParticlesActive, Pfx2Counts.ParticlesAlloc,
-			                     Pfx2Counts.EmittersRendered, Pfx2Counts.EmittersActive, Pfx2Counts.EmittersAlloc, Pfx2Counts.SubEmittersActive,
-			                     Pfx2Counts.PixelsRendered / fScreenPix, Pfx2Counts.PixelsProcessed / fScreenPix);
+			const Vec2 location = Vec2(fTextPosX, fTextPosY);
+			pfx2::CParticleSystem* pPSystem = static_cast<pfx2::CParticleSystem*>(m_pParticleSystem.get());
+			fTextPosY = pPSystem->DisplayDebugStats(location, fTextStepY);
 		}
 
 		if (GetCVars()->e_ParticlesDebug & AlphaBit('r'))
@@ -3265,13 +3218,6 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 			                     "Reiter %4.0f, Reject %4.0f, Clip %4.1f, Coll %4.1f / %4.1f",
 			                     Counts.ParticlesReiterate, Counts.ParticlesReject, Counts.ParticlesClip,
 			                     Counts.ParticlesCollideHit, Counts.ParticlesCollideTest);
-			if (m_pParticleSystem)
-			{
-				DrawTextRightAligned(fTextPosX, fTextPosY += fTextStepY,
-				                     "pfx2: Reiter %4.0f, Reject %4.0f, Clip %4.1f, Coll %4.1f / %4.1f",
-				                     Pfx2Counts.ParticlesReiterate, Pfx2Counts.ParticlesReject, Pfx2Counts.ParticlesClip,
-				                     Pfx2Counts.ParticlesCollideHit, Pfx2Counts.ParticlesCollideTest);
-			}
 		}
 		if (GetCVars()->e_ParticlesDebug & AlphaBits('bx'))
 		{
@@ -3354,7 +3300,6 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 		DRAW_OBJ_STATS(eERType_Brush);
 		DRAW_OBJ_STATS(eERType_Vegetation);
 		DRAW_OBJ_STATS(eERType_Light);
-		DRAW_OBJ_STATS(eERType_Cloud);
 		DRAW_OBJ_STATS(eERType_FogVolume);
 		DRAW_OBJ_STATS(eERType_Decal);
 		DRAW_OBJ_STATS(eERType_ParticleEmitter);
@@ -3362,15 +3307,14 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 		DRAW_OBJ_STATS(eERType_WaterWave);
 		DRAW_OBJ_STATS(eERType_Road);
 		DRAW_OBJ_STATS(eERType_DistanceCloud);
-		DRAW_OBJ_STATS(eERType_VolumeObject);
 		DRAW_OBJ_STATS(eERType_Rope);
-		DRAW_OBJ_STATS(eERType_PrismObject);
-		DRAW_OBJ_STATS(eERType_LightPropagationVolume);
-		DRAW_OBJ_STATS(eERType_RenderProxy);
+		DRAW_OBJ_STATS(eERType_MovableBrush);
 		DRAW_OBJ_STATS(eERType_GameEffect);
 		DRAW_OBJ_STATS(eERType_BreakableGlass);
+		DRAW_OBJ_STATS(eERType_CloudBlocker);
 		DRAW_OBJ_STATS(eERType_MergedMesh);
 		DRAW_OBJ_STATS(eERType_GeomCache);
+		DRAW_OBJ_STATS(eERType_Character);
 
 		CVisibleRenderNodesManager::Statistics visNodesStats = m_visibleNodesManager.GetStatistics();
 		{

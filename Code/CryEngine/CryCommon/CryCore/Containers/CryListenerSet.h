@@ -103,6 +103,7 @@
 
 #ifndef _RELEASE
 	#define CRY_LISTENERSET_DEBUG
+	//#define CRY_LISTENERSET_DEBUG_PRINT
 #endif
 
 // Forward decl.
@@ -117,9 +118,14 @@ public:
 	//! \note No default constructor in favor of forcing users to provide an expectedCapacity.
 	inline CListenerSet(size_t expectedCapacity);
 	inline /*non-virtual*/ ~CListenerSet();
-
+	
+#if defined(CRY_LISTENERSET_DEBUG_PRINT)
+	//! Appends a listener to the end of the collection. Name is optional but recommended.
+	inline bool Add(T pListener, const char* name = NULL, bool staticName = false);
+#else
 	//! Appends a listener to the end of the collection. Name is optional but recommended.
 	inline bool Add(T pListener, const char* name = NULL, bool staticName = true);
+#endif
 
 	//! Removes a listener from the collection.
 	inline void Remove(T pListener);
@@ -148,6 +154,9 @@ public:
 	//! Invokes the provided functor f once witho each listener in the set.
 	template<typename TFunctor>
 	inline void ForEachListener(const TFunctor& f);
+
+	template<typename LambdaFunction>
+	inline void ForEach(LambdaFunction f);
 
 	//! Allow access for Notifier for iteration.
 	friend class CListenerNotifier<T>;
@@ -285,6 +294,11 @@ inline bool CListenerSet<T >::Add(T pListener, const char* name, bool staticName
 				// Add it to the list of heap allocated names (that we need to later delete)
 				m_allocatedNames.push_back(name);
 				safeName = m_allocatedNames.back().c_str();
+
+	#if defined(CRY_LISTENERSET_DEBUG_PRINT) && !defined(NOT_USE_CRY_STRING)
+				CryLogAlways("%s => %s", __FUNCTION__, safeName);
+	#endif
+
 			}
 #endif
 
@@ -307,7 +321,14 @@ inline void CListenerSet<T >::Remove(T pListener)
 #ifdef CRY_LISTENERSET_DEBUG
 		// Delete name if it was heap allocated
 		if (const char* name = iter->m_szName)
+		{
+
+	#if defined(CRY_LISTENERSET_DEBUG_PRINT ) && !defined(NOT_USE_CRY_STRING)
+			CryLogAlways("%s => %s", __FUNCTION__, name);
+	#endif
+
 			DeleteName(name);
+		}
 #endif
 
 		// If no notifications in progress
@@ -424,15 +445,35 @@ template<typename TFunctor>
 void CListenerSet<T >::ForEachListener(const TFunctor& f)
 {
 	StartNotificationScope();
-	for (typename TListenerVec::const_iterator it = m_listeners.begin(), itEnd = m_listeners.end(); it != itEnd; ++it)
+	size_t count = m_listeners.size();
+	// Iterate only until current count, ignore new elements added during the loop
+	for (size_t index = 0; index < count; ++index)
 	{
-		if (const T& listener = it->m_pListener)
+		if (m_listeners[index].m_pListener)
 		{
-			f(listener);
+			f(m_listeners[index].m_pListener);
 		}
 	}
 	EndNotificationScope();
 }
+
+template<typename T>
+template<typename LambdaFunction>
+void CListenerSet<T >::ForEach(LambdaFunction f)
+{
+	StartNotificationScope();
+	size_t count = m_listeners.size();
+	// Iterate only until current count, ignore new elements added during the loop
+	for (size_t index = 0; index < count; ++index)
+	{
+		if (m_listeners[index].m_pListener)
+		{
+			f(m_listeners[index].m_pListener);
+		}
+	}
+	EndNotificationScope();
+}
+
 
 template<typename T>
 inline void CListenerSet<T >::StartNotificationScope()

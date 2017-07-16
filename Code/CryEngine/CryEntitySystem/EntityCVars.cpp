@@ -1,24 +1,12 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
-// -------------------------------------------------------------------------
-//  File name:   EntityCVars.h
-//  Version:     v1.00
-//  Created:     18/5/2004 by Timur.
-//  Compilers:   Visual Studio.NET 2003
-//  Description:
-// -------------------------------------------------------------------------
-//  History:
-//
-////////////////////////////////////////////////////////////////////////////
-
 #include "stdafx.h"
 #include "EntityCVars.h"
 #include "EntitySystem.h"
 #include "AreaManager.h"
-#include "EntityPoolManager.h"
 #include <CryAnimation/ICryAnimation.h>
-#include <CryEntitySystem/IComponent.h>
-#include "ComponentEventDistributer.h"
+#include <CryEntitySystem/IEntityComponent.h>
+#include <CryAISystem/IAISystem.h>
 
 ICVar* CVar::pDebug = NULL;
 ICVar* CVar::pCharacterIK = NULL;
@@ -54,6 +42,7 @@ ICVar* CVar::pNotSeenTimeout = NULL;
 ICVar* CVar::pDebugNotSeenTimeout = NULL;
 ICVar* CVar::pDrawAreas = NULL;
 ICVar* CVar::pDrawAreaGrid = NULL;
+ICVar* CVar::pDrawAreaGridCells = NULL;
 ICVar* CVar::pDrawAreaDebug = NULL;
 ICVar* CVar::pDrawAudioProxyZRay = NULL;
 
@@ -76,15 +65,10 @@ int CVar::es_DisableTriggers = 0;
 int CVar::es_DrawProximityTriggers = 0;
 int CVar::es_DebugEntityUsage = 0;
 const char* CVar::es_DebugEntityUsageFilter = "";
-int CVar::es_EnablePoolUse = 0;
-int CVar::es_DebugPool = 0;
-int CVar::es_TestPoolSignatures = 0;
-const char* CVar::es_DebugPoolFilter = "";
+int CVar::es_DebugEntityUsageSortMode = 0;
 int CVar::es_LayerSaveLoadSerialization = 0;
 int CVar::es_LayerDebugInfo = 0;
 int CVar::es_SaveLoadUseLUANoSaveFlag = 1;
-int CVar::es_ClearPoolBookmarksOnLayerUnload = 1;
-ICVar* CVar::pUpdateType = NULL;
 float CVar::es_EntityUpdatePosDelta = 0.0f;
 int CVar::es_debugDrawEntityIDs = 0;
 int CVar::es_MaxJointFx = 8;
@@ -105,14 +89,67 @@ static void OnSysSpecLightChange(ICVar* pVar)
 	}
 }
 
-static void OnUpdateTypeChange(ICVar* pVar)
+//////////////////////////////////////////////////////////////////////////
+SEntityWithCharacterInstanceAutoComplete::SEntityWithCharacterInstanceAutoComplete()
 {
-	CEntitySystem* pES = static_cast<CEntitySystem*>(GetIEntitySystem());
-	CComponentEventDistributer* pEntityEventDist = pES->GetEventDistributer();
-	pEntityEventDist->SetFlags(pVar->GetIVal());
 }
 
-void CVar::Init(struct IConsole* pConsole)
+//////////////////////////////////////////////////////////////////////////
+int SEntityWithCharacterInstanceAutoComplete::GetCount() const
+{
+	uint32 count = 0;
+	auto itEntity = GetIEntitySystem()->GetEntityIterator();
+	while (!itEntity->IsEnd())
+	{
+		if (IEntity* pEnt = itEntity->Next())
+		{
+			const uint32 numSlots = pEnt->GetSlotCount();
+			for (uint32 i = 0; i < numSlots; i++)
+			{
+				ICharacterInstance* pCharInst = pEnt->GetCharacter(i);
+				if (pCharInst)
+				{
+					count++;
+				}
+			}
+		}
+	}
+
+	return count;
+}
+
+//////////////////////////////////////////////////////////////////////////
+const char* SEntityWithCharacterInstanceAutoComplete::GetValue(int index) const
+{
+	auto itEntity = GetIEntitySystem()->GetEntityIterator();
+	uint32 count = 0;
+	while (!itEntity->IsEnd())
+	{
+		if (IEntity* pEnt = itEntity->Next())
+		{
+			const uint32 numSlots = pEnt->GetSlotCount();
+			for (uint32 i = 0; i < numSlots; i++)
+			{
+				ICharacterInstance* pCharInst = pEnt->GetCharacter(i);
+				if (pCharInst)
+				{
+					if (count == index)
+					{
+						return pEnt->GetName();
+					}
+					count++;
+				}
+			}
+		}
+	}
+
+	return "";
+}
+
+static SEntityWithCharacterInstanceAutoComplete s_entityWithCharacterInstanceAutoComplete;
+
+//////////////////////////////////////////////////////////////////////////
+void CVar::Init()
 {
 	assert(gEnv->pConsole);
 	PREFAST_ASSUME(gEnv->pConsole);
@@ -120,7 +157,6 @@ void CVar::Init(struct IConsole* pConsole)
 	REGISTER_COMMAND("es_dump_entities", (ConsoleCommandFunc)DumpEntities, 0, "Dumps current entities and their states!");
 	REGISTER_COMMAND("es_dump_entity_classes_in_use", (ConsoleCommandFunc)DumpEntityClassesInUse, 0, "Dumps all used entity classes");
 	REGISTER_COMMAND("es_compile_area_grid", (ConsoleCommandFunc)CompileAreaGrid, 0, "Trigger a recompile of the area grid");
-	REGISTER_COMMAND("es_dump_bookmarks", (ConsoleCommandFunc)DumpEntityBookmarks, 0, "Dumps information about all bookmarked entities");
 	REGISTER_COMMAND("es_AudioListenerOffset", (ConsoleCommandFunc)SetAudioListenerOffsets, 0,
 	                 "Sets by how much the audio listener offsets its position and rotation in regards to its entity.\n"
 	                 "Usage: es_AudioListenerOffset PosX PosY PosZ RotX RotY RotZ\n");
@@ -232,15 +268,7 @@ void CVar::Init(struct IConsole* pConsole)
 	              "\nUsage: es_DebugEntityUsage update_rate"
 	              "\nupdate_rate - Time in ms to refresh memory usage calculation or 0 to disable");
 	REGISTER_CVAR(es_DebugEntityUsageFilter, "", 0, "Filter entity usage debugging to classes which have this string in their name");
-
-	REGISTER_CVAR(es_EnablePoolUse, -1, 0,
-	              "Force toggle the use of entity pools on/off.\n"
-	              "Usage: es_EnablePoolUse 1\n"
-	              "Default is -1, or normal behavior. 0 forces system off. 1 forces system on.");
-
-	REGISTER_CVAR(es_DebugPool, 0, 0, "Enable debug drawing of entity pools");
-	REGISTER_CVAR(es_TestPoolSignatures, 0, VF_CHEAT, "Enable signature testing on entity classes the first time they're prepared from an entity pool");
-	REGISTER_CVAR(es_DebugPoolFilter, "", 0, "Filter entity pool debugging for just this pool and draw more info about it");
+	REGISTER_CVAR(es_DebugEntityUsageSortMode, 0, 0, "Determines how es_DebugEntityUsage sorts the visual output\n0 = unsorted\n1 = sort by number of active instances\n2 = sort by memory usage");
 
 	REGISTER_CVAR(es_LayerSaveLoadSerialization, 0, VF_CHEAT,
 	              "Switches layer entity serialization: \n"
@@ -255,11 +283,9 @@ void CVar::Init(struct IConsole* pConsole)
 	              "3 - all layer and all layer pak info");
 	REGISTER_CVAR(es_SaveLoadUseLUANoSaveFlag, 0, VF_CHEAT, "Save&Load optimization : use lua flag to not serialize entities, for example rigid bodies.");
 
-	REGISTER_CVAR(es_ClearPoolBookmarksOnLayerUnload, 1, VF_CHEAT, "Clear pool bookmarks when a layer is unloaded (saves memory and makes smaller saves)");
-	pUpdateType = REGISTER_INT_CB("es_updateType", CComponentEventDistributer::EEventUpdatePolicy_UseDistributer, VF_CHEAT, "Defines how we update type for the entities", OnUpdateTypeChange);
-
 	pDrawAreas = REGISTER_INT("es_DrawAreas", 0, VF_CHEAT, "Enables drawing of Areas");
 	pDrawAreaGrid = REGISTER_INT("es_DrawAreaGrid", 0, VF_CHEAT, "Enables drawing of Area Grid");
+	pDrawAreaGridCells = REGISTER_INT("es_DrawAreaGridCells", 0, VF_CHEAT, "Enables drawing of Area Grid Cells' number and coordinates. Requires \"es_DrawAreaGrid\" to be enabled!");
 	pDrawAreaDebug = REGISTER_INT("es_DrawAreaDebug", 0, VF_CHEAT, "Enables debug drawing of Areas, set 2 for log details");
 	pDrawAudioProxyZRay = REGISTER_INT("es_DrawAudioProxyZRay", 0, VF_CHEAT, "Enables drawing of Z ray on check for Z visibility");
 
@@ -283,6 +309,9 @@ void CVar::Init(struct IConsole* pConsole)
 	              "Debug entities creation and deletion time");
 
 	REGISTER_COMMAND("es_debugAnim", (ConsoleCommandFunc)EnableDebugAnimText, 0, "Debug entity animation (toggle on off)");
+	gEnv->pConsole->RegisterAutoComplete("es_debugAnim", &s_entityWithCharacterInstanceAutoComplete);
+
+	REGISTER_COMMAND("es_togglelayer", &ConsoleCommandToggleLayer, VF_DEV_ONLY, "Toggles a layer (on/off)\n Usage: es_togglelayer LAYER_NAME\nPlease bear in mind that layer names are case-sensitive");
 
 	REGISTER_CVAR(es_EntityUpdatePosDelta, 0.1f, 0,
 	              "Indicates the position delta by which an entity must move before the AreaManager updates position relevant data.\n"
@@ -325,24 +354,46 @@ void CVar::CompileAreaGrid(IConsoleCmdArgs*)
 		pAreaManager->SetAreasDirty();
 }
 
-void CVar::DumpEntityBookmarks(IConsoleCmdArgs* pArgs)
+void CVar::SetDebugAnimText(IEntity* pEntity, const bool bEnable)
 {
-	const char* szFilterName = 0;
-	bool bWriteSIDToDisk = false;
-	if (pArgs && pArgs->GetArgCount() > 1)
-	{
-		szFilterName = pArgs->GetArg(1);
-		if (szFilterName && szFilterName[0] && 0 == stricmp(szFilterName, "all"))
-			szFilterName = 0;
-
-		if (pArgs->GetArgCount() > 2)
-			bWriteSIDToDisk = (atoi(pArgs->GetArg(2)) != 0);
-	}
-
 	CEntitySystem* pEntitySystem = GetIEntitySystem();
-	CEntityPoolManager* pEntityPoolManager = (pEntitySystem ? pEntitySystem->GetEntityPoolManager() : NULL);
-	if (pEntityPoolManager)
-		pEntityPoolManager->DumpEntityBookmarks(szFilterName, bWriteSIDToDisk);
+
+	if (pEntity)
+	{
+		uint32 numSlots = pEntity->GetSlotCount();
+		for (uint32 i = 0; i < numSlots; i++)
+		{
+			ICharacterInstance* pCharInst = pEntity->GetCharacter(i);
+			if (pCharInst)
+			{
+				pCharInst->GetISkeletonAnim()->SetDebugging(bEnable);
+				IAttachmentManager* pAttachmentManager = pCharInst->GetIAttachmentManager();
+				for (int32 attachmentIndex = 0; attachmentIndex < pAttachmentManager->GetAttachmentCount(); ++attachmentIndex)
+				{
+					IAttachment* pAttachment = pAttachmentManager->GetInterfaceByIndex(attachmentIndex);
+					assert(pAttachment);
+
+					IAttachmentObject* pObject = pAttachment->GetIAttachmentObject();
+					if (pObject)
+					{
+						ICharacterInstance* pObjectCharInst = pObject->GetICharacterInstance();
+						if (pObjectCharInst)
+						{
+							pObjectCharInst->GetISkeletonAnim()->SetDebugging(bEnable);
+						}
+						if (pObject->GetAttachmentType() == IAttachmentObject::eAttachment_Entity)
+						{
+							IEntity* pAttachmentEntity = pEntitySystem->GetEntity(static_cast<CEntityAttachment*>(pObject)->GetEntityId());
+							if (pAttachmentEntity)
+							{
+								SetDebugAnimText(pAttachmentEntity, bEnable);
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 void CVar::EnableDebugAnimText(IConsoleCmdArgs* args)
@@ -350,43 +401,16 @@ void CVar::EnableDebugAnimText(IConsoleCmdArgs* args)
 	if (args && args->GetArgCount() > 1)
 	{
 		const char* szFilterName = args->GetArg(1);
-		bool enable = true;
+		bool bEnable = true;
 		if (args->GetArgCount() > 2)
 		{
-			enable = (strcmp(args->GetArg(2), "0") != 0);
+			bEnable = (strcmp(args->GetArg(2), "0") != 0);
 		}
 
 		CEntitySystem* pEntitySystem = GetIEntitySystem();
-		IEntity* entity = pEntitySystem->FindEntityByName(szFilterName);
+		IEntity* pEntity = pEntitySystem->FindEntityByName(szFilterName);
 
-		if (entity)
-		{
-			uint32 numSlots = entity->GetSlotCount();
-			for (uint32 i = 0; i < numSlots; i++)
-			{
-				ICharacterInstance* charInst = entity->GetCharacter(i);
-				if (charInst)
-				{
-					charInst->GetISkeletonAnim()->SetDebugging(enable);
-					IAttachmentManager* pAttachmentManager = charInst->GetIAttachmentManager();
-					for (int32 attachmentIndex = 0; attachmentIndex < pAttachmentManager->GetAttachmentCount(); ++attachmentIndex)
-					{
-						IAttachment* pAttachment = pAttachmentManager->GetInterfaceByIndex(attachmentIndex);
-						assert(pAttachment);
-
-						IAttachmentObject* pObject = pAttachment->GetIAttachmentObject();
-						if (pObject)
-						{
-							ICharacterInstance* pObjectCharInst = pObject->GetICharacterInstance();
-							if (pObjectCharInst)
-							{
-								pObjectCharInst->GetISkeletonAnim()->SetDebugging(enable);
-							}
-						}
-					}
-				}
-			}
-		}
+		SetDebugAnimText(pEntity, bEnable);
 	}
 }
 
@@ -441,4 +465,24 @@ void CVar::SetAudioListenerOffsets(IConsoleCmdArgs* pArgs)
 	  Vec3(ZERO),
 	  Quat::CreateRotationXYZ(Ang3(fRotationOffsetX, fRotationOffsetY, fRotationOffsetZ)),
 	  Vec3(fPositionOffsetX, fPositionOffsetY, fPositionOffsetZ));
+}
+
+void CVar::ConsoleCommandToggleLayer(IConsoleCmdArgs* pArgs)
+{
+	// Note: based on Flow Node Engine:LayerSwitch
+	if (pArgs && pArgs->GetArgCount() > 1 && gEnv->pEntitySystem)
+	{
+		const char* szLayerName = pArgs->GetArg(1);
+		const bool bSerialize = false;
+		const bool bShouldBeEnabled = !gEnv->pEntitySystem->IsLayerEnabled(szLayerName, false);
+		
+		CryLogAlways("[Info][Layers] Toggling EntitySystemLayer %s to: %s", szLayerName, bShouldBeEnabled ? "Enabled" : "Disabled");
+		gEnv->pEntitySystem->EnableLayer(szLayerName, bShouldBeEnabled, bSerialize);
+		
+		if (bShouldBeEnabled && gEnv->pAISystem)
+		{
+			CryLogAlways("[Info][Layers] Toggling AISystemLayer %s to: %s", szLayerName, bShouldBeEnabled ? "Enabled" : "Disabled");
+			gEnv->pAISystem->LayerEnabled(szLayerName, bShouldBeEnabled, bSerialize);
+		}
+	}
 }

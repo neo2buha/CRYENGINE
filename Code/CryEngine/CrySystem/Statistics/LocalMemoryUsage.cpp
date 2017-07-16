@@ -771,9 +771,9 @@ void CLocalMemoryUsage::OnRender(IRenderer* pRenderer, const CCamera* camera)
 						{
 							camera->Project(pos, projectedPos);
 
-							pRenderer->Draw2dLabel(projectedPos.x, projectedPos.y, 1.2f, pColor, true, "Text: %.2fMb Geom: %.2fMb", sector->m_memoryUsage_Textures / (1024.f * 1024.f), sector->m_memoryUsage_Geometry / (1024.f * 1024.f));
+							IRenderAuxText::Draw2dLabel(projectedPos.x, projectedPos.y, 1.2f, pColor, true, "Text: %.2fMb Geom: %.2fMb", sector->m_memoryUsage_Textures / (1024.f * 1024.f), sector->m_memoryUsage_Geometry / (1024.f * 1024.f));
 							/* For sector debugging
-							              pRenderer->Draw2dLabel(projectedPos.x, projectedPos.y, 1.2f, pColor, true, "Text: %.1fMb Geom: %.1fMb - %d : %d", sector->m_memoryUsage_Textures/(1024.f*1024.f), sector->m_memoryUsage_Geometry/(1024.f*1024.f), x, y);
+							              IRenderAuxText::Draw2dLabel(projectedPos.x, projectedPos.y, 1.2f, pColor, true, "Text: %.1fMb Geom: %.1fMb - %d : %d", sector->m_memoryUsage_Textures/(1024.f*1024.f), sector->m_memoryUsage_Geometry/(1024.f*1024.f), x, y);
 
 							              if( xDebug == x && yDebug == y )
 							              {
@@ -792,8 +792,8 @@ void CLocalMemoryUsage::OnRender(IRenderer* pRenderer, const CCamera* camera)
 							                    memoryUsage = statObjInfo->m_streamableContentMemoryUsage;
 							                  }
 							                  sy+=15.f;
-							                  pRenderer->Draw2dLabel(sx, sy, 1.2f, pColor, false, "Geom: %.2fMb %.4f Act:%s Orig:%s %s", memoryUsage/(1024.f*1024.f), mipFactor, pStatObj->GetFilePath(), statObjInfo->m_filePath, statObjInfo->m_bSubObject ? " SUBOBJECT" : "");
-							                  //pRenderer->Draw2dLabel(sx, sy, 1.2f, pColor, false, "Geom: %.2fMb %.4f", memoryUsage/(1024.f*1024.f), mipFactor);
+							                  IRenderAuxText::Draw2dLabel(sx, sy, 1.2f, pColor, false, "Geom: %.2fMb %.4f Act:%s Orig:%s %s", memoryUsage/(1024.f*1024.f), mipFactor, pStatObj->GetFilePath(), statObjInfo->m_filePath, statObjInfo->m_bSubObject ? " SUBOBJECT" : "");
+							                  //IRenderAuxText::Draw2dLabel(sx, sy, 1.2f, pColor, false, "Geom: %.2fMb %.4f", memoryUsage/(1024.f*1024.f), mipFactor);
 							                }
 							              }
 							   //*/
@@ -1078,12 +1078,12 @@ void CLocalMemoryUsage::CollectGeometryP1()
 	uint32 dwCount = 0;
 
 	dwCount += p3DEngine->GetObjectsByType(eERType_Light);
-
-	dwCount += p3DEngine->GetObjectsByType(eERType_RenderProxy);
 	dwCount += p3DEngine->GetObjectsByType(eERType_Brush);
 	dwCount += p3DEngine->GetObjectsByType(eERType_Vegetation);
 	dwCount += p3DEngine->GetObjectsByType(eERType_Decal);
 	dwCount += p3DEngine->GetObjectsByType(eERType_Road);
+	dwCount += p3DEngine->GetObjectsByType(eERType_Character);
+	dwCount += p3DEngine->GetObjectsByType(eERType_MovableBrush);
 
 	if (dwCount > 0)
 	{
@@ -1091,11 +1091,12 @@ void CLocalMemoryUsage::CollectGeometryP1()
 		dwCount = 0;
 
 		dwCount += p3DEngine->GetObjectsByType(eERType_Light, &renderNodes[dwCount]);
-		dwCount += p3DEngine->GetObjectsByType(eERType_RenderProxy, &renderNodes[dwCount]);
 		dwCount += p3DEngine->GetObjectsByType(eERType_Brush, &renderNodes[dwCount]);
 		dwCount += p3DEngine->GetObjectsByType(eERType_Vegetation, &renderNodes[dwCount]);
 		dwCount += p3DEngine->GetObjectsByType(eERType_Decal, &renderNodes[dwCount]);
 		dwCount += p3DEngine->GetObjectsByType(eERType_Road, &renderNodes[dwCount]);
+		dwCount += p3DEngine->GetObjectsByType(eERType_Character, &renderNodes[dwCount]);
+		dwCount += p3DEngine->GetObjectsByType(eERType_MovableBrush, &renderNodes[dwCount]);
 
 		AABB objBox;
 
@@ -1151,26 +1152,19 @@ void CLocalMemoryUsage::CollectGeometryP1()
 				}
 			}
 
-			for (int dwSlot = 0; dwSlot < pRenderNode->GetSlotCount(); ++dwSlot)
+			Matrix34A matParent;
+
+			if (IStatObj* pStatObj = pRenderNode->GetEntityStatObj(0, &matParent, true))
 			{
-				IMaterial* pSlotMat = pRenderNode->GetEntitySlotMaterial(dwSlot);
-				if (!pSlotMat)
-					pSlotMat = pRenderNodeMat;
+				CheckStatObjP1(pStatObj, pRenderNode, objBox, maxViewDist, objScale);
 
-				Matrix34A matParent;
+				IMaterial* pStatObjMat = pStatObj->GetMaterial();
+				CheckStatObjMaterialP1(pStatObj, pRenderNodeMat ? pRenderNodeMat : pStatObjMat, objBox, maxViewDist, objScale);
+			}
 
-				if (IStatObj* pStatObj = pRenderNode->GetEntityStatObj(dwSlot, 0, &matParent, true))
-				{
-					CheckStatObjP1(pStatObj, pRenderNode, objBox, maxViewDist, objScale);
-
-					IMaterial* pStatObjMat = pStatObj->GetMaterial();
-					CheckStatObjMaterialP1(pStatObj, pSlotMat ? pSlotMat : pStatObjMat, objBox, maxViewDist, objScale);
-				}
-
-				if (ICharacterInstance* pCharacter = pRenderNode->GetEntityCharacter(dwSlot, &matParent, true))
-				{
-					CheckCharacterP1(pCharacter, pRenderNode, pSlotMat, objBox, maxViewDist, objScale, 2);
-				}
+			if (ICharacterInstance* pCharacter = pRenderNode->GetEntityCharacter(&matParent, true))
+			{
+				CheckCharacterP1(pCharacter, pRenderNode, pRenderNodeMat, objBox, maxViewDist, objScale, 2);
 			}
 		}
 	}

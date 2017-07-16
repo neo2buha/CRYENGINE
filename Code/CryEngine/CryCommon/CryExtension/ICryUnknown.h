@@ -1,17 +1,5 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
-// -------------------------------------------------------------------------
-//  File name:   ICryUnknown.h
-//  Version:     v1.00
-//  Created:     02/25/2009 by CarstenW
-//  Description: Part of CryEngine's extension framework.
-// -------------------------------------------------------------------------
-//
-////////////////////////////////////////////////////////////////////////////
-
-#ifndef _ICRYUNKNOWN_H_
-#define _ICRYUNKNOWN_H_
-
 #pragma once
 
 #include "CryTypeID.h"
@@ -21,6 +9,19 @@ struct ICryUnknown;
 
 namespace InterfaceCastSemantics
 {
+#if !defined(SWIG)
+template<class T>
+struct has_cryiidof
+{
+	typedef char(&yes)[1];
+	typedef char(&no)[2];
+
+	template <typename C> static yes check(decltype(&C::IID));
+	template <typename> static no check(...);
+
+	static constexpr bool value = sizeof(check<T>(0)) == sizeof(yes);
+};
+#endif
 
 template<class T>
 const CryInterfaceID& cryiidof()
@@ -28,19 +29,25 @@ const CryInterfaceID& cryiidof()
 	return T::IID();
 }
 
+#if !defined(SWIG)
+#define _BEFRIEND_CRYIIDOF() \
+  template<class T> friend const CryInterfaceID &InterfaceCastSemantics::cryiidof(); \
+  template<class T> friend struct InterfaceCastSemantics::has_cryiidof;
+#else
 #define _BEFRIEND_CRYIIDOF() \
   template<class T> friend const CryInterfaceID &InterfaceCastSemantics::cryiidof();
+#endif
 
 template<class Dst, class Src>
 Dst* cryinterface_cast(Src* p)
 {
-	return static_cast<Dst*>(p ? p->QueryInterface(cryiidof<Dst>()) : 0);
+	return static_cast<Dst*>(p ? p->QueryInterface(cryiidof<Dst>()) : nullptr);
 }
 
 template<class Dst, class Src>
 Dst* cryinterface_cast(const Src* p)
 {
-	return static_cast<const Dst*>(p ? p->QueryInterface(cryiidof<Dst>()) : 0);
+	return static_cast<const Dst*>(p ? p->QueryInterface(cryiidof<Dst>()) : nullptr);
 }
 
 namespace Internal
@@ -61,7 +68,7 @@ struct cryinterface_cast_helper<ICryUnknown, Src>
 	static std::shared_ptr<ICryUnknown> Op(const std::shared_ptr<Src>& p)
 	{
 		ICryUnknown* dp = cryinterface_cast<ICryUnknown>(p.get());
-		return dp ? std::shared_ptr<ICryUnknown>(*((const std::shared_ptr<ICryUnknown>*) & p), dp) : std::shared_ptr<ICryUnknown>();
+		return dp ? std::shared_ptr<ICryUnknown>(*((const std::shared_ptr<ICryUnknown>*)& p), dp) : std::shared_ptr<ICryUnknown>();
 	}
 };
 
@@ -71,7 +78,7 @@ struct cryinterface_cast_helper<const ICryUnknown, Src>
 	static std::shared_ptr<const ICryUnknown> Op(const std::shared_ptr<Src>& p)
 	{
 		const ICryUnknown* dp = cryinterface_cast<const ICryUnknown>(p.get());
-		return dp ? std::shared_ptr<const ICryUnknown>(*((const std::shared_ptr<const ICryUnknown>*) & p), dp) : std::shared_ptr<const ICryUnknown>();
+		return dp ? std::shared_ptr<const ICryUnknown>(*((const std::shared_ptr<const ICryUnknown>*)& p), dp) : std::shared_ptr<const ICryUnknown>();
 	}
 };
 }
@@ -120,31 +127,32 @@ namespace CompositeQuerySemantics
 {
 
 template<class Src>
-std::shared_ptr<ICryUnknown> crycomposite_query(Src* p, const char* name, bool* pExposed = 0)
+std::shared_ptr<ICryUnknown> crycomposite_query(Src* p, const char* name, bool* pExposed = nullptr)
 {
-	void* pComposite = p ? p->QueryComposite(name) : 0;
-	pExposed ? *pExposed = pComposite != 0 : 0;
+	void* pComposite = p ? p->QueryComposite(name) : nullptr;
+	if(pExposed) *pExposed = pComposite != nullptr;
 	return pComposite ? *static_cast<std::shared_ptr<ICryUnknown>*>(pComposite) : std::shared_ptr<ICryUnknown>();
 }
 
 template<class Src>
-std::shared_ptr<const ICryUnknown> crycomposite_query(const Src* p, const char* name, bool* pExposed = 0)
+std::shared_ptr<const ICryUnknown> crycomposite_query(const Src* p, const char* name, bool* pExposed = nullptr)
 {
-	void* pComposite = p ? p->QueryComposite(name) : 0;
-	pExposed ? *pExposed = pComposite != 0 : 0;
+	void* pComposite = p ? p->QueryComposite(name) : nullptr;
+	if (pExposed) *pExposed = pComposite != nullptr;
 	return pComposite ? *static_cast<std::shared_ptr<const ICryUnknown>*>(pComposite) : std::shared_ptr<const ICryUnknown>();
 }
 
 template<class Src>
-std::shared_ptr<ICryUnknown> crycomposite_query(const std::shared_ptr<Src>& p, const char* name, bool* pExposed = 0)
+std::shared_ptr<ICryUnknown> crycomposite_query(const std::shared_ptr<Src>& p, const char* name, bool* pExposed = nullptr)
 {
 	return crycomposite_query(p.get(), name, pExposed);
 }
 
 template<class Src>
-std::shared_ptr<const ICryUnknown> crycomposite_query(const std::shared_ptr<const Src>& p, const char* name, bool* pExposed = 0)
+std::shared_ptr<const ICryUnknown> crycomposite_query(const std::shared_ptr<const Src>& p, const char* name, bool* pExposed = nullptr)
 {
 	return crycomposite_query(p.get(), name, pExposed);
+}
 }
 
 #define _BEFRIEND_CRYCOMPOSITE_QUERY()                                                                                                                   \
@@ -153,46 +161,42 @@ std::shared_ptr<const ICryUnknown> crycomposite_query(const std::shared_ptr<cons
   template<class Src> friend std::shared_ptr<ICryUnknown> CompositeQuerySemantics::crycomposite_query(const std::shared_ptr<Src> &, const char*, bool*); \
   template<class Src> friend std::shared_ptr<const ICryUnknown> CompositeQuerySemantics::crycomposite_query(const std::shared_ptr<const Src> &, const char*, bool*);
 
-}
-
 using CompositeQuerySemantics::crycomposite_query;
 
-#define _BEFRIEND_DELETER(iname) \
-  friend struct std::default_delete<iname>;
+#define CRYINTERFACE_DECLARE(iname, iidHigh, iidLow)                                         \
+  _BEFRIEND_CRYIIDOF()                                                                       \
+  friend struct std::default_delete<iname>;                                                  \
+private:                                                                                     \
+  static const CryInterfaceID& IID()                                                         \
+  {                                                                                          \
+    static constexpr CryInterfaceID iid = { (uint64) iidHigh ## LL, (uint64) iidLow ## LL }; \
+    return iid;                                                                              \
+  }                                                                                          \
+public:
 
-//! Prevent explicit destruction from client side (exception is std::checked_delete which gets befriended).
-#define _PROTECTED_DTOR(iname) \
-  protected:                   \
-    virtual ~iname() {}
-
-//! Befriending cryinterface_cast<T>() and crycomposite_query() via CRYINTERFACE_DECLARE is actually only needed for ICryUnknown
-//! since QueryInterface() and QueryComposite() are usually not redeclared in derived interfaces but it doesn't hurt either
-#define CRYINTERFACE_DECLARE(iname, iidHigh, iidLow)                                     \
-  _BEFRIEND_CRYIIDOF()                                                                   \
-  _BEFRIEND_CRYINTERFACE_CAST()                                                          \
-  _BEFRIEND_CRYCOMPOSITE_QUERY()                                                         \
-  _BEFRIEND_DELETER(iname)                                                               \
-  _PROTECTED_DTOR(iname)                                                                 \
-                                                                                         \
-private:                                                                                 \
-  static const CryInterfaceID& IID()                                                     \
-  {                                                                                      \
-    static const CryInterfaceID iid = { (uint64) iidHigh ## LL, (uint64) iidLow ## LL }; \
-    return iid;                                                                          \
-  }                                                                                      \
+#define CRYINTERFACE_DECLARE_GUID(iname, guid)                                               \
+  _BEFRIEND_CRYIIDOF()                                                                       \
+  friend struct std::default_delete<iname>;                                                  \
+private:                                                                                     \
+  static const CryInterfaceID& IID() { static constexpr sguid = guid; return sguid; }        \
 public:
 
 struct ICryUnknown
 {
 	CRYINTERFACE_DECLARE(ICryUnknown, 0x1000000010001000, 0x1000100000000000);
 
+	_BEFRIEND_CRYINTERFACE_CAST()
+	_BEFRIEND_CRYCOMPOSITE_QUERY()
+
 	virtual ICryFactory* GetFactory() const = 0;
 
 protected:
+	// Prevent explicit destruction from client side (exception is std::checked_delete which gets befriended).
+	virtual ~ICryUnknown() = default;
+
 	virtual void* QueryInterface(const CryInterfaceID& iid) const = 0;
 	virtual void* QueryComposite(const char* name) const = 0;
 };
 
-DECLARE_SHARED_POINTERS(ICryUnknown);
-
-#endif // #ifndef _ICRYUNKNOWN_H_
+typedef std::shared_ptr<ICryUnknown> ICryUnknownPtr;
+typedef std::shared_ptr<const ICryUnknown> ICryUnknownConstPtr;

@@ -43,13 +43,6 @@ public:
 	{
 		switch (event)
 		{
-		case ESYSTEM_EVENT_LEVEL_PRECACHE_START:
-			if (Cry3DEngineBase::Get3DEngine())
-				Cry3DEngineBase::Get3DEngine()->ClearPrecacheInfo();
-			break;
-		case ESYSTEM_EVENT_RANDOM_SEED:
-			cry_random_seed(gEnv->bNoRandomSeed ? 0 : (uint32)wparam);
-			break;
 		case ESYSTEM_EVENT_LEVEL_POST_UNLOAD:
 			{
 				if (Cry3DEngineBase::Get3DEngine())
@@ -93,6 +86,10 @@ public:
 				}
 				Cry3DEngineBase::Get3DEngine()->m_pObjectsTree.Free();
 
+				// We have to unload physics data *before* shutting down the geom manager
+				// Otherwise physical entities that are destroyed later will reference dangling geom pointers
+				Cry3DEngineBase::Get3DEngine()->UnloadPhysicsData();
+
 				if (CObjManager* pObjManager = Cry3DEngineBase::GetObjManager())
 				{
 					pObjManager->UnloadObjects(true);
@@ -118,22 +115,31 @@ static CSystemEventListner_3DEngine g_system_event_listener_engine;
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
-class CEngineModule_Cry3DEngine : public IEngineModule
+class CEngineModule_Cry3DEngine : public I3DEngineModule
 {
-	CRYINTERFACE_SIMPLE(IEngineModule)
+	CRYINTERFACE_BEGIN()
+		CRYINTERFACE_ADD(Cry::IDefaultModule)
+		CRYINTERFACE_ADD(I3DEngineModule)
+	CRYINTERFACE_END()
+
 	CRYGENERATE_SINGLETONCLASS(CEngineModule_Cry3DEngine, "EngineModule_Cry3DEngine", 0x2d38f12a521d43cf, 0xba18fd1fa7ea5020)
 
+	virtual ~CEngineModule_Cry3DEngine()
+	{
+		gEnv->pSystem->GetISystemEventDispatcher()->RemoveListener(&g_system_event_listener_engine);
+		SAFE_RELEASE(gEnv->p3DEngine);
+	}
+
 	//////////////////////////////////////////////////////////////////////////
-	virtual const char* GetName() override { return "Cry3DEngine"; };
-	virtual const char* GetCategory() override { return "CryEngine"; };
+	virtual const char* GetName() const override { return "Cry3DEngine"; }
+	virtual const char* GetCategory() const override { return "CryEngine"; }
 
 	//////////////////////////////////////////////////////////////////////////
 	virtual bool Initialize(SSystemGlobalEnvironment& env, const SSystemInitParams& initParams) override
 	{
 		ISystem* pSystem = env.pSystem;
 
-		ModuleInitISystem(pSystem, "Cry3DEngine");
-		pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_engine);
+		pSystem->GetISystemEventDispatcher()->RegisterListener(&g_system_event_listener_engine, "CSystemEventListner_3DEngine");
 
 		C3DEngine* p3DEngine = CryAlignedNew<C3DEngine>(pSystem);
 		env.p3DEngine = p3DEngine;
@@ -142,14 +148,6 @@ class CEngineModule_Cry3DEngine : public IEngineModule
 };
 
 CRYREGISTER_SINGLETON_CLASS(CEngineModule_Cry3DEngine)
-
-CEngineModule_Cry3DEngine::CEngineModule_Cry3DEngine()
-{
-};
-
-CEngineModule_Cry3DEngine::~CEngineModule_Cry3DEngine()
-{
-};
 
 //////////////////////////////////////////////////////////////////////////
 void Cry3DEngineBase::PrintComment(const char* szText, ...)
@@ -281,7 +279,7 @@ void Cry3DEngineBase::DrawBBoxLabeled(const AABB& aabb, const Matrix34& m34, con
 	va_end(args);
 	float fColor[4] = { col[0] / 255.f, col[1] / 255.f, col[2] / 255.f, col[3] / 255.f };
 	GetRenderer()->GetIRenderAuxGeom()->SetRenderFlags(SAuxGeomRenderFlags());
-	GetRenderer()->DrawLabelEx(m34.TransformPoint(aabb.GetCenter()), 1.3f, fColor, true, true, szText);
+	IRenderAuxText::DrawLabelEx(m34.TransformPoint(aabb.GetCenter()), 1.3f, fColor, true, true, szText);
 	GetRenderer()->GetIRenderAuxGeom()->DrawAABB(aabb, m34, false, col, eBBD_Faceted);
 }
 
@@ -371,7 +369,7 @@ bool Cry3DEngineBase::IsEscapePressed()
 
 // Common types
 #include <Cry3DEngine/IIndexedMesh_info.h>
-#include <CryEntitySystem/IEntityRenderState_info.h>
+#include <Cry3DEngine/IRenderNode_info.h>
 #include <Cry3DEngine/CGF/CGFContent_info.h>
 
 // 3DEngine types

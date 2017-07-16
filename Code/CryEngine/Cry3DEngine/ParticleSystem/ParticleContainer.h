@@ -16,7 +16,7 @@
 #include "ParticleCommon.h"
 #include "ParticleDataTypes.h"
 #include "ParticleMath.h"
-#include "ParticleUpdate.h"
+#include "ParticleDataStreams.h"
 
 namespace pfx2
 {
@@ -52,30 +52,24 @@ public:
 	void                              Resize(size_t newSize);
 	void                              ResetUsedData();
 	void                              AddParticleData(EParticleDataType type);
-	void                              AddParticleData(EParticleVec3Field type);
-	void                              AddParticleData(EParticleQuatField type);
 	bool                              HasData(EParticleDataType type) const { return m_useData[type]; }
 	void                              AddParticle();
-	void                              AddRemoveParticles(const SSpawnEntry* pSpawnEntries, size_t numSpawnEntries, const TParticleIdArray* pToRemove, TParticleIdArray* pSwapIds);
+	void                              AddRemoveParticles(TConstArray<SSpawnEntry> spawnEntries, TVarArray<TParticleId> toRemove, TVarArray<TParticleId> swapIds);
 	void                              Trim();
 	void                              Clear();
 
-	void*                             GetData(EParticleDataType type)       { return m_pData[type]; }
-	const void*                       GetData(EParticleDataType type) const { return m_pData[type]; }
-	template<EParticleDataType type, typename T>
-	void                              FillData(const SUpdateContext& context, const T& data);
-	template<EParticleDataType type, typename T>
-	void                              FillSpawnedData(const SUpdateContext& context, const T& data);
-	template<EParticleDataType dstType, EParticleDataType srcType>
-	void                              CopyData(const SUpdateContext& context);
+	template<typename T> T*           GetData(EParticleDataType type);
+	template<typename T> const T*     GetData(EParticleDataType type) const;
+	template<typename T> void         FillData(EParticleDataType type, const T& data, SUpdateRange range);
+	void                              CopyData(EParticleDataType dstType, EParticleDataType srcType, SUpdateRange range);
 
 	IFStream                          GetIFStream(EParticleDataType type, float defaultVal = 0.0f) const;
 	IOFStream                         GetIOFStream(EParticleDataType type);
-	IVec3Stream                       GetIVec3Stream(EParticleVec3Field type, Vec3 defaultVal = Vec3(ZERO)) const;
-	IOVec3Stream                      GetIOVec3Stream(EParticleVec3Field type);
-	IQuatStream                       GetIQuatStream(EParticleQuatField type, Quat defaultVal = Quat(IDENTITY)) const;
-	IOQuatStream                      GetIOQuatStream(EParticleQuatField type);
-	IColorStream                      GetIColorStream(EParticleDataType type) const;
+	IVec3Stream                       GetIVec3Stream(EParticleDataType type, Vec3 defaultVal = Vec3(ZERO)) const;
+	IOVec3Stream                      GetIOVec3Stream(EParticleDataType type);
+	IQuatStream                       GetIQuatStream(EParticleDataType type, Quat defaultVal = Quat(IDENTITY)) const;
+	IOQuatStream                      GetIOQuatStream(EParticleDataType type);
+	IColorStream                      GetIColorStream(EParticleDataType type, UCol defaultVal = UCol()) const;
 	IOColorStream                     GetIOColorStream(EParticleDataType type);
 	IUintStream                       GetIUintStream(EParticleDataType type, uint32 defaultVal = 0) const;
 	IOUintStream                      GetIOUintStream(EParticleDataType type);
@@ -94,16 +88,17 @@ public:
 	void                              ResetSpawnedParticles();
 	void                              RemoveNewBornFlags();
 	TParticleId                       GetRealId(TParticleId pId) const;
-
-	SUpdateRange                      GetFullRange() const;
-	SUpdateRange                      GetSpawnedRange() const;
+	uint32                            GetNextSpawnId() const          { return m_nextSpawnId; }
+	SUpdateRange                      GetFullRange() const            { return SUpdateRange(0, GetLastParticleId()); }
+	SUpdateRange                      GetSpawnedRange() const         { return SUpdateRange(GetFirstSpawnParticleId(), GetLastParticleId()); }
 
 private:
-	void DebugRemoveParticlesStability(const TParticleIdArray& toRemove, const TParticleIdArray& swapIds) const;
-	void DebugParticleCounters() const;
+	void AddParticles(TConstArray<SSpawnEntry> spawnEntries);
+	void RemoveParticles(TConstArray<TParticleId> toRemove);
+	void MakeSwapIds(TVarArray<TParticleId> toRemove, TVarArray<TParticleId> swapIds);
 
-	void*  m_pData[EPDT_Count];
-	bool   m_useData[EPDT_Count];
+	StaticEnumArray<void*, EParticleDataType> m_pData;
+	StaticEnumArray<bool, EParticleDataType>  m_useData;
 	uint32 m_nextSpawnId;
 	uint32 m_maxParticles;
 
@@ -114,6 +109,7 @@ private:
 
 }
 
+#include "ParticleUpdate.h"
 #include "ParticleContainerImpl.h"
 
 #endif // PARTICLECONTAINER_H

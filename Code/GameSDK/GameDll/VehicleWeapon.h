@@ -8,7 +8,7 @@ Description: VehicleWeapon Implementation
 
 -------------------------------------------------------------------------
 History:
-- 20:04:2006   13:01 : Created by Márcio Martins
+- 20:04:2006   13:01 : Created by MÃ¡rcio Martins
 
 *************************************************************************/
 #ifndef __VEHICLE_WEAPON_H__
@@ -75,6 +75,8 @@ public:
 
 	virtual void UpdateCurrentActionController();
 
+	IVehicle* GetVehicle() const;
+
 protected:
 
   bool CheckWaterLevel() const;
@@ -89,8 +91,6 @@ protected:
 	};
 	void AudioCache( bool enable, bool isThirdPerson = true );
 	void GetCacheName(const IEntityClass* pClass, const bool bIsThirdPerson, CryFixedStringT<32> &outCacheName);
-
-	IVehicle* GetVehicle() const;
 
 	EntityId m_vehicleId;
 	EAudioCacheType m_audioCacheType;

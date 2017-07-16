@@ -29,13 +29,17 @@ public:
 
 	virtual ~CCryDXGLResource();
 
-#if CRY_OPENGL_SINGLE_CONTEXT
+#if OGL_SINGLE_CONTEXT
 	virtual void Initialize() = 0;
 #endif
 
 	ILINE NCryOpenGL::SResource* GetGLResource()
 	{
+<<<<<<< HEAD
 #if CRY_OPENGL_SINGLE_CONTEXT
+=======
+#if OGL_SINGLE_CONTEXT
+>>>>>>> upstream/stabilisation
 		IF_UNLIKELY (!m_spGLResource)
 			Initialize();
 #endif
@@ -57,12 +61,12 @@ public:
 #endif //!DXGL_FULL_EMULATION
 protected:
 	CCryDXGLResource(D3D11_RESOURCE_DIMENSION eDimension, NCryOpenGL::SResource* pResource, CCryDXGLDevice* pDevice);
-#if CRY_OPENGL_SINGLE_CONTEXT
+#if OGL_SINGLE_CONTEXT
 	CCryDXGLResource(D3D11_RESOURCE_DIMENSION eDimension, NCryOpenGL::SInitialDataCopy* pInitialDataCopy, CCryDXGLDevice* pDevice);
 #endif
 protected:
 	_smart_ptr<NCryOpenGL::SResource>        m_spGLResource;
-#if CRY_OPENGL_SINGLE_CONTEXT
+#if OGL_SINGLE_CONTEXT
 	_smart_ptr<NCryOpenGL::SInitialDataCopy> m_spInitialDataCopy;
 #endif
 	D3D11_RESOURCE_DIMENSION                 m_eDimension;

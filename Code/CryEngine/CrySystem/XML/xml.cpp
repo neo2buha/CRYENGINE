@@ -14,6 +14,7 @@
 //#define _CRT_SECURE_NO_DEPRECATE 1
 //#define _CRT_NONSTDC_NO_DEPRECATE
 #include <stdlib.h>
+#include <cctype>
 
 #pragma warning(disable : 6031) // Return value ignored: 'sscanf'
 
@@ -23,6 +24,7 @@
 #include <stdio.h>
 #include <CrySystem/File/ICryPak.h>
 #include "XMLBinaryReader.h"
+#include "CryExtension/CryGUIDHelper.h"
 
 #define FLOAT_FMT  "%.8g"
 #define DOUBLE_FMT "%.17g"
@@ -366,6 +368,35 @@ void CXmlNode::setAttr(const char* key, const Quat& value)
 	setAttr(key, str);
 }
 
+void CXmlNode::setAttr(const char* key, const CryGUID& value)
+{
+	setAttr(key, CryGUIDHelper::Print(value));
+}
+
+bool CXmlNode::getAttr(const char* key, CryGUID& value) const
+{
+	const char* svalue = GetValue(key);
+	if (svalue)
+	{
+		const char* guidStr = getAttr(key);
+		value = CryGUIDHelper::FromString(svalue);
+		if (!value.IsNull() && (value.hipart >> 32) == 0)
+		{
+#ifndef RELEASE
+			string guidString = svalue;
+			CRY_ASSERT_MESSAGE(std::all_of(guidString.begin(), guidString.end(), ::isdigit), "Must never reach this point with a non-numeric string!");
+#endif
+
+			value = CryGUID::Null();
+			// If bad GUID, use old 64bit guid system.
+			value.hipart = static_cast<uint64>(std::stoull(svalue,0,16));
+		}
+		return true;
+	}
+	return false;
+}
+
+
 //////////////////////////////////////////////////////////////////////////
 bool CXmlNode::getAttr(const char* key, int& value) const
 {
@@ -421,7 +452,24 @@ bool CXmlNode::getAttr(const char* key, bool& value) const
 	const char* svalue = GetValue(key);
 	if (svalue)
 	{
-		value = atoi(svalue) != 0;
+		if (*svalue != 0)
+		{
+			if (std::isalpha(*svalue))
+			{
+				if (0 == strcmp(svalue,"true"))
+					value = true;
+				else
+					value = false;
+			}
+			else
+			{
+				value = atoi(svalue) != 0;
+			}
+		}
+		else
+		{
+			value = false;
+		}
 		return true;
 	}
 	return false;
@@ -889,24 +937,8 @@ static void AddTabsToString(XmlString& xml, int level)
 //////////////////////////////////////////////////////////////////////////
 bool CXmlNode::IsValidXmlString(const char* str) const
 {
-	int len = strlen(str);
-
-	{
-		// Prevents invalid characters not from standard ASCII set to propagate to xml.
-		// A bit of hack for efficiency, fixes input string in place.
-		char* s = const_cast<char*>(str);
-		for (int i = 0; i < len; i++)
-		{
-			if ((unsigned char)s[i] > 0x7F)
-				s[i] = ' ';
-		}
-	}
-
-	if (strcspn(str, "\"\'&><\n") == len)
-	{
-		return true;
-	}
-	return false;
+	const size_t len = strlen(str);
+	return strcspn(str, "\"\'&><\n") == len;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1047,7 +1079,7 @@ void CXmlNode::AddToXmlString(XmlString& xml, int level, FILE* pFile, IPlatformO
 	xml += ">\n";
 }
 
-#if !CRY_PLATFORM_APPLE && !CRY_PLATFORM_LINUX
+#if !CRY_PLATFORM_APPLE && !CRY_PLATFORM_LINUX && !HAS_STPCPY
 ILINE static char* stpcpy(char* dst, const char* src)
 {
 	while (src[0])
@@ -1332,15 +1364,16 @@ protected:
 	}
 	static void characterData(void* userData, const char* s, int len) PREFAST_SUPPRESS_WARNING(6262)
 	{
-		char str[32700];
+		char str[32768];
+
 		if (len > sizeof(str) - 1)
 		{
-			assert(0);
-			len = sizeof(str) - 1;
+			CryFatalError("XML Parser buffer too small in \'characterData\' function. (%s)", s);
 		}
+
 		// Note that XML buffer userData has no terminating '\0'.
 		memcpy(str, s, len);
-		str[len] = 0;
+		str[len] = '\0';
 		((XmlParserImp*)userData)->onRawData(str);
 	}
 

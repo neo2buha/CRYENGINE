@@ -14,6 +14,9 @@ Voxelizer::Voxelizer()
 	, m_voxelConv(ZERO)
 	, m_voxelSize(ZERO)
 	, m_voxelSpaceSize(ZERO)
+#if DEBUG_MNM_ENABLED
+	, m_pDebugRawGeometry(nullptr)
+#endif // DEBUG_MNM_ENABLED
 {
 }
 
@@ -40,13 +43,42 @@ Vec3i GetVec3iFromVec3(const Vec3& vector)
 	return Vec3i((int)vector.x, (int)vector.y, (int)vector.z);
 }
 
-void Voxelizer::RasterizeTriangle(const Vec3 v0, const Vec3 v1, const Vec3 v2)
+void Voxelizer::RasterizeTriangle(const Vec3 v0World, const Vec3 v1World, const Vec3 v2World)
 {
-	const Vec3 minTriangleBoundingBox(Minimize(v0, v1, v2));
-	const Vec3 maxTriangleBoundingBox(Maximize(v0, v1, v2));
+	const Vec3 minTriangleBoundingBoxWorld(Minimize(v0World, v1World, v2World));
+	const Vec3 maxTriangleBoundingBoxWorld(Maximize(v0World, v1World, v2World));
 
-	if (!Overlap::AABB_AABB(AABB(minTriangleBoundingBox, maxTriangleBoundingBox), m_volumeAABB))
+	if (!Overlap::AABB_AABB(AABB(minTriangleBoundingBoxWorld, maxTriangleBoundingBoxWorld), m_volumeAABB))
 		return;
+
+#if DEBUG_MNM_ENABLED
+	if (m_pDebugRawGeometry)
+	{
+		m_pDebugRawGeometry->emplace_back(v0World, v1World, v2World);
+	}
+#endif // DEBUG_MNM_ENABLED
+
+#if 0 // see notes below, why it's disabled
+	// NOTE pavloi 2016.03.16: shift volume and triangle into Vec3(ZERO) to avoid
+	// issues, that happen, when same geometry results in different voxelization
+	// in overlapping parts of neighbor tiles.
+
+	// NOTE pavloi 2016.06.09: I hoped, that the math will behave more stable this way.
+	// But it didn't really solved the issue - some test cases were fixed, but then some other broke.
+
+	const Vec3 spaceMinWorld = m_volumeAABB.min;
+	const Vec3 spaceMin(ZERO);
+#else
+	const Vec3 spaceMinWorld(ZERO);
+	const Vec3 spaceMin = m_volumeAABB.min;
+#endif
+
+	const Vec3 v0 = v0World - spaceMinWorld;
+	const Vec3 v1 = v1World - spaceMinWorld;
+	const Vec3 v2 = v2World - spaceMinWorld;
+
+	const Vec3 minTriangleBoundingBox = minTriangleBoundingBoxWorld - spaceMinWorld;
+	const Vec3 maxTriangleBoundingBox = maxTriangleBoundingBoxWorld - spaceMinWorld;
 
 	const Vec3 e0(v1 - v0);
 	const Vec3 e1(v2 - v1);
@@ -56,7 +88,6 @@ void Voxelizer::RasterizeTriangle(const Vec3 v0, const Vec3 v1, const Vec3 v2)
 
 	const bool backface = n.z < 0.0f;
 
-	const Vec3 spaceMin = m_volumeAABB.min;
 	const Vec3 voxelSize = m_voxelSize;
 	const Vec3 voxelConv = m_voxelConv;
 	const Vec3i voxelSpaceSize = m_voxelSpaceSize;
@@ -293,6 +324,9 @@ size_t WorldVoxelizer::ProcessGeometry(uint32 hashValueSeed /* = 0 */, uint32 ha
 	Matrix34 worldTM;
 	sp.pMtx3x4 = &worldTM;
 
+	//references to geoms need to be incremented because physical entity can potentially drop it's geometry anytime when this method is executed in different thread
+	sp.flags = status_addref_geoms;
+
 	HashComputer hash(hashValueSeed);
 	hash.Add((uint32)entityCount);
 
@@ -321,15 +355,12 @@ size_t WorldVoxelizer::ProcessGeometry(uint32 hashValueSeed /* = 0 */, uint32 ha
 			{
 				if (sp.pGeomProxy->GetType() == GEOM_HEIGHTFIELD)
 				{
-					const AABB aabb = ComputeTerrainAABB(sp.pGeomProxy);
+					AABB aabb;
+					uint32 terrainHash = ComputeTerrainHashAndAABB(sp.pGeomProxy, aabb);
 					if (terrainAABBCount < MaxTerrainAABBCount)
 						terrainAABB[terrainAABBCount++] = aabb;
-
-					if (aabb.GetSize().len2() > 0.0f)
-					{
-						hash.Add(aabb.min);
-						hash.Add(aabb.max);
-					}
+					
+					hash.Add(terrainHash);
 				}
 				else
 				{
@@ -342,6 +373,9 @@ size_t WorldVoxelizer::ProcessGeometry(uint32 hashValueSeed /* = 0 */, uint32 ha
 
 			++sp.ipart;
 			MARK_UNUSED sp.partid;
+
+			if (sp.pGeomProxy) sp.pGeomProxy->Release();
+			if (sp.pGeom) sp.pGeom->Release();
 		}
 		MARK_UNUSED sp.ipart;
 	}
@@ -351,6 +385,7 @@ size_t WorldVoxelizer::ProcessGeometry(uint32 hashValueSeed /* = 0 */, uint32 ha
 	if (hashValue)
 		*hashValue = hash.GetValue();
 
+	// NOTE pavloi 2016.07.13: if external meshes present, this branch will almost always be executes
 	if (hashTest != hash.GetValue())
 	{
 		terrainAABBCount = 0;
@@ -379,6 +414,8 @@ size_t WorldVoxelizer::ProcessGeometry(uint32 hashValueSeed /* = 0 */, uint32 ha
 								++sp.ipart;
 								MARK_UNUSED sp.partid;
 
+								if (sp.pGeomProxy) sp.pGeomProxy->Release();
+								if (sp.pGeom) sp.pGeom->Release();
 								continue;
 							}
 						}
@@ -389,6 +426,9 @@ size_t WorldVoxelizer::ProcessGeometry(uint32 hashValueSeed /* = 0 */, uint32 ha
 
 				++sp.ipart;
 				MARK_UNUSED sp.partid;
+
+				if (sp.pGeomProxy) sp.pGeomProxy->Release();
+				if (sp.pGeom) sp.pGeom->Release();
 			}
 			MARK_UNUSED sp.ipart;
 		}
@@ -639,21 +679,27 @@ void WorldVoxelizer::VoxelizeGeometry(const Vec3* vertices, const uint32* indice
 	}
 }
 
-AABB WorldVoxelizer::ComputeTerrainAABB(IGeometry* geometry)
+uint32 WorldVoxelizer::ComputeTerrainHashAndAABB(IGeometry* geometry, AABB& aabb)
 {
+	aabb.Reset();
+	
 	primitives::heightfield* phf = (primitives::heightfield*)geometry->GetData();
+	if (!phf) return 0;
+
+	HashComputer hash;
 
 	const int minX = max(0, (int)((m_volumeAABB.min.x - phf->origin.x) * phf->stepr.x));
 	const int minY = max(0, (int)((m_volumeAABB.min.y - phf->origin.y) * phf->stepr.y));
-	const int maxX = min((int)((m_volumeAABB.max.x - phf->origin.x) * phf->stepr.x), (phf->size.x - 1));
-	const int maxY = min((int)((m_volumeAABB.max.y - phf->origin.y) * phf->stepr.y), (phf->size.y - 1));
+	const int maxX = min((int)((m_volumeAABB.max.x - phf->origin.x) * phf->stepr.x), phf->size.x);
+	const int maxY = min((int)((m_volumeAABB.max.y - phf->origin.y) * phf->stepr.y), phf->size.y);
 
 	const Vec3 origin = phf->origin;
 
 	const float xStep = (float)phf->step.x;
 	const float yStep = (float)phf->step.y;
 
-	AABB terrainAABB(AABB::RESET);
+	float zMin = FLT_MAX;
+	float zMax = -FLT_MAX;
 
 	if (phf->fpGetSurfTypeCallback && phf->fpGetHeightCallback)
 	{
@@ -663,39 +709,29 @@ AABB WorldVoxelizer::ComputeTerrainAABB(IGeometry* geometry)
 			{
 				if (phf->fpGetSurfTypeCallback(x, y) != phf->typehole)
 				{
-					const Vec3 v0 = origin + Vec3(x * xStep, y * yStep, phf->getheight(x, y) * phf->heightscale);
-					const Vec3 v1 = origin + Vec3(x * xStep, (y + 1) * yStep, phf->getheight(x, y + 1) * phf->heightscale);
-					const Vec3 v2 = origin + Vec3((x + 1) * xStep, y * yStep, phf->getheight(x + 1, y) * phf->heightscale);
-					const Vec3 v3 = origin + Vec3((x + 1) * xStep, (y + 1) * yStep, phf->getheight(x + 1, y + 1) * phf->heightscale);
-
-					terrainAABB.Add(v0);
-					terrainAABB.Add(v1);
-					terrainAABB.Add(v2);
-					terrainAABB.Add(v3);
+					const float height = phf->getheight(x, y);
+					zMin = min(zMin, height);
+					zMax = max(zMax, height);
+					hash.Add(height);
 				}
 			}
 		}
 	}
 	else if (phf->fpGetSurfTypeCallback)
 	{
-		float* height = (float*)phf->fpGetHeightCallback;
+		float* heightData = (float*)phf->fpGetHeightCallback;
 
-		assert(height);
-		PREFAST_ASSUME(height);
+		assert(heightData);
+		PREFAST_ASSUME(heightData);
 
 		for (int y = minY; y <= maxY; ++y)
 		{
 			for (int x = minX; x <= maxX; ++x)
 			{
-				const Vec3 v0 = origin + Vec3(x * xStep, y * yStep, height[Vec2i(x, y) * phf->stride] * phf->heightscale);
-				const Vec3 v1 = origin + Vec3(x * xStep, (y + 1) * yStep, height[Vec2i(x, y + 1) * phf->stride] * phf->heightscale);
-				const Vec3 v2 = origin + Vec3((x + 1) * xStep, y * yStep, height[Vec2i(x + 1, y) * phf->stride] * phf->heightscale);
-				const Vec3 v3 = origin + Vec3((x + 1) * xStep, (y + 1) * yStep, height[Vec2i(x + 1, y + 1) * phf->stride] * phf->heightscale);
-
-				terrainAABB.Add(v0);
-				terrainAABB.Add(v1);
-				terrainAABB.Add(v2);
-				terrainAABB.Add(v3);
+				const float height = heightData[Vec2i(x, y) * phf->stride];
+				zMin = min(zMin, height);
+				zMax = max(zMax, height);
+				hash.Add(height);
 			}
 		}
 	}
@@ -705,23 +741,26 @@ AABB WorldVoxelizer::ComputeTerrainAABB(IGeometry* geometry)
 		{
 			for (int x = minX; x <= maxX; ++x)
 			{
-				const Vec3 v0 = origin + Vec3(x * xStep, y * yStep, phf->getheight(x, y) * phf->heightscale);
-				const Vec3 v1 = origin + Vec3(x * xStep, (y + 1) * yStep, phf->getheight(x, y + 1) * phf->heightscale);
-				const Vec3 v2 = origin + Vec3((x + 1) * xStep, y * yStep, phf->getheight(x + 1, y) * phf->heightscale);
-				const Vec3 v3 = origin + Vec3((x + 1) * xStep, (y + 1) * yStep, phf->getheight(x + 1, y + 1) * phf->heightscale);
-
-				terrainAABB.Add(v0);
-				terrainAABB.Add(v1);
-				terrainAABB.Add(v2);
-				terrainAABB.Add(v3);
+				float height = phf->getheight(x, y);
+				zMin = min(zMin, height);
+				zMax = max(zMax, height);
+				hash.Add(height);
 			}
 		}
 	}
 
-	if (Overlap::AABB_AABB(m_volumeAABB, terrainAABB))
-		return terrainAABB;
+	const Vec3 aabbMin = origin + Vec3(minX * xStep, minY * yStep, zMin * phf->heightscale);
+	const Vec3 aabbMax = origin + Vec3(maxX * xStep, maxY * yStep, zMax * phf->heightscale);
+	
+	AABB terrainAABB(aabbMin, aabbMax);
 
-	return AABB::RESET;
+	if (Overlap::AABB_AABB(m_volumeAABB, terrainAABB))
+	{
+		aabb = terrainAABB;
+		hash.Complete();
+		return hash.GetValue();
+	}
+	return 0;
 }
 
 #pragma warning (push)

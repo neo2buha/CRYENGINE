@@ -44,8 +44,9 @@ class CImplementationSettings_fmod final : public IImplementationSettings
 {
 public:
 	CImplementationSettings_fmod()
-		: m_projectPath(PathUtil::GetGameFolder() + CRY_NATIVE_PATH_SEPSTR AUDIO_SYSTEM_DATA_ROOT CRY_NATIVE_PATH_SEPSTR "fmod_project") {}
-	virtual const char* GetSoundBanksPath() const { return PathUtil::GetGameFolder() + CRY_NATIVE_PATH_SEPSTR AUDIO_SYSTEM_DATA_ROOT CRY_NATIVE_PATH_SEPSTR "fmod"; }
+		: m_projectPath(PathUtil::GetGameFolder() + CRY_NATIVE_PATH_SEPSTR AUDIO_SYSTEM_DATA_ROOT CRY_NATIVE_PATH_SEPSTR "fmod_project")
+		, m_soundBanksPath(PathUtil::GetGameFolder() + CRY_NATIVE_PATH_SEPSTR AUDIO_SYSTEM_DATA_ROOT CRY_NATIVE_PATH_SEPSTR "fmod") {}
+	virtual const char* GetSoundBanksPath() const { return m_soundBanksPath.c_str(); }
 	virtual const char* GetProjectPath() const    { return m_projectPath.c_str(); }
 	virtual void        SetProjectPath(const char* szPath);
 
@@ -55,7 +56,8 @@ public:
 	}
 
 private:
-	string m_projectPath;
+	string       m_projectPath;
+	const string m_soundBanksPath;
 };
 
 class CAudioSystemEditor_fmod final : public IAudioSystemEditor
@@ -70,11 +72,11 @@ public:
 	virtual void                     Reload(bool bPreserveConnectionStatus = true) override;
 	virtual IAudioSystemItem*        GetRoot() override { return &m_root; }
 	virtual IAudioSystemItem*        GetControl(CID id) const override;
-	virtual EACEControlType          ImplTypeToATLType(ItemType type) const override;
-	virtual TImplControlTypeMask     GetCompatibleTypes(EACEControlType controlType) const override;
-	virtual ConnectionPtr            CreateConnectionToControl(EACEControlType controlType, IAudioSystemItem* pMiddlewareControl) override;
-	virtual ConnectionPtr            CreateConnectionFromXMLNode(XmlNodeRef pNode, EACEControlType controlType) override;
-	virtual XmlNodeRef               CreateXMLNodeFromConnection(const ConnectionPtr pConnection, const EACEControlType eATLControlType) override;
+	virtual EItemType                ImplTypeToATLType(ItemType type) const override;
+	virtual TImplControlTypeMask     GetCompatibleTypes(EItemType controlType) const override;
+	virtual ConnectionPtr            CreateConnectionToControl(EItemType controlType, IAudioSystemItem* pMiddlewareControl) override;
+	virtual ConnectionPtr            CreateConnectionFromXMLNode(XmlNodeRef pNode, EItemType controlType) override;
+	virtual XmlNodeRef               CreateXMLNodeFromConnection(const ConnectionPtr pConnection, const EItemType eATLControlType) override;
 	virtual const char*              GetTypeIcon(ItemType type) const override;
 	virtual string                   GetName() const override;
 	virtual void                     EnableConnection(ConnectionPtr pConnection) override;

@@ -2,43 +2,16 @@
 
 #pragma once
 
-#include <CryCore/smartptr.h>
+#include <CrySystem/ICryPlugin.h>
 
-enum EMonoLogLevel
-{
-	eMLL_NULL = 0,
-	eMLL_Error,
-	eMLL_Critical,
-	eMLL_Warning,
-	eMLL_Message,
-	eMLL_Info,
-	eMLL_Debug
-};
+class CRootMonoDomain;
+class CAppDomain;
+class CMonoDomain;
+class CMonoLibrary;
 
-struct IMonoLibrary
-{
-	virtual ~IMonoLibrary() {}
+struct IMonoNativeToManagedInterface;
 
-	virtual const char* GetName() = 0;
-	virtual const char* GetPath() = 0;
-	virtual bool        IsLoaded() = 0;
-	virtual bool        IsInMemory() = 0;
-	virtual bool        RunMethod(const char* name) = 0;
-};
-
-struct IMonoLibraryIt
-{
-	virtual ~IMonoLibraryIt() {}
-
-	virtual void          AddRef() = 0;
-	virtual void          Release() = 0;
-	virtual bool          IsEnd() = 0;
-	virtual IMonoLibrary* This() = 0;
-	virtual IMonoLibrary* Next() = 0;
-	virtual void          MoveFirst() = 0;
-};
-
-typedef _smart_ptr<IMonoLibraryIt> IMonoLibraryItPtr;
+namespace BehaviorTree { class Node; }
 
 struct IMonoListener
 {
@@ -50,18 +23,34 @@ struct IMonoListener
 	virtual void OnUpdate(int updateFlags, int nPauseMode) = 0;
 };
 
-struct IMonoRuntime
+struct IManagedNodeCreator
 {
-	virtual ~IMonoRuntime() {}
+	IManagedNodeCreator() {}
 
-	virtual void            Initialize(EMonoLogLevel logLevel) = 0;
-	virtual void            LoadGame() = 0;
-	virtual void            UnloadGame() = 0;
-	virtual void            ReloadGame() { UnloadGame(); LoadGame(); }
-	virtual void            RegisterListener(IMonoListener* pListener) = 0;
-	virtual void            UnregisterListener(IMonoListener* pListener) = 0;
-	virtual void            Update(int updateFlags = 0, int nPauseMode = 0) = 0;
-	virtual const char*     GetProjectDllDir() = 0;
-	virtual EMonoLogLevel   GetLogLevel() = 0;
-	virtual IMonoLibraryIt* GetLibraryIterator() = 0;
+	virtual BehaviorTree::Node* Create() = 0;
+};
+
+struct IMonoEngineModule : public Cry::IDefaultModule
+{
+	CRYINTERFACE_DECLARE(IMonoEngineModule, 0xAE47C9890FFA4876, 0xB0B5FBB833C2B4EF);
+
+	virtual void                        Shutdown() = 0;
+
+	virtual std::shared_ptr<ICryPlugin> LoadBinary(const char* szBinaryPath) = 0;
+
+	virtual void                        Update(int updateFlags = 0, int nPauseMode = 0) = 0;
+
+	virtual void                        RegisterListener(IMonoListener* pListener) = 0;
+	virtual void                        UnregisterListener(IMonoListener* pListener) = 0;
+
+	virtual CRootMonoDomain*            GetRootDomain() = 0;
+	virtual CMonoDomain*                GetActiveDomain() = 0;
+	virtual CAppDomain*                 CreateDomain(char* name, bool bActivate = false) = 0;
+
+	virtual CMonoLibrary*               GetCryCommonLibrary() const = 0;
+	virtual CMonoLibrary*               GetCryCoreLibrary() const = 0;
+
+	virtual void						RegisterNativeToManagedInterface(IMonoNativeToManagedInterface& managedInterface) = 0;
+
+	virtual void                        RegisterManagedNodeCreator(const char* szClassName, IManagedNodeCreator* pCreator) = 0;
 };

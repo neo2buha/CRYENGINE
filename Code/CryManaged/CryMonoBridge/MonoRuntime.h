@@ -3,56 +3,165 @@
 #pragma once
 
 #include <CryMono/IMonoRuntime.h>
+
 #include <CrySystem/IConsole.h>
 #include <CryCore/Containers/CryListenerSet.h>
-#include <mono/jit/jit.h>
-#include <vector>
+#include <CryAISystem/BehaviorTree/IBehaviorTree.h>
+#include <CryAISystem/BehaviorTree/Node.h>
 
-typedef std::vector<IMonoLibrary*> Libraries;
-typedef CListenerSet<IMonoListener*> TMonoListeners;
+#include <CrySystem/IEngineModule.h>
+#include <CryExtension/ICryFactory.h>
+#include <CryExtension/ClassWeaver.h>
 
-class CMonoRuntime : public IMonoRuntime
+#include "Wrappers/MonoObject.h"
+
+#include "NativeComponents/ManagedEntityComponent.h"
+
+class CMonoDomain;
+class CRootMonoDomain;
+class CAppDomain;
+
+class CMonoLibrary;
+
+class CManagedPlugin;
+
+typedef CListenerSet<IMonoListener*>            MonoListeners;
+
+enum EMonoLogLevel
+{
+	eMLL_NULL = 0,
+	eMLL_Error,
+	eMLL_Critical,
+	eMLL_Warning,
+	eMLL_Message,
+	eMLL_Info,
+	eMLL_Debug
+};
+
+class CManagedNodeCreatorProxy : public BehaviorTree::INodeCreator
 {
 public:
-	CMonoRuntime (const char* sProjectDllDir);
-	virtual ~CMonoRuntime() override;
-	
-	virtual void Initialize(EMonoLogLevel logLevel);
-	virtual void LoadGame();
-	virtual void UnloadGame();
-	virtual void RegisterListener(IMonoListener* pListener) { m_listeners.Add(pListener); }
-	virtual void UnregisterListener(IMonoListener* pListener) { m_listeners.Remove(pListener); }
-	virtual void Update(int updateFlags, int nPauseMode)
-	{
-		for (TMonoListeners::Notifier notifier(m_listeners); notifier.IsValid(); notifier.Next())
-			notifier->OnUpdate(updateFlags, nPauseMode);
+	CManagedNodeCreatorProxy(const char* szTypeName, IManagedNodeCreator* pCreator)
+		: m_pCreator(pCreator)
+		, m_pNodeFactory(nullptr) 
+	{ 
+		cry_strcpy(m_szTypeName, szTypeName);
 	}
-	virtual EMonoLogLevel GetLogLevel() { return m_logLevel; }
-	virtual IMonoLibraryIt* GetLibraryIterator();
-	virtual const char* GetProjectDllDir() { return m_sProjectDllDir; }
-private:
-	template<class T> static int ReadAll(string fileName, T** data);
-	static void MonoLogCallback(const char *log_domain, const char *log_level, const char *message, mono_bool fatal, void *user_data);
-	static void MonoPrintCallback(const char *string, mono_bool is_stdout);
-	static void MonoPrintErrorCallback(const char *string, mono_bool is_stdout);
-	static void MonoLoadHook(MonoAssembly *assembly, void* user_data);
-	static MonoAssembly* MonoSearchHook(MonoAssemblyName *aname, void* user_data);
-	static MonoAssembly* MonoPreLoadHook(MonoAssemblyName *aname, char **assemblies_path, void* user_data);
-	
-	static void CMD_ReloadGame(IConsoleCmdArgs* args);
 
-	IMonoLibrary* LoadLibrary(const char* name);
-	IMonoLibrary* GetLibrary(MonoAssembly* assembly);
+	// INodeCreator
+	virtual ~CManagedNodeCreatorProxy()
+	{
+		delete m_pCreator;
+	}
+	virtual BehaviorTree::INodePtr    Create() override
+	{
+		return BehaviorTree::INodePtr(m_pCreator->Create());
+	}
+	virtual void        Trim() override {}
+	virtual const char* GetTypeName() const override { return m_szTypeName; }
+	virtual size_t      GetNodeClassSize() const override { return 4; }
+	virtual size_t      GetSizeOfImmutableDataForAllAllocatedNodes() const override { return 4; }
+	virtual size_t      GetSizeOfRuntimeDataForAllAllocatedNodes() const override { return 4; }
+	virtual void*       AllocateRuntimeData(const BehaviorTree::RuntimeDataID runtimeDataID) override { return nullptr; }
+	virtual void*       GetRuntimeData(const BehaviorTree::RuntimeDataID runtimeDataID) const override { return nullptr; }
+	virtual void        FreeRuntimeData(const BehaviorTree::RuntimeDataID runtimeDataID) override { }
+	virtual void        SetNodeFactory(BehaviorTree::INodeFactory* nodeFactory) override { m_pNodeFactory = nodeFactory; }
+	// ~INodeCreator
 
 private:
-	friend class CMonoLibraryIt;
-	Libraries		m_loadedLibraries;
-	TMonoListeners	m_listeners;
-	MonoDomain*		m_domain;
-	MonoDomain*		m_gameDomain;
-	IMonoLibrary*	m_gameLibrary;
-	bool			m_bSearchOpen;
-	EMonoLogLevel	m_logLevel;
-	char			m_sBasePath[_MAX_PATH];
-	char			m_sProjectDllDir[_MAX_PATH];
+	IManagedNodeCreator* m_pCreator;
+	char m_szTypeName[64];
+	BehaviorTree::INodeFactory* m_pNodeFactory;
 };
+
+class CMonoRuntime final
+	: public IMonoEngineModule
+	, public IManagedConsoleCommandListener
+	, public ISystemEventListener
+{
+	CRYINTERFACE_BEGIN()
+		CRYINTERFACE_ADD(Cry::IDefaultModule)
+		CRYINTERFACE_ADD(IMonoEngineModule)
+	CRYINTERFACE_END()
+	CRYGENERATE_SINGLETONCLASS(CMonoRuntime, "EngineModule_CryMonoBridge", 0x2b4615a571524d67, 0x920dc857f8503b3a)
+
+public:
+	CMonoRuntime();
+	virtual ~CMonoRuntime();
+
+	// IMonoEngineModule
+	virtual const char* GetName() const override { return "CryMonoBridge"; }
+	virtual const char* GetCategory() const override { return "CryEngine"; }
+
+	virtual bool Initialize(SSystemGlobalEnvironment& env, const SSystemInitParams& initParams) override;
+	virtual void Shutdown() override;
+
+	virtual std::shared_ptr<ICryPlugin> LoadBinary(const char* szBinaryPath) override;
+
+	virtual void                        Update(int updateFlags, int nPauseMode) override;
+
+	virtual void                        RegisterListener(IMonoListener* pListener) override { m_listeners.Add(pListener); }
+	virtual void                        UnregisterListener(IMonoListener* pListener) override { m_listeners.Remove(pListener); }
+
+	virtual CRootMonoDomain*            GetRootDomain() override;
+	virtual CMonoDomain*                GetActiveDomain() override;
+	virtual CAppDomain*                 CreateDomain(char* name, bool bActivate = false) override;
+
+	virtual CMonoLibrary*               GetCryCommonLibrary() const override;
+	virtual CMonoLibrary*               GetCryCoreLibrary() const override;
+
+	virtual void						RegisterNativeToManagedInterface(IMonoNativeToManagedInterface& interface) override;
+
+	virtual void                        RegisterManagedNodeCreator(const char* szClassName, IManagedNodeCreator* pCreator) override;
+	// ~IMonoEngineModule
+
+	// IManagedConsoleCommandListener
+	virtual void OnManagedConsoleCommandEvent(const char* szCommandName, IConsoleCmdArgs* pConsoleCommandArguments) override;
+	// ~IManagedConsoleCommandListener
+
+	// ISystemEventListener
+	virtual void OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lparam) override;
+	// ~ISystemEventListener
+
+	CMonoDomain* FindDomainByHandle(MonoInternals::MonoDomain* pDomain);
+
+	CAppDomain*  LaunchPluginDomain();
+	CAppDomain*  GetPluginDomain() const { return m_pPluginDomain; }
+
+	void         HandleException(MonoInternals::MonoException* pException);
+
+	void ReloadPluginDomain();
+
+private:
+	static void MonoLogCallback(const char* szLogDomain, const char* szLogLevel, const char* szMessage, MonoInternals::mono_bool is_fatal, void* pUserData);
+	static void MonoPrintCallback(const char* szMessage, MonoInternals::mono_bool is_stdout);
+	static void MonoPrintErrorCallback(const char* szMessage, MonoInternals::mono_bool is_stdout);
+
+	void RegisterInternalInterfaces();
+
+	void InvokeManagedConsoleCommandNotification(const char* szCommandName, IConsoleCmdArgs* pConsoleCommandArguments);
+
+	void CompileAssetSourceFiles();
+	void FindSourceFilesInDirectoryRecursive(const char* szDirectory, std::vector<string>& sourceFiles);
+
+private:
+	std::unordered_map<MonoInternals::MonoDomain*, std::shared_ptr<CMonoDomain>> m_domainLookupMap;
+	std::vector<std::shared_ptr<CManagedNodeCreatorProxy>> m_nodeCreators;
+
+	std::shared_ptr<CRootMonoDomain>         m_pRootDomain;
+	CAppDomain*              m_pPluginDomain;
+	std::vector<std::weak_ptr<CManagedPlugin>> m_plugins;
+
+	// Plug-in compiled from source code in assets directory
+	std::shared_ptr<CManagedPlugin> m_pAssetsPlugin;
+	
+	CMonoLibrary*            m_pLibCommon;
+	CMonoLibrary*            m_pLibCore;
+
+	MonoListeners            m_listeners;
+};
+
+inline static CMonoRuntime* GetMonoRuntime()
+{
+	return static_cast<CMonoRuntime*>(gEnv->pMonoRuntime);
+}

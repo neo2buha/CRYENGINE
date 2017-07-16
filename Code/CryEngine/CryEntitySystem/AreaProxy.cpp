@@ -5,18 +5,19 @@
 #include "Entity.h"
 #include <CryNetwork/ISerialize.h>
 
-std::vector<Vec3> CAreaProxy::s_tmpWorldPoints;
+CRYREGISTER_CLASS(CEntityComponentArea);
+
+std::vector<Vec3> CEntityComponentArea::s_tmpWorldPoints;
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::ResetTempState()
+void CEntityComponentArea::ResetTempState()
 {
 	stl::free_container(s_tmpWorldPoints);
 }
 
 //////////////////////////////////////////////////////////////////////////
-CAreaProxy::CAreaProxy()
-	: m_pEntity(nullptr)
-	, m_nFlags(0)
+CEntityComponentArea::CEntityComponentArea()
+	: m_nFlags(0)
 	, m_pArea(nullptr)
 	, m_fRadius(0.0f)
 	, m_fGravity(0.0f)
@@ -27,47 +28,26 @@ CAreaProxy::CAreaProxy()
 	, m_bIsEnableInternal(false)
 	, m_lastFrameTime(0.0f)
 {
+	m_componentFlags.Add(EEntityComponentFlags::Legacy);
 }
 
 //////////////////////////////////////////////////////////////////////////
-CAreaProxy::~CAreaProxy()
+CEntityComponentArea::~CEntityComponentArea()
 {
 	SAFE_RELEASE(m_pArea);
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::Initialize(const SComponentInitializer& init)
+void CEntityComponentArea::Initialize()
 {
-	m_pEntity = (CEntity*)init.m_pEntity;
-
-	m_pArea = static_cast<CAreaManager*>(m_pEntity->GetCEntitySystem()->GetAreaManager())->CreateArea();
+	m_pArea = static_cast<CAreaManager*>(gEnv->pEntitySystem->GetAreaManager())->CreateArea();
 	m_pArea->SetEntityID(m_pEntity->GetId());
 
 	Reset();
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::Reload(IEntity* pEntity, SEntitySpawnParams& params)
-{
-	m_pEntity = (CEntity*)pEntity;
-
-	CRY_ASSERT(m_pArea);
-	if (m_pArea)
-	{
-		m_pArea->SetEntityID(pEntity->GetId());
-	}
-
-	Reset();
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CAreaProxy::Release()
-{
-	delete this;
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CAreaProxy::Reset()
+void CEntityComponentArea::Reset()
 {
 	m_nFlags = 0;
 
@@ -83,7 +63,7 @@ void CAreaProxy::Reset()
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::OnMove()
+void CEntityComponentArea::OnMove()
 {
 	if ((m_nFlags & FLAG_NOT_UPDATE_AREA) == 0)
 	{
@@ -101,16 +81,12 @@ void CAreaProxy::OnMove()
 					s_tmpWorldPoints[i] = worldTM.TransformPoint(m_localPoints[i]);
 				}
 
+				CRY_ASSERT_MESSAGE(!s_tmpWorldPoints.empty(), "An area shape without points cannot be moved, Verify that it is properly initialized!");
+
 				if (!s_tmpWorldPoints.empty())
 				{
 					m_pArea->MovePoints(&s_tmpWorldPoints[0], numLocalPoints);
 					s_tmpWorldPoints.clear();
-				}
-				else
-				{
-#if defined(INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE)
-					CryFatalError("An area shape without points cannot be moved.\nVerify that it is properly initialized.");
-#endif    // INCLUDE_ENTITYSYSTEM_PRODUCTION_CODE
 				}
 			}
 			break;
@@ -131,7 +107,7 @@ void CAreaProxy::OnMove()
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::OnEnable(bool bIsEnable, bool bIsCallScript)
+void CEntityComponentArea::OnEnable(bool bIsEnable, bool bIsCallScript)
 {
 	m_bIsEnable = bIsEnable;
 	if (m_pArea->GetAreaType() == ENTITY_AREA_TYPE_GRAVITYVOLUME)
@@ -175,7 +151,7 @@ void CAreaProxy::OnEnable(bool bIsEnable, bool bIsCallScript)
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::ProcessEvent(SEntityEvent& event)
+void CEntityComponentArea::ProcessEvent(SEntityEvent& event)
 {
 	switch (event.event)
 	{
@@ -191,51 +167,21 @@ void CAreaProxy::ProcessEvent(SEntityEvent& event)
 				OnEnable(false);
 		}
 		break;
-	case ENTITY_EVENT_RENDER:
+	case ENTITY_EVENT_RENDER_VISIBILITY_CHANGE:
 		{
+			bool bVisible = event.nParam[0] != 0;
+			
 			if (m_pArea->GetAreaType() == ENTITY_AREA_TYPE_GRAVITYVOLUME)
 			{
-				if (!m_bDontDisableInvisible)
-				{
-					m_lastFrameTime = gEnv->pTimer->GetCurrTime();
-				}
-				if (!m_bIsEnableInternal)
+				if (bVisible && !m_bIsEnableInternal)
 				{
 					m_bIsEnableInternal = true;
 					OnEnable(m_bIsEnable, false);
-					m_pEntity->SetTimer(0, 11000);
 				}
-			}
-		}
-		break;
-	case ENTITY_EVENT_TIMER:
-		{
-			if (m_pArea->GetAreaType() == ENTITY_AREA_TYPE_GRAVITYVOLUME)
-			{
-				if (!m_bDontDisableInvisible)
+				if (!bVisible && m_bIsEnableInternal && !m_bDontDisableInvisible)
 				{
-					bool bOff = false;
-					if (gEnv->pTimer->GetCurrTime() - m_lastFrameTime > 10.0f)
-					{
-						bOff = true;
-						IEntityRenderProxy* pEntPr = (IEntityRenderProxy*)m_pEntity->GetProxy(ENTITY_PROXY_RENDER);
-						if (pEntPr)
-						{
-							IRenderNode* pRendNode = pEntPr->GetRenderNode();
-							if (pRendNode)
-							{
-								if (pEntPr->IsRenderProxyVisAreaVisible())
-									bOff = false;
-							}
-						}
-						if (bOff)
-						{
-							m_bIsEnableInternal = false;
-							OnEnable(m_bIsEnable, false);
-						}
-					}
-					if (!bOff)
-						m_pEntity->SetTimer(0, 11000);
+					m_bIsEnableInternal = false;
+					OnEnable(m_bIsEnable, false);
 				}
 			}
 		}
@@ -244,30 +190,49 @@ void CAreaProxy::ProcessEvent(SEntityEvent& event)
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::SerializeXML(XmlNodeRef& entityNode, bool bLoading)
+uint64 CEntityComponentArea::GetEventMask() const
+{
+	return BIT64(ENTITY_EVENT_XFORM) |
+	       BIT64(ENTITY_EVENT_SCRIPT_EVENT) |
+	       BIT64(ENTITY_EVENT_RENDER_VISIBILITY_CHANGE);
+}
+
+//////////////////////////////////////////////////////////////////////////
+void CEntityComponentArea::LegacySerializeXML(XmlNodeRef& entityNode, XmlNodeRef& componentNode, bool bLoading)
 {
 	if (m_nFlags & FLAG_NOT_SERIALIZE)
 		return;
 
 	if (bLoading)
 	{
-		XmlNodeRef areaNode = entityNode->findChild("Area");
+		XmlNodeRef areaNode = componentNode->findChild("Area");
+		if (!areaNode)
+		{
+			// legacy behavior, look for properties on the entity node level
+			areaNode = entityNode->findChild("Area");
+		}
+
 		if (!areaNode)
 			return;
 
-		int nId = 0, nGroup = 0, nPriority = 0;
-		float fProximity = 0;
-		float fHeight = 0;
+		int id = 0, groupId = 0, priority = 0;
+		float proximity = 0.0f, height = 0.0f, innerFadeDistance = 0.0f;
 
-		areaNode->getAttr("Id", nId);
-		areaNode->getAttr("Group", nGroup);
-		areaNode->getAttr("Proximity", fProximity);
-		areaNode->getAttr("Priority", nPriority);
-		m_pArea->SetID(nId);
-		m_pArea->SetGroup(nGroup);
-		m_pArea->SetProximity(fProximity);
-		m_pArea->SetPriority(nPriority);
-		const char* token(0);
+		areaNode->getAttr("Id", id);
+		areaNode->getAttr("Group", groupId);
+		areaNode->getAttr("Proximity", proximity);
+		areaNode->getAttr("Priority", priority);
+		areaNode->getAttr("InnerFadeDistance", innerFadeDistance);
+		m_pArea->SetID(id);
+		m_pArea->SetGroup(groupId);
+		m_pArea->SetProximity(proximity);
+		m_pArea->SetPriority(priority);
+		m_pArea->SetInnerFadeDistance(innerFadeDistance);
+
+		const char* token = nullptr;
+
+		// TODO: workaround for 5.3 - needs refactoring of CreateGameObject + Serialize mechanism
+		m_abObstructSound.clear();
 
 		XmlNodeRef pointsNode = areaNode->findChild("Points");
 
@@ -318,8 +283,8 @@ void CAreaProxy::SerializeXML(XmlNodeRef& entityNode, bool bLoading)
 			m_abObstructSound.push_back(bObstructSound);
 			m_pArea->SetAreaType(ENTITY_AREA_TYPE_SHAPE);
 
-			areaNode->getAttr("Height", fHeight);
-			m_pArea->SetHeight(fHeight);
+			areaNode->getAttr("Height", height);
+			m_pArea->SetHeight(height);
 
 			size_t const numLocalPoints = s_tmpWorldPoints.size();
 			size_t const numAudioPoints = numLocalPoints + 2; // Adding "Roof" and "Floor"
@@ -374,20 +339,17 @@ void CAreaProxy::SerializeXML(XmlNodeRef& entityNode, bool bLoading)
 				}
 			}
 			m_pArea->SetAreaType(ENTITY_AREA_TYPE_GRAVITYVOLUME);
-			if (!m_pEntity->GetRenderProxy())
-			{
-				IEntityRenderProxyPtr pRenderProxy = crycomponent_cast<IEntityRenderProxyPtr>(m_pEntity->CreateProxy(ENTITY_PROXY_RENDER));
-				m_pEntity->SetFlags(m_pEntity->GetFlags() | ENTITY_FLAG_SEND_RENDER_EVENT);
 
-				if (box.min.x > box.max.x)
-					box.min = box.max = Vec3(0, 0, 0);
-				box.min -= Vec3(m_fRadius, m_fRadius, m_fRadius);
-				box.max += Vec3(m_fRadius, m_fRadius, m_fRadius);
+			m_pEntity->SetFlags(m_pEntity->GetFlags() | ENTITY_FLAG_SEND_RENDER_EVENT);
 
-				box.SetTransformedAABB(m_pEntity->GetWorldTM().GetInverted(), box);
+			if (box.min.x > box.max.x)
+				box.min = box.max = Vec3(0, 0, 0);
+			box.min -= Vec3(m_fRadius, m_fRadius, m_fRadius);
+			box.max += Vec3(m_fRadius, m_fRadius, m_fRadius);
 
-				pRenderProxy->SetLocalBounds(box, true);
-			}
+			box.SetTransformedAABB(m_pEntity->GetWorldTM().GetInverted(), box);
+
+			m_pEntity->GetRenderInterface()->SetLocalBounds(box, true);
 
 			OnEnable(m_bIsEnable);
 		}
@@ -478,11 +440,12 @@ void CAreaProxy::SerializeXML(XmlNodeRef& entityNode, bool bLoading)
 	else
 	{
 		// Save points.
-		XmlNodeRef const areaNode = entityNode->newChild("Area");
+		XmlNodeRef const areaNode = componentNode->newChild("Area");
 		areaNode->setAttr("Id", m_pArea->GetID());
 		areaNode->setAttr("Group", m_pArea->GetGroup());
 		areaNode->setAttr("Proximity", m_pArea->GetProximity());
 		areaNode->setAttr("Priority", m_pArea->GetPriority());
+		areaNode->setAttr("InnerFadeDistance", m_pArea->GetInnerFadeDistance());
 
 		EEntityAreaType const type = m_pArea->GetAreaType();
 
@@ -608,7 +571,7 @@ void CAreaProxy::SerializeXML(XmlNodeRef& entityNode, bool bLoading)
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::ReadPolygonsForAreaSolid(CCryFile& file, int numberOfPolygons, bool bObstruction)
+void CEntityComponentArea::ReadPolygonsForAreaSolid(CCryFile& file, int numberOfPolygons, bool bObstruction)
 {
 	static const int numberOfStaticVertices(200);
 	Vec3 pStaticVertices[numberOfStaticVertices];
@@ -631,20 +594,12 @@ void CAreaProxy::ReadPolygonsForAreaSolid(CCryFile& file, int numberOfPolygons, 
 }
 
 //////////////////////////////////////////////////////////////////////////
-bool CAreaProxy::GetSignature(TSerialize signature)
-{
-	signature.BeginGroup("AreaProxy");
-	signature.EndGroup();
-	return true;
-}
-
-//////////////////////////////////////////////////////////////////////////
-void CAreaProxy::Serialize(TSerialize ser)
+void CEntityComponentArea::GameSerialize(TSerialize ser)
 {
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::SetPoints(Vec3 const* const pPoints, bool const* const pSoundObstructionSegments, size_t const numLocalPoints, float const height)
+void CEntityComponentArea::SetPoints(Vec3 const* const pPoints, bool const* const pSoundObstructionSegments, size_t const numLocalPoints, float const height)
 {
 	m_pArea->SetHeight(height);
 	m_pArea->SetAreaType(ENTITY_AREA_TYPE_SHAPE);
@@ -690,7 +645,7 @@ void CAreaProxy::SetPoints(Vec3 const* const pPoints, bool const* const pSoundOb
 }
 
 //////////////////////////////////////////////////////////////////////////
-const Vec3* CAreaProxy::GetPoints()
+const Vec3* CEntityComponentArea::GetPoints()
 {
 	if (m_localPoints.empty())
 		return 0;
@@ -698,7 +653,7 @@ const Vec3* CAreaProxy::GetPoints()
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::SetBox(const Vec3& min, const Vec3& max, const bool* const pabSoundObstructionSides, size_t const nSideCount)
+void CEntityComponentArea::SetBox(const Vec3& min, const Vec3& max, const bool* const pabSoundObstructionSides, size_t const nSideCount)
 {
 	m_pArea->SetBox(min, max, m_pEntity->GetWorldTM());
 	m_localPoints.clear();
@@ -730,7 +685,7 @@ void CAreaProxy::SetBox(const Vec3& min, const Vec3& max, const bool* const pabS
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::SetSphere(const Vec3& vCenter, float fRadius)
+void CEntityComponentArea::SetSphere(const Vec3& vCenter, float fRadius)
 {
 	m_vCenter = vCenter;
 	m_fRadius = fRadius;
@@ -739,26 +694,26 @@ void CAreaProxy::SetSphere(const Vec3& vCenter, float fRadius)
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::BeginSettingSolid(const Matrix34& worldTM)
+void CEntityComponentArea::BeginSettingSolid(const Matrix34& worldTM)
 {
 	m_pArea->BeginSettingSolid(worldTM);
 	m_pArea->SetAreaType(ENTITY_AREA_TYPE_SOLID);
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::AddConvexHullToSolid(const Vec3* verticesOfConvexHull, bool bObstruction, int numberOfVertices)
+void CEntityComponentArea::AddConvexHullToSolid(const Vec3* verticesOfConvexHull, bool bObstruction, int numberOfVertices)
 {
 	m_pArea->AddConvexHullToSolid(verticesOfConvexHull, bObstruction, numberOfVertices);
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::EndSettingSolid()
+void CEntityComponentArea::EndSettingSolid()
 {
 	m_pArea->EndSettingSolid();
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::SetGravityVolume(const Vec3* pPoints, int nNumPoints, float fRadius, float fGravity, bool bDontDisableInvisible, float fFalloff, float fDamping)
+void CEntityComponentArea::SetGravityVolume(const Vec3* pPoints, int nNumPoints, float fRadius, float fGravity, bool bDontDisableInvisible, float fFalloff, float fDamping)
 {
 	m_bIsEnableInternal = true;
 	m_fRadius = fRadius;
@@ -778,7 +733,7 @@ void CAreaProxy::SetGravityVolume(const Vec3* pPoints, int nNumPoints, float fRa
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CAreaProxy::SetSoundObstructionOnAreaFace(size_t const index, bool const bObstructs)
+void CEntityComponentArea::SetSoundObstructionOnAreaFace(size_t const index, bool const bObstructs)
 {
 	CRY_ASSERT(index < m_abObstructSound.size());
 	m_abObstructSound[index] = bObstructs;
@@ -786,13 +741,13 @@ void CAreaProxy::SetSoundObstructionOnAreaFace(size_t const index, bool const bO
 }
 
 //////////////////////////////////////////////////////////////////////////
-size_t CAreaProxy::GetNumberOfEntitiesInArea() const
+size_t CEntityComponentArea::GetNumberOfEntitiesInArea() const
 {
 	return m_pArea->GetEntityAmount();
 }
 
 //////////////////////////////////////////////////////////////////////////
-EntityId CAreaProxy::GetEntityInAreaByIdx(size_t index) const
+EntityId CEntityComponentArea::GetEntityInAreaByIdx(size_t const index) const
 {
 	return m_pArea->GetEntityByIdx(index);
 }

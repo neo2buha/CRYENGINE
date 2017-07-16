@@ -34,8 +34,6 @@ CCodeCheckpointMgr::~CCodeCheckpointMgr()
 /// Used by code checkpoints to register themselves with the manager.
 void CCodeCheckpointMgr::RegisterCheckpoint(CCodeCheckpoint* pCheckpoint)
 {
-	ScopedSwitchToGlobalHeap useGlobalHeap;
-
 	CRY_ASSERT(pCheckpoint);
 	CRY_ASSERT(pCheckpoint->Name() != NULL);
 	CRY_ASSERT(pCheckpoint->HitCount() == 0);
@@ -79,6 +77,21 @@ void CCodeCheckpointMgr::RegisterCheckpoint(CCodeCheckpoint* pCheckpoint)
 
 		// Ensure duplicate code checkpoints are renamed
 		CRY_ASSERT_TRACE(oldRec.m_pCheckpoint == NULL, ("Duplicate CODECHECKPOINT(\"%s\") found. Please rename!", pCheckpoint->Name()));
+	}
+}
+
+void CCodeCheckpointMgr::UnRegisterCheckpoint(const char* szName)
+{
+	CryAutoCriticalSection lock(m_critSection);
+
+	for (TCheckpointVector::iterator iter(m_checkpoints.begin()), endIter(m_checkpoints.end()); iter != endIter; ++iter)
+	{
+		const CheckpointRecord& rec = *iter;
+		if (strcmp(rec.m_name, szName) == 0)
+		{
+			m_checkpoints.erase(iter);
+			break;
+		}
 	}
 }
 

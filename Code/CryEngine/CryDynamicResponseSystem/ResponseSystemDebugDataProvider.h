@@ -31,15 +31,11 @@ public:
 	{
 		eER_NotStarted,
 		eER_Running,
-		eER_ExecuteOnlyOnce,
 		eER_NoValidSegment,
 		eER_Canceled,
 		eER_Finished,
 		eER_NoResponse,
-
 		eER_Queued,
-		eER_CanceledWhileQueued,
-		eER_Canceling,
 	};
 
 	CResponseSystemDebugDataProvider();
@@ -150,15 +146,17 @@ private:
 	void AddDialogLineFinished(const CHashedString& lineID, const string& speakerName, EStatus status, const string& reason);
 
 	typedef std::vector<SStartedResponses> StartedResponsesList;
-	StartedResponsesList m_ExecutedResponses;
+	StartedResponsesList m_executedResponses;
 
 	typedef std::vector<VariableChangeInfo> VariableChangeInfoList;
-	VariableChangeInfoList m_VariableChangeHistory;
+	VariableChangeInfoList m_variableChangeHistory;
 
 	typedef std::vector<SLineHistory> LineHistoryList;
-	LineHistoryList    m_LineHistory;
+	LineHistoryList    m_lineHistory;
 
-	ResponseInstanceID m_CurrentResponse;
+	ResponseInstanceID m_currentResponse;
+
+	int                m_loggingOptions;
 
 	static const int   MAX_NUMBER_OF_TRACKED_SIGNALS = 512;
 

@@ -143,7 +143,6 @@ void LocalizeString( string &out, const char *text, const char *arg1, const char
 //////////////////////////////////////////////////////////////////////////
 const char * LocalizeString( const char *text, const char *arg1, const char *arg2, const char *arg3, const char *arg4 )
 {
-	ScopedSwitchToGlobalHeap globalHeap;
 	static string charstr;
 	LocalizeString( charstr, text, arg1, arg2, arg3, arg4 );
 
@@ -159,7 +158,6 @@ const char* LocalizeNumber(const int number)
 {
 	ILocalizationManager* pLocMgr = gEnv->pSystem->GetLocalizationManager();
 
-	ScopedSwitchToGlobalHeap globalHeap;
 	static string charstr;
 	pLocMgr->LocalizeNumber(number, charstr);
 
@@ -182,7 +180,6 @@ const char* LocalizeNumber(const float number, int decimals)
 {
 	ILocalizationManager* pLocMgr = gEnv->pSystem->GetLocalizationManager();
 
-	ScopedSwitchToGlobalHeap globalHeap;
 	static string charstr;
 	pLocMgr->LocalizeNumber(number, decimals, charstr);
 
@@ -279,7 +276,7 @@ const EFriendState GetFriendlyState( const EntityId entityId, CActor* pLocalActo
 			{
 				if(CSquadManager* pSM = g_pGame->GetSquadManager())
 				{
-					IActor* pActor = gEnv->pGame->GetIGameFramework()->GetIActorSystem()->GetActor(entityId);
+					IActor* pActor = gEnv->pGameFramework->GetIActorSystem()->GetActor(entityId);
 					if(pActor)
 					{
 						uint16 channelId = pActor->GetChannelId();
@@ -540,6 +537,24 @@ void* GetNearestTo(const TCenterSortArray& array, const Vec2& center, const floa
 		return array[nearest].m_pData;
 	}
 	return NULL;
+}
+
+uint32 ConverToSilhouetteParamValue(ColorF color, bool bEnable/* = true*/)
+{
+		return	ConverToSilhouetteParamValue(color.r, color.g, color.b, color.a);
+}
+
+uint32 ConverToSilhouetteParamValue(float r, float g, float b, float a, bool bEnable/* = true*/)
+{
+	if (bEnable && fabsf(1.f - a) < FLT_EPSILON)
+	{
+		return	(uint32)(int_round(r * 255.0f) << 24) |
+						(int_round(g * 255.0f) << 16) |
+						(int_round(b * 255.0f) << 8) |
+						(int_round(a * 255.0f));
+	}
+
+	return 0;
 }
 
 }

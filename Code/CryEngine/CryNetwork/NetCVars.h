@@ -245,14 +245,10 @@ private:
 
 	static CNetCVars* s_pThis;
 
-	static void ReloadScheduler(IConsoleCmdArgs*);
 	static void DumpObjectState(IConsoleCmdArgs*);
 	static void DumpBlockingRMIs(IConsoleCmdArgs*);
 	static void Stall(IConsoleCmdArgs*);
 	static void SetCDKey(IConsoleCmdArgs*);
-#if NETWORK_REBROADCASTER
-	static void RebroadcasterCmd(IConsoleCmdArgs* pArgs);
-#endif
 
 #if NEW_BANDWIDTH_MANAGEMENT
 	static void GetChannelPerformanceMetrics(IConsoleCmdArgs* pArguments);

@@ -238,7 +238,7 @@ public:
 	void GC_UnboundObject(EntityId);
 	void GC_BeginContext(CTimeValue);
 	void GC_ControlObject(SNetObjectID, bool, CNetObjectBindLock);
-	void GC_BoundObject(std::pair<EntityId, NetworkAspectType> );
+	void GC_BoundObject(const EntityId);
 	void GC_SendPostSpawnEntities(CContextViewPtr pView);
 	void GC_SetAspectProfile(NetworkAspectType, uint8, SNetObjectID, CNetObjectBindLock);
 	void GC_EndContext();
@@ -258,11 +258,6 @@ public:
 #endif
 	void NC_BroadcastSimpleEvent(ENetObjectEvent event);
 	void NC_RequestRemoteUpdate(EntityId, NetworkAspectType);
-#if NETWORK_HOST_MIGRATION
-	void CleanUnusedObjects();
-	void ServerTakeObjectOwnership();
-	void ClientUpdateObjectOwnership();
-#endif
 
 private:
 	// an event subscription
@@ -481,7 +476,7 @@ private:
 
 	CTimeValue               m_localPhysicsTime;
 
-	typedef VectorMap<INetContextListenerPtr, SContextEstablisher, std::less<INetContextListenerPtr>, stl::STLGlobalAllocator<std::pair<INetContextListenerPtr, SContextEstablisher>>> EstablishersMap;
+	typedef VectorMap<INetContextListenerPtr, SContextEstablisher, std::less<INetContextListenerPtr>, stl::STLGlobalAllocator<std::pair<const INetContextListenerPtr, SContextEstablisher>>> EstablishersMap;
 	EstablishersMap m_allEstablishers;
 	EstablishersMap m_currentEstablishers;
 

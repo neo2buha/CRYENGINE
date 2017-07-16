@@ -100,12 +100,7 @@
 #endif
 
 #if CRY_PLATFORM_WINAPI
-	#define PRIX64 "I64X"
-	#define PRIx64 "I64x"
-	#define PRId64 "I64d"
-	#define PRIu64 "I64u"
-	#define PRIi64 "I64i"
-
+	#include <inttypes.h>
 	#define PLATFORM_I64(x) x ## i64
 #else
 	#define __STDC_FORMAT_MACROS
@@ -228,8 +223,17 @@ static inline void __dmb()
 #endif
 
 // Define BIT macro for use in enums and bit masks.
-#define BIT(x)   (1 << (x))
-#define BIT64(x) (1ull << (x))
+#if !defined(SWIG)
+	#define BIT(x)    (1u << (x))
+	#define BIT64(x)  (1ull << (x))
+	#define MASK(x)   (BIT(x) - 1U)
+	#define MASK64(x) (BIT64(x) - 1ULL)
+#else
+	#define BIT(x)    (1 << (x))
+	#define BIT64(x)  (1 << (x))
+	#define MASK(x)   (BIT(x) - 1)
+	#define MASK64(x) (BIT64(x) - 1)
+#endif
 
 //! ILINE always maps to CRY_FORCE_INLINE, which is the strongest possible inline preference.
 //! Note: Only use when shown that the end-result is faster when ILINE macro is used instead of inline.
@@ -263,8 +267,12 @@ static inline void __dmb()
 	#include <CryCore/Platform/Linux32Specific.h>
 #endif
 
-#if CRY_PLATFORM_ANDROID
-	#include <CryCore/Platform/AndroidSpecific.h>
+#if CRY_PLATFORM_ANDROID && CRY_PLATFORM_64BIT
+	#include <CryCore/Platform/Android64Specific.h>
+#endif
+
+#if CRY_PLATFORM_ANDROID && CRY_PLATFORM_32BIT
+	#include <CryCore/Platform/Android32Specific.h>
 #endif
 
 #if CRY_PLATFORM_DURANGO
@@ -288,20 +296,6 @@ static inline void __dmb()
 #endif
 
 #include "CryPlatform.h"
-
-#if CRY_PLATFORM_ARM
-// Define when platform has LL/SC rather than CAS atomics
-	#define CRY_HAS_LLSC
-	#define FORCED_MALLOC_NEW_ALIGNMENT 16
-	#define CRY_UNALIGNED_LOAD
-#else
-	#define FORCED_MALLOC_NEW_ALIGNMENT 0
-#endif
-
-// When >1 all allocations use memalign
-#if FORCED_MALLOC_NEW_ALIGNMENT > 1
-	#define CRY_FORCE_MALLOC_NEW_ALIGN
-#endif
 
 // Indicates potentially dangerous cast on 64bit machines
 typedef UINT_PTR TRUNCATE_PTR;
@@ -347,34 +341,53 @@ inline int IsHeapValid()
 #undef strdup
 #define strdup dont_use_strdup
 
-// compile time error stuff
-template<bool> struct CompileTimeError;
-template<> struct CompileTimeError<true> {};
 #undef STATIC_CHECK
-#define STATIC_CHECK(expr, msg) \
-  { CompileTimeError<((expr) != 0)> ERROR_ ## msg; (void)ERROR_ ## msg; }
+#define STATIC_CHECK(expr, msg) static_assert((expr) != 0, # msg)
+
+// Conditionally execute code in debug only
+#ifdef _DEBUG
+	#define IF_DEBUG(expr) (expr)
+#else
+	#define IF_DEBUG(expr)
+#endif
 
 // Assert dialog box macros
 #include <CryCore/Assert/CryAssert.h>
 
-#include <CryCore/Assert/CompileTimeAssert.h>
 // Platform dependent functions that emulate Win32 API. Mostly used only for debugging!
-void         CryDebugBreak();
-void         CrySleep(unsigned int dwMilliseconds);
-void         CryLowLatencySleep(unsigned int dwMilliseconds);
-int          CryMessageBox(const char* lpText, const char* lpCaption, unsigned int uType);
-bool         CryCreateDirectory(const char* lpPathName);
-void         CryGetCurrentDirectory(unsigned int pathSize, char* szOutPath);
-short        CryGetAsyncKeyState(int vKey);
-unsigned int CryGetFileAttributes(const char* lpFileName);
-int          CryGetWritableDirectory(unsigned int pathSize, char* szOutPath);
 
-void         CryGetExecutableFolder(unsigned int pathSize, char* szOutPath);
-void         CryFindEngineRootFolder(unsigned int pathSize, char* szOutPath);
-void         CrySetCurrentWorkingDirectory(const char* szWorkingDirectory);
-void         CryFindRootFolderAndSetAsCurrentWorkingDirectory();
+enum EQuestionResult
+{
+	eQR_None,
+	eQR_Cancel = eQR_None,
+	eQR_Yes,
+	eQR_No
+};
 
-inline void  CryHeapCheck()
+enum EMessageBox
+{
+	eMB_Info,
+	eMB_YesCancel,
+	eMB_YesNoCancel,
+	eMB_Error,
+};
+
+void            CryDebugBreak();
+void            CrySleep(unsigned int dwMilliseconds);
+void            CryLowLatencySleep(unsigned int dwMilliseconds);
+EQuestionResult CryMessageBox(const char* lpText, const char* lpCaption, EMessageBox uType = eMB_Info);
+bool            CryCreateDirectory(const char* lpPathName);
+void            CryGetCurrentDirectory(unsigned int pathSize, char* szOutPath);
+short           CryGetAsyncKeyState(int vKey);
+unsigned int    CryGetFileAttributes(const char* lpFileName);
+int             CryGetWritableDirectory(unsigned int pathSize, char* szOutPath);
+
+void            CryGetExecutableFolder(unsigned int pathSize, char* szOutPath);
+void            CryFindEngineRootFolder(unsigned int pathSize, char* szOutPath);
+void            CrySetCurrentWorkingDirectory(const char* szWorkingDirectory);
+void            CryFindRootFolderAndSetAsCurrentWorkingDirectory();
+
+inline void     CryHeapCheck()
 {
 #if CRY_PLATFORM_WINDOWS // todo: this might be readded with later xdks?
 	int Result = _heapchk();
@@ -502,20 +515,34 @@ struct ZeroInit
 
 //! Declare a const and variable version of a function simultaneously.
 #define CONST_VAR_FUNCTION(head, body) \
-  inline head body                     \
-  inline const head const body
+  ILINE head body                      \
+  ILINE const head const body          \
 
 template<class T>
-inline T& non_const(const T& t)
+ILINE T& non_const(const T& t)
 {
 	return const_cast<T&>(t);
 }
 
 template<class T>
-inline T* non_const(const T* t)
+ILINE T* non_const(const T* t)
 {
 	return const_cast<T*>(t);
 }
+
+// Member operator generators
+
+//! Define simple operator, automatically generate compound.
+//! Example: COMPOUND_MEMBER_OP(TThis, +, TOther) { return add(a, b); }
+#define COMPOUND_MEMBER_OP(T, op, B)                                     \
+  ILINE T& operator op ## = (const B& b) { return *this = *this op b; }  \
+  ILINE T operator op(const B& b) const                                  \
+
+//! Define compound operator, automatically generate simple.
+//! Example: COMPOUND_STRUCT_MEMBER_OP(TThis, +, TOther) { return a = add(a, b); }
+#define COMPOUND_MEMBER_OP_EQ(T, op, B)                                      \
+  ILINE T operator op(const B& b) const { T t = *this; return t op ## = b; } \
+  ILINE T& operator op ## = (const B& b)                                     \
 
 #define using_type(super, type) \
   typedef typename super::type type;
@@ -525,23 +552,23 @@ typedef unsigned int           uint;
 typedef const char*            cstr;
 
 //! Align function works on integer or pointer values. Only supports power-of-two alignment.
-template<typename T> inline
-T Align(T nData, size_t nAlign)
+template<typename T>
+ILINE T Align(T nData, size_t nAlign)
 {
 	assert((nAlign & (nAlign - 1)) == 0);
 	size_t size = ((size_t)nData + (nAlign - 1)) & ~(nAlign - 1);
 	return T(size);
 }
 
-template<typename T> inline
-bool IsAligned(T nData, size_t nAlign)
+template<typename T>
+ILINE bool IsAligned(T nData, size_t nAlign)
 {
 	assert((nAlign & (nAlign - 1)) == 0);
 	return (size_t(nData) & (nAlign - 1)) == 0;
 }
 
-template<typename T, typename U> inline
-void SetFlags(T& dest, U flags, bool b)
+template<typename T, typename U>
+ILINE void SetFlags(T& dest, U flags, bool b)
 {
 	if (b)
 		dest |= flags;
@@ -559,45 +586,8 @@ void SetFlags(T& dest, U flags, bool b)
 // Platform wrappers must be included before CryString.h
 #include <CryString/CryString.h>
 
-#include <functional>
-
-//! The 'string_less' class below provides less functor implementation for 'string'.
-//! Supports direct comparison against plain C strings and stack strings.
-//! This is most effective in combination with STLPORT, where various 'find' and related methods are templated on the parameter type.
-struct string_less : public std::binary_function<string, string, bool>
-{
-	bool operator()(const string& s1, const char* s2) const
-	{
-		return s1.compare(s2) < 0;
-	}
-	bool operator()(const char* s1, const string& s2) const
-	{
-		return s2.compare(s1) > 0;
-	}
-	bool operator()(const string& s1, const string& s2) const
-	{
-		return s1 < s2;
-	}
-
-#if !defined(NOT_USE_CRY_STRING)
-	template<size_t S>
-	bool operator()(const string& s1, const CryStackStringT<char, S>& s2) const
-	{
-		return s1.compare(s2.c_str()) < 0;
-	}
-	template<size_t S>
-	bool operator()(const CryStackStringT<char, S>& s1, const string& s2) const
-	{
-		return s1.compare(s2.c_str()) < 0;
-	}
-#endif // !defined(NOT_USE_CRY_STRING)
-};
-
 // Include support for meta-type data.
 #include <CryCore/TypeInfo_decl.h>
-
-// Include array.
-#include <CryCore/Containers/CryArray.h>
 
 bool     CrySetFileAttributes(const char* lpFileName, uint32 dwFileAttributes);
 threadID CryGetCurrentThreadId();
@@ -698,6 +688,12 @@ extern "C" {
   typedef std::shared_ptr<const name> name ## ConstPtr; \
   typedef std::weak_ptr<name> name ##         WeakPtr;  \
   typedef std::weak_ptr<const name> name ##   ConstWeakPtr;
+
+// Include array.
+#include <CryCore/Containers/CryArray.h>
+
+// Include static auto registration function
+#include <CryCore/StaticInstanceList.h>
 
 #ifdef _WINDOWS_
 	#error windows.h should not be included through any headers within platform.h

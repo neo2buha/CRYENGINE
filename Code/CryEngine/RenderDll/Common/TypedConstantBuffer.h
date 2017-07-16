@@ -1,20 +1,26 @@
 // Copyright 2001-2016 Crytek GmbH / Crytek Group. All rights reserved.
 
 #pragma once
+
 #include "DevBuffer.h"
 #include "DriverD3D.h"
 
-template<typename T>
-class CTypedConstantBuffer
+template<typename T, size_t Alignment = 256>
+class CTypedConstantBuffer : private NoCopy
 {
 protected:
-	T                  m_hostBuffer;
+	T&                 m_hostBuffer;
 	CConstantBufferPtr m_constantBuffer;
 
+private:
+	// NOTE: enough memory to hold an aligned struct size + the adjustment of a possible unaligned start
+	uint8              m_hostMemory[((sizeof(T) + (Alignment - 1)) & (~(Alignment - 1))) + (Alignment - 1)];
+	T& AlignHostBuffer() { return *reinterpret_cast<T*>(Align(uintptr_t(m_hostMemory), Alignment)); }
+
 public:
-	CTypedConstantBuffer() { ZeroStruct(m_hostBuffer); }
-	CTypedConstantBuffer(const CTypedConstantBuffer<T>& cb) : m_constantBuffer(nullptr) { m_hostBuffer = cb.m_hostBuffer; }
-	CTypedConstantBuffer(CConstantBufferPtr incb) : m_constantBuffer(incb) {}
+	CTypedConstantBuffer() : m_hostBuffer(AlignHostBuffer()) { ZeroStruct(m_hostBuffer); }
+	CTypedConstantBuffer(const CTypedConstantBuffer<T>& cb) : m_hostBuffer(AlignHostBuffer()), m_constantBuffer(nullptr) { m_hostBuffer = cb.m_hostBuffer; }
+	CTypedConstantBuffer(CConstantBufferPtr incb) : m_hostBuffer(AlignHostBuffer()), m_constantBuffer(incb) {}
 
 	bool               IsDeviceBufferAllocated() { return m_constantBuffer != nullptr; }
 	CConstantBufferPtr GetDeviceConstantBuffer()
@@ -26,15 +32,25 @@ public:
 		return m_constantBuffer;
 	}
 
+	template<typename S>
+	static CD3D9Renderer* ForceTwoPhase() { extern CD3D9Renderer gcpRendD3D; return &gcpRendD3D; }
+
 	void CreateDeviceBuffer()
 	{
 		int size = sizeof(T);
-		m_constantBuffer.Assign_NoAddRef(gcpRendD3D->m_DevBufMan.CreateConstantBuffer(size)); // TODO: this could be a good candidate for dynamic=false
+		m_constantBuffer = ForceTwoPhase<T>()->m_DevBufMan.CreateConstantBuffer(size); // TODO: this could be a good candidate for dynamic=false
 		CopyToDevice();
 	}
+	
 	void CopyToDevice()
 	{
-		m_constantBuffer->UpdateBuffer(&m_hostBuffer, sizeof(m_hostBuffer));
+		m_constantBuffer->UpdateBuffer(&m_hostBuffer, Align(sizeof(m_hostBuffer), Alignment));
+	}
+
+	void UploadZeros()
+	{
+		ZeroStruct(m_hostBuffer);
+		CopyToDevice();
 	}
 
 	T*       operator->()       { return &m_hostBuffer; }

@@ -4,13 +4,11 @@
 #include <CryCore/Platform/platform_impl.inl>
 #include "resource.h"
 #include <CryCore/Platform/CryLibrary.h>
-#include <CryGame/IGameStartup.h>
+#include <CryGame/IGameFramework.h>
 #include <CrySystem/IConsole.h>
 
 #include <CryCore/Platform/CryWindows.h>
 #include <ShellAPI.h> // requires <windows.h>
-
-#include <CrySystem/ParseEngineConfig.h>
 
 // We need shell api for Current Root Extruction.
 #include "shlwapi.h"
@@ -21,8 +19,8 @@ static unsigned text[4] = {4114048726,1217549643,1454516917,859556405};
 static unsigned hash[4] = {324609294,3710280652,1292597317,513556273};
 
 #ifdef _LIB
-extern "C" IGameStartup* CreateGameStartup();
-#endif
+extern "C" IGameFramework* CreateGameFramework();
+#endif //_LIB
 
 // src and trg can be the same pointer (in place encryption)
 // len must be in bytes and must be multiple of 8 byts (64bits).
@@ -62,145 +60,80 @@ ILINE unsigned Hash( unsigned a )
 // encode size ignore last 3 bits of size in bytes. (encode by 8bytes min)
 #define TEA_GETSIZE( len ) ((len) & (~7))
 
-static const LPWSTR GetProjectRootArgument(int argc, const LPWSTR argv[])
-{
-	for (int i = 1; i < argc - 1; i++)
-	{
-		if (wcscmp(argv[i], L"-projectroot") == 0)
-			return argv[i + 1];
-	}
-
-	return nullptr;
-}
-
-static const LPWSTR GetProjectDllDirArgument(int argc, const LPWSTR argv[])
-{
-	for (int i = 1; i < argc - 1; i++)
-	{
-		if (wcscmp(argv[i], L"-projectdlldir") == 0)
-			return argv[i + 1];
-	}
-
-	return nullptr;
-}
-
-ILINE int RunGame(const char *commandLine)
+ILINE int RunGame(const char* szCommandLine)
 {
 	SSystemInitParams startupParams;
-	string gameDLLName;
+	const char* frameworkDLLName = "CryAction.dll";
 
-	// set game project related system changes
-	{
-		int argc = 0;
-		LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-		const LPWSTR sProjectRoot = GetProjectRootArgument(argc, argv);
-		if (sProjectRoot)
-		{
-			SetCurrentDirectoryW(sProjectRoot);
+	CryFindRootFolderAndSetAsCurrentWorkingDirectory();
 
-			const LPWSTR sProjectDllDir = GetProjectDllDirArgument(argc, argv);
-			if (sProjectDllDir && sProjectDllDir[0])
-			{
-				SetDllDirectoryW(sProjectDllDir);
-				WideCharToMultiByte(CP_ACP, 0, sProjectDllDir, -1, startupParams.szProjectDllDir, CRY_ARRAY_COUNT(startupParams.szProjectDllDir), NULL, NULL);
-			}
-
-			CProjectConfig projectCfg;
-			gameDLLName = projectCfg.m_gameDLL;
-		}
-		else
-		{
-			// default to old game folder behavior
-			CryFindRootFolderAndSetAsCurrentWorkingDirectory();
-			CEngineConfig engineCfg;
-			gameDLLName = engineCfg.m_gameDLL;
-		}
-		LocalFree(argv);
-	}
-	
 	//restart parameters
 	static const char logFileName[] = "Server.log";
 
 	unsigned buf[4];
 	TEA_DECODE((unsigned*)text,buf,16,(unsigned*)key);
 
-	HMODULE gameDll = 0;
+	HMODULE frameworkDll = 0;
 
-#if !defined(_LIB) || defined(IS_EAAS)
-	// load the game dll
-	gameDll = CryLoadLibrary( gameDLLName.c_str() );
+#if !defined(_LIB)
+	// load the framework dll
+	frameworkDll = CryLoadLibrary(frameworkDLLName);
 
-	if (!gameDll)
+	if (!frameworkDll)
 	{
-		// failed to load the dll
 		string errorStr;
-		errorStr.Format("Failed to load the Game DLL! %s", gameDLLName.c_str());
+		errorStr.Format("Failed to load the Game DLL! %s", frameworkDLLName);
 
 		MessageBox(0, errorStr.c_str(), "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY);
+		// failed to load the dll
 
-		return 0;
+		return EXIT_FAILURE;
 	}
-	// get address of startup function
-	IGameStartup::TEntryFunction CreateGameStartup = (IGameStartup::TEntryFunction)CryGetProcAddress(gameDll, "CreateGameStartup");
 
-	if (!CreateGameStartup)
+	// get address of startup function
+	IGameFramework::TEntryFunction CreateGameFramework = (IGameFramework::TEntryFunction)CryGetProcAddress(frameworkDll, "CreateGameFramework");
+
+	if (!CreateGameFramework)
 	{
 		// dll is not a compatible game dll
-		CryFreeLibrary(gameDll);
+		CryFreeLibrary(frameworkDll);
 
-		MessageBox(0, "Specified Game DLL is not valid!", "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY);
+		MessageBox(0, "Specified Game DLL is not valid! Please make sure you are running the correct executable", "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY);
 
-		return 0;
+		return EXIT_FAILURE;
 	}
-#endif //!defined(_LIB) || defined(IS_EAAS)
+#endif //!defined(_LIB)
 
-	strcat((char*)commandLine, (char*)buf);	
+	cry_strcpy(startupParams.szSystemCmdLine, szCommandLine);
+	cry_strcat(startupParams.szSystemCmdLine, (const char*)buf);
 
-	startupParams.hInstance = GetModuleHandle(0);
 	startupParams.sLogFileName = logFileName;
-	strcpy(startupParams.szSystemCmdLine, commandLine);
 
 	for (int i=0; i<4; i++)
 		if (Hash(buf[i])!=hash[i])
-			return 1;
+			return EXIT_FAILURE;
 
 	// create the startup interface
-	IGameStartup *pGameStartup = CreateGameStartup();
-
-	if (!pGameStartup)
+	IGameFramework* pFramework = CreateGameFramework();
+	if (!pFramework)
 	{
 		// failed to create the startup interface
-		CryFreeLibrary(gameDll);
+		CryFreeLibrary(frameworkDll);
 
 		MessageBox(0, "Failed to create the GameStartup Interface!", "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY);
 
-		return 0;
+		return EXIT_FAILURE;
 	}
 
-	// run the game
-	if (pGameStartup->Init(startupParams))
-	{
-		pGameStartup->Run(NULL);
+	// main game loop
+	pFramework->StartEngine(startupParams);
 
-		pGameStartup->Shutdown();
-		pGameStartup = 0;
+	// The main engine loop has exited at this point, shut down
+	pFramework->ShutdownEngine();
 
-		CryFreeLibrary(gameDll);
-	}
-	else
-	{
-		MessageBox(0, "Failed to initialize the GameStartup Interface!", "Error", MB_OK | MB_DEFAULT_DESKTOP_ONLY);
+	CryFreeLibrary(frameworkDll);
 
-		// if initialization failed, we still need to call shutdown
-		pGameStartup->Shutdown();
-		pGameStartup = 0;
-
-		CryFreeLibrary(gameDll);
-
-		return 0;
-	}
-
-	return 0;
+	return EXIT_SUCCESS;
 }
 
 
@@ -209,17 +142,17 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 {
 	// we need pass the full command line, including the filename
 	// lpCmdLine does not contain the filename.
-
+	string cmdLine = CryStringUtils::ANSIToUTF8(lpCmdLine);
 #if CAPTURE_REPLAY_LOG
 #ifndef _LIB
 	CryLoadLibrary("CrySystem.dll");
 #endif
-	CryGetIMemReplay()->StartOnCommandLine(lpCmdLine);
+	CryGetIMemReplay()->StartOnCommandLine(cmdLine.c_str());
 #endif
 
-	char cmdLine[2048];
-	cry_strcpy(cmdLine, GetCommandLineA());
-
+	// Read the full command line, including executable line
+	cmdLine = CryStringUtils::ANSIToUTF8(GetCommandLineA());
+	
 /*
 	unsigned buf[4];
                  //  0123456789abcdef
@@ -229,7 +162,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 		hash[i] = Hash(((unsigned*)secret)[i]);
 */
 
-	return RunGame(cmdLine);
+	return RunGame(cmdLine.c_str());
 }
 
 #ifdef _LIB

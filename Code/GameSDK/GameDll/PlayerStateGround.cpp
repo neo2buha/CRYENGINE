@@ -87,14 +87,7 @@ void CPlayerStateGround::OnPrePhysicsUpdate( CPlayer& player, const SActorFrameM
 		Vec3 entityPos = player.GetEntity()->GetWorldPos();
 		Vec3 entityRight(player.GetBaseQuat().GetColumn0());
 
-		hwvec3 xmDesiredVel = HWV3Zero();
-
-		hwmtx33 xmBaseMtxZ;
-		HWMtx33LoadAligned(xmBaseMtxZ, baseMtxZ);
-		hwmtx33 xmBaseMtxZOpt = HWMtx33GetOptimized(xmBaseMtxZ);
-
-		hwvec3 xmMove					= HWVLoadVecUnaligned(&move);	
-		simdf fGroundNormalZ;
+		float fGroundNormalZ;
 
 #ifdef STATE_DEBUG
 		bool debugJumping = (g_pGameCVars->pl_debug_jumping != 0);
@@ -103,16 +96,16 @@ void CPlayerStateGround::OnPrePhysicsUpdate( CPlayer& player, const SActorFrameM
 		const SPlayerStats& stats = *player.GetActorStats();
 
 		{
-			xmDesiredVel = xmMove;
+			desiredVel = move;
 			
 			Vec3 groundNormal = player.GetActorPhysics().groundNormal;
 
 			if(!gEnv->bMultiplayer)
 			{
 				if (player.IsAIControlled())
-					fGroundNormalZ = SIMDFLoadFloat(square(groundNormal.z));
+					fGroundNormalZ = square(groundNormal.z);
 				else
-					fGroundNormalZ = SIMDFLoadFloat(groundNormal.z);
+					fGroundNormalZ = groundNormal.z;
 			}
 			else
 			{
@@ -130,11 +123,11 @@ void CPlayerStateGround::OnPrePhysicsUpdate( CPlayer& player, const SActorFrameM
 					float normalDotMove = groundNormal.Dot(moveDir);
 					//Apply speed multiplier based on moving up/down hill and hill steepness
 					float multiplier = normalDotMove < 0.f ? g_pGameCVars->pl_movement.mp_slope_speed_multiplier_uphill : g_pGameCVars->pl_movement.mp_slope_speed_multiplier_downhill;
-					fGroundNormalZ = SIMDFLoadFloat(1.f - (1.f - player.GetActorPhysics().groundNormal.z) * multiplier);
+					fGroundNormalZ = 1.f - (1.f - player.GetActorPhysics().groundNormal.z) * multiplier;
 				}
 				else
 				{
-					fGroundNormalZ = SIMDFLoadFloat(1.0f);
+					fGroundNormalZ = 1.0f;
 				}
 			}
 
@@ -162,9 +155,7 @@ void CPlayerStateGround::OnPrePhysicsUpdate( CPlayer& player, const SActorFrameM
 				//avoid branch if m_stats.relativeBottomDepth <= 0.0f;
 				shallowWaterMultiplier = (float)__fsel(-relativeBottomDepth, 1.0f, shallowWaterMultiplier);
 
-				simdf vfShallowWaterMultiplier = SIMDFLoadFloat(shallowWaterMultiplier);
-
-				xmDesiredVel = HWVMultiplySIMDF(xmDesiredVel, vfShallowWaterMultiplier);
+				desiredVel *= shallowWaterMultiplier;
 			}
 		}
 
@@ -173,14 +164,12 @@ void CPlayerStateGround::OnPrePhysicsUpdate( CPlayer& player, const SActorFrameM
 #endif
 
 		// Slow down on sloped terrain, simply proportional to the slope. 
-		xmDesiredVel = HWVMultiplySIMDF(xmDesiredVel, fGroundNormalZ);
+		desiredVel *= fGroundNormalZ;
 
 		//be sure desired velocity is flat to the ground
-		hwvec3 vDesiredVelVert = HWMtx33RotateVecOpt(xmBaseMtxZOpt, xmDesiredVel);
+		Vec3 desiredVelVert = baseMtxZ * desiredVel;
 
-		xmDesiredVel = HWVSub(xmDesiredVel, vDesiredVelVert);
-
-		HWVSaveVecUnaligned(&desiredVel, xmDesiredVel);
+		desiredVel -= desiredVelVert;
 
 		if (isPlayer)
 		{
@@ -258,11 +247,11 @@ void CPlayerStateGround::OnPrePhysicsUpdate( CPlayer& player, const SActorFrameM
 			if ((strcmp(filter, "0") == 0) || (strcmp(filter, name) == 0))
 			{
 				float white[] = {1.0f,1.0f,1.0f,1.0f};
-				gEnv->pRenderer->Draw2dLabel(20, 450, 2.0f, white, false, "Speed: %.3f m/s", player.GetMoveRequest().velocity.len());
+				IRenderAuxText::Draw2dLabel(20, 450, 2.0f, white, false, "Speed: %.3f m/s", player.GetMoveRequest().velocity.len());
 
 				if(g_pGameCVars->pl_debug_movement > 1)
 				{
-					gEnv->pRenderer->Draw2dLabel(35, 470, 1.8f, white, false, "Stance Speed: %.3f m/s - (%sSprinting)", player.GetStanceMaxSpeed(player.GetStance()), player.IsSprinting() ? "" : "Not ");
+					IRenderAuxText::Draw2dLabel(35, 470, 1.8f, white, false, "Stance Speed: %.3f m/s - (%sSprinting)", player.GetStanceMaxSpeed(player.GetStance()), player.IsSprinting() ? "" : "Not ");
 				}
 			}
 		}
@@ -276,7 +265,7 @@ void CPlayerStateGround::OnPrePhysicsUpdate( CPlayer& player, const SActorFrameM
 			const float FONT_COLOUR[4] = {1,1,1,1};
 			if (!player.IsClient())
 			{
-				gEnv->pRenderer->Draw2dLabel(XPOS, YPOS, FONT_SIZE, FONT_COLOUR, false, "PlayerMovement: (%f %f %f)", m_request.velocity.x, m_request.velocity.y, m_request.velocity.z);
+				IRenderAuxText::Draw2dLabel(XPOS, YPOS, FONT_SIZE, FONT_COLOUR, false, "PlayerMovement: (%f %f %f)", m_request.velocity.x, m_request.velocity.y, m_request.velocity.z);
 			}
 
 			static float JumpTime = 0.0f;
@@ -286,7 +275,7 @@ void CPlayerStateGround::OnPrePhysicsUpdate( CPlayer& player, const SActorFrameM
 			{
 				if (!player.IsClient())
 				{
-					gEnv->pRenderer->Draw2dLabel(XPOS, YPOS+20, FONT_SIZE, FONT_COLOUR, false, "Jump: (%f %f %f) DesVel: (%f %f %f)", jumpVec.x, jumpVec.y, jumpVec.z, desiredVel.x, desiredVel.y, desiredVel.z);
+					IRenderAuxText::Draw2dLabel(XPOS, YPOS+20, FONT_SIZE, FONT_COLOUR, false, "Jump: (%f %f %f) DesVel: (%f %f %f)", jumpVec.x, jumpVec.y, jumpVec.z, desiredVel.x, desiredVel.y, desiredVel.z);
 				}
 				CryLogAlways("PlayerJump: %s (%f %f %f) DesVel: (%f %f %f)", player.GetEntity()->GetName(), jumpVec.x, jumpVec.y, jumpVec.z, desiredVel.x, desiredVel.y, desiredVel.z);
 				JumpTime = gEnv->pTimer->GetCurrTime();
@@ -328,7 +317,7 @@ bool CPlayerStateGround::CheckForVaultTrigger(CPlayer & player, float frameTime)
 					const char * transitionName = s_ledgeTransitionNames[ledgeTransition.m_ledgeTransition];
 
 					IEntity* pEntity = gEnv->pEntitySystem->GetEntity(ledgeInfo.GetEntityId());
-					CryWatch ("[LEDGEGRAB] $5%s nearest ledge: %s%s%s%s, transition=%s", player.GetEntity()->GetEntityTextDescription(), pEntity ? pEntity->GetEntityTextDescription() : "none", ledgeInfo.AreFlagsSet(kLedgeFlag_isThin) ? " THIN" : "", ledgeInfo.AreFlagsSet(kLedgeFlag_isWindow) ? " WINDOW" : "", ledgeInfo.AreFlagsSet(kLedgeFlag_endCrouched) ? " ENDCROUCHED" : "", transitionName);
+					CryWatch ("[LEDGEGRAB] $5%s nearest ledge: %s%s%s%s, transition=%s", player.GetEntity()->GetEntityTextDescription().c_str(), pEntity ? pEntity->GetEntityTextDescription().c_str() : "none", ledgeInfo.AreFlagsSet(kLedgeFlag_isThin) ? " THIN" : "", ledgeInfo.AreFlagsSet(kLedgeFlag_isWindow) ? " WINDOW" : "", ledgeInfo.AreFlagsSet(kLedgeFlag_endCrouched) ? " ENDCROUCHED" : "", transitionName);
 				}
 
 #endif
@@ -372,9 +361,9 @@ bool CPlayerStateGround::CheckForVaultTrigger(CPlayer & player, float frameTime)
 							const float iconColor[4] = {0.3f, 1.f, 0.3f, 1.0f};
 							const char * iconText = "A";
 
-							gEnv->pRenderer->Draw2dLabel((gEnv->pRenderer->GetWidth() * 0.5f), (gEnv->pRenderer->GetHeight() * 0.65f), iconSize, bracketColor, true, "( )");
-							gEnv->pRenderer->Draw2dLabel((gEnv->pRenderer->GetWidth() * 0.5f), (gEnv->pRenderer->GetHeight() * 0.65f), iconSize, iconColor, true, "%s", iconText);
-							gEnv->pRenderer->Draw2dLabel((gEnv->pRenderer->GetWidth() * 0.5f), (gEnv->pRenderer->GetHeight() * 0.72f), textSize, textColor, true, "%s", message);
+							IRenderAuxText::Draw2dLabel((gEnv->pRenderer->GetWidth() * 0.5f), (gEnv->pRenderer->GetHeight() * 0.65f), iconSize, bracketColor, true, "( )");
+							IRenderAuxText::Draw2dLabel((gEnv->pRenderer->GetWidth() * 0.5f), (gEnv->pRenderer->GetHeight() * 0.65f), iconSize, iconColor, true, "%s", iconText);
+							IRenderAuxText::Draw2dLabel((gEnv->pRenderer->GetWidth() * 0.5f), (gEnv->pRenderer->GetHeight() * 0.72f), textSize, textColor, true, "%s", message);
 						}
 					}
 #endif

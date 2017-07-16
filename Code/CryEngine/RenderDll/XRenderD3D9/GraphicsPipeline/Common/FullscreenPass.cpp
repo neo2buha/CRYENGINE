@@ -3,19 +3,21 @@
 #include "DriverD3D.h"
 #include "../Common/PostProcess/PostProcessUtils.h"
 
-CFullscreenPass::CFullscreenPass()
+CFullscreenPass::CFullscreenPass(CRenderPrimitive::EPrimitiveFlags primitiveFlags)
+: m_primitiveFlags(CRenderPrimitive::eFlags_None)
 {
 	m_inputVars[0] = m_inputVars[1] = m_inputVars[2] = m_inputVars[3] = 0;
 
 	m_bRequirePerViewCB = false;
 	m_bRequireWorldPos = false;
-	m_bValidConstantBuffers = true;
 	m_bPendingConstantUpdate = false;
 
 	m_vertexBuffer = ~0u;
 
-	m_primitives.push_back(CCompiledRenderPrimitive());
-	m_primitiveCount = m_primitives.size();
+	m_clipZ = 0.0f;
+
+	SetLabel("FULLSCREEN_PASS");
+	SetPrimitiveFlags(primitiveFlags);
 }
 
 CFullscreenPass::~CFullscreenPass()
@@ -28,94 +30,57 @@ CFullscreenPass::~CFullscreenPass()
 
 void CFullscreenPass::BeginConstantUpdate()
 {
-	CD3D9Renderer* const __restrict rd = gcpRendD3D;
-	auto& renderPrimitive = GetPrimitive();
-
-	m_prevRTMask = rd->m_RP.m_FlagsShader_RT;
-	rd->m_RP.m_FlagsShader_RT = renderPrimitive.GetShaderRtMask();
-
-	auto pShader = renderPrimitive.GetShader();
-	auto shaderTechnique = renderPrimitive.GetShaderTechnique();
-	auto shaderRtMask = renderPrimitive.GetShaderRtMask();
-
-	if (renderPrimitive.IsDirty())
+	if (m_primitiveFlags & CRenderPrimitive::eFlags_ReflectShaderConstants)
 	{
-		m_bValidConstantBuffers = false;
-		std::vector<SDeviceObjectHelpers::SConstantBufferBindInfo> inlineConstantBuffers;
-
-		if (SDeviceObjectHelpers::GetConstantBuffersFromShader(inlineConstantBuffers, pShader, shaderTechnique, shaderRtMask, 0, 0))
-		{
-			renderPrimitive.SetInlineConstantBuffers(std::move(inlineConstantBuffers));
-			m_bValidConstantBuffers = true;
-		}
-	}
-
-	if (m_bValidConstantBuffers)
-	{
-		uint32 numPasses;
-		pShader->FXSetTechnique(shaderTechnique);
-		pShader->FXBegin(&numPasses, FEF_DONTSETTEXTURES | FEF_DONTSETSTATES);
+		UpdatePrimitive();
+		m_primitive.GetConstantManager().BeginNamedConstantUpdate();
 
 		m_bPendingConstantUpdate = true;
-		SDeviceObjectHelpers::BeginUpdateConstantBuffers(renderPrimitive.GetInlineConstantBuffers());
 	}
 }
 
-void CFullscreenPass::Execute()
+void CFullscreenPass::UpdatePrimitive()
 {
 	CD3D9Renderer* const __restrict rd = gcpRendD3D;
-	auto& renderPrimitive = GetPrimitive();
-
-	m_bDirty |= renderPrimitive.IsDirty();
-
-	if (!m_bValidConstantBuffers)
-		return;
 
 	// update viewport
 	{
-		D3DViewPort viewport;
-		viewport.TopLeftX = viewport.TopLeftY = 0;
-		viewport.Width = float(m_pRenderTargets[0] ? m_pRenderTargets[0]->GetWidth() : m_pDepthTarget->nWidth);
-		viewport.Height = float(m_pRenderTargets[0] ? m_pRenderTargets[0]->GetHeight() : m_pDepthTarget->nHeight);
-		viewport.MinDepth = 0.0f;
-		viewport.MaxDepth = 1.0f;
+		CRY_ASSERT(m_renderPassDesc.GetRenderTargets()[0].pTexture || m_renderPassDesc.GetDepthTarget().pTexture);
 
-		if (m_pRenderTargets[0] && m_renderTargetViews[0] != SResourceView::DefaultRendertargtView)
+		CTexture* pTarget             = m_renderPassDesc.GetRenderTargets()[0].pTexture ? m_renderPassDesc.GetRenderTargets()[0].pTexture   : m_renderPassDesc.GetDepthTarget().pTexture;
+		ResourceViewHandle viewHandle = m_renderPassDesc.GetRenderTargets()[0].pTexture ? m_renderPassDesc.GetRenderTargets()[0].view : m_renderPassDesc.GetDepthTarget().view;
+		int mip = 0;
+
+		if (viewHandle != EDefaultResourceViews::RenderTarget && viewHandle != EDefaultResourceViews::DepthStencil)
 		{
-			auto firstRtv = SResourceView(m_renderTargetViews[0]).m_Desc;
-			viewport.Width = float(int(viewport.Width) >> firstRtv.nMostDetailedMip);
-			viewport.Height = float(int(viewport.Height) >> firstRtv.nMostDetailedMip);
+			auto& viewDesc = pTarget->GetDevTexture()->LookupResourceView(viewHandle).first;
+			mip = viewDesc.m_Desc.nMostDetailedMip;
 		}
 
+		D3DViewPort viewport;
+
+		viewport.TopLeftX = viewport.TopLeftY = 0;
+		viewport.MinDepth = 0.0f;
+		viewport.MaxDepth = 1.0f;
+		viewport.Width  = float(pTarget->GetWidthNonVirtual() >> mip);
+		viewport.Height = float(pTarget->GetHeightNonVirtual() >> mip);
+
 		SetViewport(viewport);
+
+		// TODO: remove this call - Engine viewport needs to be set so that data is available when filling reflected PB constants
+		rd->RT_SetViewport((int)viewport.TopLeftX, (int)viewport.TopLeftY, (int)viewport.Width, (int)viewport.Height);
 	}
-
-	if (m_bPendingConstantUpdate)
-	{
-		// Engine viewport needs to be set so that data is available when filling reflected PB constants
-		rd->RT_SetViewport((int)m_viewport.TopLeftX, (int)m_viewport.TopLeftY, (int)m_viewport.Width, (int)m_viewport.Height);
-
-		// Unmap constant buffers and mark as bound
-		SDeviceObjectHelpers::EndUpdateConstantBuffers(renderPrimitive.GetInlineConstantBuffers());
-
-		renderPrimitive.GetShader()->FXEndPass();
-		renderPrimitive.GetShader()->FXEnd();
-		rd->m_RP.m_FlagsShader_RT = m_prevRTMask;
-
-		m_bPendingConstantUpdate = false;
-	}
-
+	
 	if (m_bRequirePerViewCB)
 	{
-		D3D11_RECT viewportRect =
-		{
-			LONG(m_viewport.TopLeftX),
-			LONG(m_viewport.TopLeftY),
-			LONG(m_viewport.TopLeftX + m_viewport.Width),
-			LONG(m_viewport.TopLeftY + m_viewport.Height)
-		};
+		if (!m_pPerViewConstantBuffer)
+			m_pPerViewConstantBuffer = gcpRendD3D->m_DevBufMan.CreateConstantBuffer(sizeof(HLSL_PerViewGlobalConstantBuffer));
+		
+		CStandardGraphicsPipeline::SViewInfo viewInfo[2];
+		int viewInfoCount = rd->GetGraphicsPipeline().GetViewInfo(viewInfo, &m_viewport);
+		rd->GetGraphicsPipeline().UpdatePerViewConstantBuffer(viewInfo, viewInfoCount, m_pPerViewConstantBuffer);
 
-		CHWShader_D3D::mfSetPV(&viewportRect);
+		m_primitive.SetInlineConstantBuffer(eConstantBufferShaderSlot_PerView, m_pPerViewConstantBuffer, EShaderStage_Vertex | EShaderStage_Pixel);
 	}
 
 	if (m_bRequireWorldPos)
@@ -125,14 +90,63 @@ void CFullscreenPass::Execute()
 			m_vertexBuffer = gcpRendD3D->m_DevBufMan.Create(BBT_VERTEX_BUFFER, BU_DYNAMIC, 3 * sizeof(SVF_P3F_T2F_T3F));
 		}
 
-		SVF_P3F_T2F_T3F fullscreenTriWPOSVertices[3];
-		SPostEffectsUtils::GetFullScreenTriWPOS(fullscreenTriWPOSVertices, 0, 0);
-		rd->m_DevBufMan.UpdateBuffer(m_vertexBuffer, fullscreenTriWPOSVertices, 3 * sizeof(SVF_P3F_T2F_T3F));
+		bool bUseQuad = CVrProjectionManager::Instance()->GetProjectionType() == CVrProjectionManager::eVrProjection_LensMatched;
+		
+		if (bUseQuad)
+		{
+			SVF_P3F_T2F_T3F fullscreenQuadWPOSVertices[4];
+			SPostEffectsUtils::GetFullScreenQuadWPOS(fullscreenQuadWPOSVertices, 0, 0, m_clipZ);
+			rd->m_DevBufMan.UpdateBuffer(m_vertexBuffer, fullscreenQuadWPOSVertices, 4 * sizeof(SVF_P3F_T2F_T3F));
+		}
+		else
+		{
+			SVF_P3F_T2F_T3F fullscreenTriWPOSVertices[3];
+			SPostEffectsUtils::GetFullScreenTriWPOS(fullscreenTriWPOSVertices, 0, 0, m_clipZ);
+			rd->m_DevBufMan.UpdateBuffer(m_vertexBuffer, fullscreenTriWPOSVertices, 3 * sizeof(SVF_P3F_T2F_T3F));
+		}
 
-		renderPrimitive.SetCustomVertexStream(m_vertexBuffer, eVF_P3F_T2F_T3F, sizeof(SVF_P3F_T2F_T3F));
-		renderPrimitive.SetCustomIndexStream(~0u, 0);
-		renderPrimitive.SetDrawInfo(3);
+		m_primitive.SetCustomVertexStream(m_vertexBuffer, EDefaultInputLayouts::P3F_T2F_T3F, sizeof(SVF_P3F_T2F_T3F));
+		m_primitive.SetCustomIndexStream(~0u, (RenderIndexType)0);
+
+		if(bUseQuad)
+			m_primitive.SetDrawInfo(eptTriangleStrip, 0, 0, 4);
+		else
+			m_primitive.SetDrawInfo(eptTriangleList, 0, 0, 3);
 	}
 
-	CPrimitiveRenderPass::Execute();
+	if (m_primitive.IsDirty())
+	{
+		BeginAddingPrimitives();
+
+		m_primitive.Compile(*this);
+		AddPrimitive(&m_primitive);
+	}
+}
+
+
+bool CFullscreenPass::Execute()
+{
+	if (m_bPendingConstantUpdate)
+	{
+		// Unmap constant buffers
+		m_primitive.GetConstantManager().EndNamedConstantUpdate();
+		m_bPendingConstantUpdate = false;
+	}
+	else
+	{
+		UpdatePrimitive();
+	}
+
+	bool success = false;
+	Compile();
+
+	if (!m_compiledPrimitives.empty())
+	{
+		CRY_ASSERT(!m_primitive.IsDirty()); // Primitive modified AFTER call to BeginConstantUpdate
+		CPrimitiveRenderPass::Execute();
+
+		success = true;
+	}
+
+	return success;
 }

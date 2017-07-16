@@ -1,5 +1,6 @@
-cmake_minimum_required(VERSION 2.8.11)
+cmake_minimum_required(VERSION 3.6.2)
 
+<<<<<<< HEAD
 if (${CMAKE_GENERATOR} MATCHES Durango)
 	include(${CMAKE_SOURCE_DIR}/Tools/CMake/MSVC-Durango.cmake)
 endif ()
@@ -373,3 +374,6 @@ set_solution_folder("Libs" prt)
 set_solution_folder("Libs" python27)
 
 copy_binary_files_to_target()
+=======
+include(Tools/CMake/Build.cmake)
+>>>>>>> upstream/stabilisation

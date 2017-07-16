@@ -11,40 +11,37 @@ struct SEntityEvent;
 // Description:
 //    Handles sounds in the entity.
 //////////////////////////////////////////////////////////////////////////
-struct CAreaProxy : public IEntityAreaProxy
+struct CEntityComponentArea : public IEntityAreaComponent
 {
+	CRY_ENTITY_COMPONENT_CLASS(CEntityComponentArea,IEntityAreaComponent,"CEntityComponentArea",0xFEB82854291C4ABA,0x9652DDD7F403F24A);
+
+	CEntityComponentArea();
+	virtual ~CEntityComponentArea();
+
 public:
 	static void ResetTempState();
 
 public:
-	CAreaProxy();
-	virtual ~CAreaProxy();
-	CEntity* GetEntity() const { return m_pEntity; };
-
 	//////////////////////////////////////////////////////////////////////////
-	// IEntityProxy interface implementation.
+	// IEntityComponent interface implementation.
 	//////////////////////////////////////////////////////////////////////////
-	virtual void Initialize(const SComponentInitializer& init) override;
+	virtual void Initialize() override;
 	virtual void ProcessEvent(SEntityEvent& event) override;
+	virtual uint64 GetEventMask() const final;
 	//////////////////////////////////////////////////////////////////////////
 
 	//////////////////////////////////////////////////////////////////////////
-	// IEntityProxy interface implementation.
+	// IEntityComponent interface implementation.
 	//////////////////////////////////////////////////////////////////////////
-	virtual EEntityProxy GetType() override                                          { return ENTITY_PROXY_AREA; }
-	virtual void         Release() override;
-	virtual void         Done() override                                             {}
-	virtual void         Update(SEntityUpdateContext& ctx) override                  {}
-	virtual bool         Init(IEntity* pEntity, SEntitySpawnParams& params) override { return true; }
-	virtual void         Reload(IEntity* pEntity, SEntitySpawnParams& params) override;
-	virtual void         SerializeXML(XmlNodeRef& entityNode, bool bLoading) override;
-	virtual void         Serialize(TSerialize ser) override;
-	virtual bool         NeedSerialize() override { return false; }
-	virtual bool         GetSignature(TSerialize signature) override;
+	virtual EEntityProxy GetProxyType() const override                                    { return ENTITY_PROXY_AREA; }
+	virtual void         Release() final { delete this; };
+	virtual void         LegacySerializeXML(XmlNodeRef& entityNode, XmlNodeRef& componentNode, bool bLoading) override;
+	virtual void         GameSerialize(TSerialize ser) override;
+	virtual bool         NeedGameSerialize() override { return false; }
 	//////////////////////////////////////////////////////////////////////////
 
 	//////////////////////////////////////////////////////////////////////////
-	// IEntityAreaProxy interface.
+	// IEntityAreaComponent interface.
 	//////////////////////////////////////////////////////////////////////////
 	virtual void            SetFlags(int nAreaProxyFlags) override { m_nFlags = nAreaProxyFlags; }
 	virtual int             GetFlags() override                    { return m_nFlags; }
@@ -91,7 +88,10 @@ public:
 	virtual bool            CalcPointWithin(EntityId const nEntityID, Vec3 const& Point3d, bool const bIgnoreHeight = false) const override { return m_pArea->CalcPointWithin(nEntityID, Point3d, bIgnoreHeight); }
 
 	virtual size_t          GetNumberOfEntitiesInArea() const override;
-	virtual EntityId        GetEntityInAreaByIdx(size_t index) const override;
+	virtual EntityId        GetEntityInAreaByIdx(size_t const index) const override;
+
+	virtual float           GetInnerFadeDistance() const override               { return m_pArea->GetInnerFadeDistance(); }
+	virtual void            SetInnerFadeDistance(float const distance) override { m_pArea->SetInnerFadeDistance(distance); }
 
 	virtual void            GetMemoryUsage(ICrySizer* pSizer) const override
 	{
@@ -115,12 +115,6 @@ private:
 	static std::vector<Vec3> s_tmpWorldPoints;
 
 private:
-	//////////////////////////////////////////////////////////////////////////
-	// Private member variables.
-	//////////////////////////////////////////////////////////////////////////
-	// Host entity.
-	CEntity* m_pEntity;
-
 	int      m_nFlags;
 
 	typedef std::vector<bool> tSoundObstruction;

@@ -16,7 +16,11 @@
 #include <CryMemory/CryMemoryManager.h>
 #include <CrySystem/ITestSystem.h>
 #include <CryScriptSystem/IScriptSystem.h>
+<<<<<<< HEAD
 #include <CryCore/ToolsHelpers/ResourceCompilerHelper.h>      // CResourceCompilerHelper
+=======
+#include <CryCore/ToolsHelpers/ResourceCompilerHelper.h>    // CResourceCompilerHelper
+>>>>>>> upstream/stabilisation
 #include "LoadingProfiler.h"
 #include "PhysRenderer.h"
 #include <CrySystem/File/IResourceManager.h>
@@ -24,9 +28,14 @@
 #include <CrySystem/IStreamEngine.h>
 
 // Access to some game info.
+<<<<<<< HEAD
 #include <CryGame/IGame.h>          // IGame
 #include <CryGame/IGameFramework.h> // IGameFramework
 #include "ILevelSystem.h"           // IGameFramework
+=======
+#include <CryGame/IGameFramework.h>  // IGameFramework
+#include <../CryAction/ILevelSystem.h>   // ILevelSystemListener
+>>>>>>> upstream/stabilisation
 
 const std::vector<const char*>& GetModuleNames()
 {
@@ -36,6 +45,7 @@ const std::vector<const char*>& GetModuleNames()
 	{
 
 #ifdef MODULE_EXTENSION
+<<<<<<< HEAD
 	#error MODULE_EXTENSION already defined!
 #endif
 #if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID
@@ -44,6 +54,16 @@ const std::vector<const char*>& GetModuleNames()
 	#define MODULE_EXTENSION ".dylib"
 #else
 	#define MODULE_EXTENSION ".dll"
+=======
+#error MODULE_EXTENSION already defined!
+#endif
+#if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID
+#define MODULE_EXTENSION ".so"
+#elif CRY_PLATFORM_APPLE
+#define MODULE_EXTENSION ".dylib"
+#else
+#define MODULE_EXTENSION ".dll"
+>>>>>>> upstream/stabilisation
 #endif
 
 		moduleNames.push_back("Cry3DEngine" MODULE_EXTENSION);
@@ -64,12 +84,21 @@ const std::vector<const char*>& GetModuleNames()
 		moduleNames.push_back("CryOnline" MODULE_EXTENSION);
 
 #if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE
+<<<<<<< HEAD
 		const string gameModuleNameRaw = gEnv->pConsole->GetCVar("sys_dll_game")->GetString();
 		const size_t extensionIndex = gameModuleNameRaw.rfind(".dll");
 		static string gameModuleNameSafe = gameModuleNameRaw.substr(0, extensionIndex);
 	#if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE
 		gameModuleNameSafe.append(MODULE_EXTENSION);
 	#endif
+=======
+		const string  gameModuleNameRaw  = gEnv->pConsole->GetCVar("sys_dll_game")->GetString();
+		const size_t  extensionIndex     = gameModuleNameRaw.rfind(".dll");
+		static string gameModuleNameSafe = gameModuleNameRaw.substr(0, extensionIndex);
+#if CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE
+		gameModuleNameSafe.append(MODULE_EXTENSION);
+#endif
+>>>>>>> upstream/stabilisation
 		moduleNames.push_back(gameModuleNameSafe.c_str());
 #endif
 
@@ -84,6 +113,11 @@ const std::vector<const char*>& GetModuleNames()
 		moduleNames.push_back("Sandbox.exe");
 		moduleNames.push_back("CryRenderD3D9.dll");
 		moduleNames.push_back("CryRenderD3D10.dll");
+		moduleNames.push_back("CryRenderD3D11.dll");
+		moduleNames.push_back("CryRenderD3D12.dll");
+		moduleNames.push_back("CryRenderOpenGL.dll");
+		moduleNames.push_back("CryRenderOGES.dll");
+		moduleNames.push_back("CryRenderVulkan.dll");
 		moduleNames.push_back("CryRenderNULL.dll");
 		//TODO: launcher?
 #endif
@@ -94,6 +128,7 @@ const std::vector<const char*>& GetModuleNames()
 
 #if (!defined (_RELEASE) || defined(ENABLE_PROFILING_CODE))
 
+<<<<<<< HEAD
 	#if CRY_PLATFORM_WINDOWS
 		#include "Psapi.h"
 typedef BOOL (WINAPI * GetProcessMemoryInfoProc)(HANDLE, PPROCESS_MEMORY_COUNTERS, DWORD);
@@ -110,18 +145,46 @@ const struct PEHeader_DLL
 };
 		#pragma pack(pop)
 	#endif
+=======
+#if CRY_PLATFORM_WINDOWS
+#include "Psapi.h"
+typedef BOOL (WINAPI * GetProcessMemoryInfoProc)(HANDLE, PPROCESS_MEMORY_COUNTERS, DWORD);
+#endif
+
+#if CRY_PLATFORM_WINDOWS
+#pragma pack(push,1)
+const struct PEHeader_DLL
+{
+	DWORD signature;
+	IMAGE_FILE_HEADER _head;
+	IMAGE_OPTIONAL_HEADER opt_head;
+	IMAGE_SECTION_HEADER* section_header; // actual number in NumberOfSections
+};
+#pragma pack(pop)
+#endif
+>>>>>>> upstream/stabilisation
 
 extern int  CryMemoryGetAllocatedSize();
 static void SaveLevelStats(IConsoleCmdArgs* pArgs);
 
+<<<<<<< HEAD
 	#define g_szTestResults "%USER%/TestResults"
 
 class CResourceCollector : public IResourceCollector
+=======
+#define g_szTestResults "%USER%/TestResults"
+
+class CResourceCollector:public IResourceCollector
+>>>>>>> upstream/stabilisation
 {
 	struct SInstanceEntry
 	{
 		//		AABB			m_AABB;
+<<<<<<< HEAD
 		uint32 m_dwFileNameId;          // use with m_FilenameToId,  m_IdToFilename
+=======
+		uint32 m_dwFileNameId;              // use with m_FilenameToId,  m_IdToFilename
+>>>>>>> upstream/stabilisation
 	};
 
 	struct SAssetEntry
@@ -131,6 +194,7 @@ class CResourceCollector : public IResourceCollector
 		}
 
 		string m_sFileName;
+<<<<<<< HEAD
 		uint32 m_dwInstanceCnt;         // 1=this asset is used only once in the level, 2, 3, ...
 		uint32 m_dwDependencyCnt;       // 1=this asset is only used by one asset, 2, 3, ...
 		uint32 m_dwMemSize;             // 0xffffffff if unknown (only needed to verify disk file size)
@@ -138,6 +202,15 @@ class CResourceCollector : public IResourceCollector
 	};
 
 public: // -----------------------------------------------------------------------------
+=======
+		uint32 m_dwInstanceCnt;             // 1=this asset is used only once in the level, 2, 3, ...
+		uint32 m_dwDependencyCnt;           // 1=this asset is only used by one asset, 2, 3, ...
+		uint32 m_dwMemSize;                 // 0xffffffff if unknown (only needed to verify disk file size)
+		uint32 m_dwFileSize;                // 0xffffffff if unknown
+	};
+
+public:                                 // -----------------------------------------------------------------------------
+>>>>>>> upstream/stabilisation
 
 	CResourceCollector()
 	{
@@ -188,7 +261,11 @@ public: // ---------------------------------------------------------------------
 			std::set<SDependencyPair>::const_iterator it, end = m_Dependencies.end();
 
 			uint32 dwCurrentAssetID = 0xffffffff;
+<<<<<<< HEAD
 			uint32 dwSumFile = 0;
+=======
+			uint32 dwSumFile        = 0;
+>>>>>>> upstream/stabilisation
 
 			for (it = m_Dependencies.begin(); it != end; ++it)
 			{
@@ -281,7 +358,11 @@ public: // ---------------------------------------------------------------------
 			OutputDebugString("ERROR: file wasn't registered with AddResource(): '");
 			OutputDebugString(sOutputFileName.c_str());
 			OutputDebugString("'\n");
+<<<<<<< HEAD
 			assert(0);    // asset wasn't registered yet AddResource() missing - unpredictable result might happen
+=======
+			assert(0);                             // asset wasn't registered yet AddResource() missing - unpredictable result might happen
+>>>>>>> upstream/stabilisation
 			return;
 		}
 
@@ -309,7 +390,11 @@ public: // ---------------------------------------------------------------------
 
 		if (it == m_FilenameToId.end())
 		{
+<<<<<<< HEAD
 			m_OpenedAssetId.push_back(0xffffffff);      // CloseDependencies() relies on that
+=======
+			m_OpenedAssetId.push_back(0xffffffff); // CloseDependencies() relies on that
+>>>>>>> upstream/stabilisation
 
 			OutputDebugString("ERROR: file wasn't registered with AddResource(): '");
 			OutputDebugString(sOutputFileName.c_str());
@@ -338,12 +423,20 @@ public: // ---------------------------------------------------------------------
 		if (!m_bEnabled)
 			return;
 
+<<<<<<< HEAD
 		assert(!m_OpenedAssetId.empty());   // internal error - OpenDependencies() should match CloseDependencies()
+=======
+		assert(!m_OpenedAssetId.empty());              // internal error - OpenDependencies() should match CloseDependencies()
+>>>>>>> upstream/stabilisation
 
 		m_OpenedAssetId.pop_back();
 	}
 
+<<<<<<< HEAD
 private: // -----------------------------------------------------------------------
+=======
+private:                                           // -----------------------------------------------------------------------
+>>>>>>> upstream/stabilisation
 
 	struct SDependencyPair
 	{
@@ -351,8 +444,13 @@ private: // --------------------------------------------------------------------
 		{
 		}
 
+<<<<<<< HEAD
 		uint32 m_idAsset;                   // AssetID
 		uint32 m_idDependsOnAsset;          // AssetID
+=======
+		uint32 m_idAsset;                              // AssetID
+		uint32 m_idDependsOnAsset;                     // AssetID
+>>>>>>> upstream/stabilisation
 
 		bool operator<(const SDependencyPair& rhs) const
 		{
@@ -363,6 +461,7 @@ private: // --------------------------------------------------------------------
 		}
 	};
 
+<<<<<<< HEAD
 	std::vector<uint32>         m_OpenedAssetId;          // to track for dependencies
 	std::map<string, uint32>    m_FilenameToId;           // could be done more efficiently
 	std::vector<SAssetEntry>    m_Assets;                 // could be done more efficiently
@@ -370,6 +469,15 @@ private: // --------------------------------------------------------------------
 	std::set<SDependencyPair>   m_Dependencies;           //
 	std::set<void*>             m_ReportedInstances;      // to avoid counting them twice
 	bool                        m_bEnabled;
+=======
+	std::vector<uint32> m_OpenedAssetId;             // to track for dependencies
+	std::map<string, uint32> m_FilenameToId;          // could be done more efficiently
+	std::vector<SAssetEntry> m_Assets;               // could be done more efficiently
+	std::vector<SInstanceEntry> m_ResourceEntries;   //
+	std::set<SDependencyPair>   m_Dependencies;      //
+	std::set<void*>             m_ReportedInstances; // to avoid counting them twice
+	bool m_bEnabled;
+>>>>>>> upstream/stabilisation
 
 	// ---------------------------------------------------------------------
 
@@ -447,10 +555,17 @@ private: // --------------------------------------------------------------------
 		{
 			if (rAsset.m_dwMemSize == 0xffffffff)
 			{
+<<<<<<< HEAD
 				rAsset.m_dwMemSize = dwSize;            // store size
 			}
 			else
 				assert(rAsset.m_dwMemSize == dwSize);   // size should always be the same
+=======
+				rAsset.m_dwMemSize = dwSize;              // store size
+			}
+			else
+				assert(rAsset.m_dwMemSize == dwSize);     // size should always be the same
+>>>>>>> upstream/stabilisation
 		}
 
 		//		rAsset.m_dwInstanceCnt+=dwInstanceCount;
@@ -541,7 +656,11 @@ private: // --------------------------------------------------------------------
 	friend class CStatsToExcelExporter;
 };
 
+<<<<<<< HEAD
 	#define MAX_LODS 6
+=======
+#define MAX_LODS 6
+>>>>>>> upstream/stabilisation
 
 //////////////////////////////////////////////////////////////////////////
 // Statistics about currently loaded level.
@@ -550,6 +669,7 @@ struct SCryEngineStats
 {
 	struct StatObjInfo
 	{
+<<<<<<< HEAD
 		int       nVertices;
 		int       nIndices;
 		int       nIndicesPerLod[MAX_LODS];
@@ -564,6 +684,22 @@ struct SCryEngineStats
 		int       nSubMeshCount;
 		int       nNumRefs;
 		bool      bSplitLods;
+=======
+		int  nVertices;
+		int  nIndices;
+		int  nIndicesPerLod[MAX_LODS];
+		int  nMeshSize;
+		int  nMeshSizeLoaded;
+		int  nTextureSize;
+		int  nPhysProxySize;
+		int  nPhysProxySizeMax;
+		int  nPhysPrimitives;
+		int  nDrawCalls;
+		int  nLods;
+		int  nSubMeshCount;
+		int  nNumRefs;
+		bool bSplitLods;
+>>>>>>> upstream/stabilisation
 		IStatObj* pStatObj;
 	};
 	struct CharacterInfo
@@ -582,6 +718,7 @@ struct SCryEngineStats
 			ZeroArray(nIndicesPerLod);
 		}
 
+<<<<<<< HEAD
 		int               nVertices;
 		int               nIndices;
 		int               nVerticesPerLod[MAX_LODS];
@@ -591,10 +728,22 @@ struct SCryEngineStats
 		int               nLods;
 		int               nInstances;
 		int               nPhysProxySize;
+=======
+		int nVertices;
+		int nIndices;
+		int nVerticesPerLod[MAX_LODS];
+		int nIndicesPerLod[MAX_LODS];
+		int nMeshSize;
+		int nTextureSize;
+		int nLods;
+		int nInstances;
+		int nPhysProxySize;
+>>>>>>> upstream/stabilisation
 		IDefaultSkeleton* pIDefaultSkeleton;
 	};
 	struct MeshInfo
 	{
+<<<<<<< HEAD
 		int         nVerticesSum;
 		int         nIndicesSum;
 		int         nCount;
@@ -607,6 +756,20 @@ struct SCryEngineStats
 	{
 		MemInfo() : m_pSizer(0), m_pStats(0) {}
 		~MemInfo() { SAFE_DELETE(m_pSizer); SAFE_DELETE(m_pStats); }
+=======
+		int nVerticesSum;
+		int nIndicesSum;
+		int nCount;
+		int nMeshSizeDev;
+		int nMeshSizeSys;
+		int nTextureSize;
+		const char* name;
+	};
+	struct MemInfo:public SCryEngineStatsGlobalMemInfo
+	{
+		MemInfo() : m_pSizer(0), m_pStats(0) {}
+		~MemInfo() {SAFE_DELETE(m_pSizer); SAFE_DELETE(m_pStats); }
+>>>>>>> upstream/stabilisation
 
 		//int totalUsedInModules;
 		//int totalCodeAndStatic;
@@ -622,8 +785,13 @@ struct SCryEngineStats
 	struct SBrushMemInfo
 	{
 		string brushName;
+<<<<<<< HEAD
 		int    usedTextureMemory;
 		int    lodNum;
+=======
+		int usedTextureMemory;
+		int lodNum;
+>>>>>>> upstream/stabilisation
 	};
 
 	struct ProfilerInfo
@@ -636,7 +804,11 @@ struct SCryEngineStats
 		//! Self frame time spent only in this counter (But includes recursive calls to same counter) in current frame.
 		int64 m_selfTime;
 		//! How many times this profiler counter was executed.
+<<<<<<< HEAD
 		int   m_count;
+=======
+		int m_count;
+>>>>>>> upstream/stabilisation
 		//! Displayed quantity (interpolated or average).
 		float m_displayedValue;
 		//! How variant this value.
@@ -646,21 +818,36 @@ struct SCryEngineStats
 		// max value
 		float m_max;
 
+<<<<<<< HEAD
 		int   m_mincount;
 
 		int   m_maxcount;
+=======
+		int m_mincount;
+
+		int m_maxcount;
+>>>>>>> upstream/stabilisation
 
 	};
 
 	struct SPeakProfilerInfo
 	{
 		ProfilerInfo profiler;
+<<<<<<< HEAD
 		float        peakValue;
 		float        averageValue;
 		float        variance;
 		int          pageFaults; // Number of page faults at this frame.
 		int          count;      // Number of times called for peak.
 		float        when;       // when it added.
+=======
+		float peakValue;
+		float averageValue;
+		float variance;
+		int pageFaults;          // Number of page faults at this frame.
+		int count;               // Number of times called for peak.
+		float when;              // when it added.
+>>>>>>> upstream/stabilisation
 	};
 
 	struct SModuleProfilerInfo
@@ -672,7 +859,11 @@ struct SCryEngineStats
 	struct SEntityInfo
 	{
 		string name, model, archetypeLib;
+<<<<<<< HEAD
 		bool   bIsArchetype, bInvisible, bHidden;
+=======
+		bool bIsArchetype, bInvisible, bHidden;
+>>>>>>> upstream/stabilisation
 	};
 
 	SCryEngineStats()
@@ -697,14 +888,24 @@ struct SCryEngineStats
 		, fLevelLoadTime(0.0f)
 		, nSummary_TexturesPoolSize(0)
 	{
+<<<<<<< HEAD
 		ISystem* pSystem = GetISystem();
+=======
+		ISystem* pSystem     = GetISystem();
+>>>>>>> upstream/stabilisation
 		I3DEngine* p3DEngine = pSystem->GetI3DEngine();
 		IRenderer* pRenderer = pSystem->GetIRenderer();
 
 		nTotalAllocatedMemory = CryMemoryGetAllocatedSize();
+<<<<<<< HEAD
 		nSummaryMeshSize = 0;
 		nSummaryMeshCount = 0;
 		nAPI_MeshSize = 0;
+=======
+		nSummaryMeshSize      = 0;
+		nSummaryMeshCount     = 0;
+		nAPI_MeshSize         = 0;
+>>>>>>> upstream/stabilisation
 
 		if (pRenderer)
 		{
@@ -718,11 +919,19 @@ struct SCryEngineStats
 		IMemoryManager::SProcessMemInfo procMeminfo;
 		GetISystem()->GetIMemoryManager()->GetProcessMemInfo(procMeminfo);
 
+<<<<<<< HEAD
 		nWin32_WorkingSet = procMeminfo.WorkingSetSize;
 		nWin32_PeakWorkingSet = procMeminfo.PeakWorkingSetSize;
 		nWin32_PagefileUsage = procMeminfo.PagefileUsage;
 		nWin32_PeakPagefileUsage = procMeminfo.PeakPagefileUsage;
 		nWin32_PageFaultCount = procMeminfo.PageFaultCount;
+=======
+		nWin32_WorkingSet        = procMeminfo.WorkingSetSize;
+		nWin32_PeakWorkingSet    = procMeminfo.PeakWorkingSetSize;
+		nWin32_PagefileUsage     = procMeminfo.PagefileUsage;
+		nWin32_PeakPagefileUsage = procMeminfo.PeakPagefileUsage;
+		nWin32_PageFaultCount    = procMeminfo.PageFaultCount;
+>>>>>>> upstream/stabilisation
 
 		fLevelLoadTime = gEnv->pSystem->GetIResourceManager()->GetLastLevelLoadTime().GetSeconds();
 
@@ -732,6 +941,7 @@ struct SCryEngineStats
 		}
 	}
 
+<<<<<<< HEAD
 	uint64                            nWin32_WorkingSet;
 	uint64                            nWin32_PeakWorkingSet;
 	uint64                            nWin32_PagefileUsage;
@@ -783,6 +993,59 @@ struct SCryEngineStats
 	std::vector<SEntityInfo>          entities;
 
 	MemInfo                           memInfo;
+=======
+	uint64 nWin32_WorkingSet;
+	uint64 nWin32_PeakWorkingSet;
+	uint64 nWin32_PagefileUsage;
+	uint64 nWin32_PeakPagefileUsage;
+	uint64 nWin32_PageFaultCount;
+
+	uint32 nTotalAllocatedMemory;
+	uint32 nSummary_CodeAndStaticSize;           // Total size of all code plus static data
+
+	uint32 nSummaryScriptSize;
+	uint32 nSummaryCharactersSize;
+	uint32 nSummaryMeshCount;
+	uint32 nSummaryMeshSize;
+	uint32 nSummaryEntityCount;
+
+	uint32 nAPI_MeshSize;                        // Allocated by DirectX
+
+	uint32 nSummary_TextureSize;                 // Total size of all textures
+	uint32 nSummary_UserTextureSize;             // Size of eser textures, (from files...)
+	uint32 nSummary_EngineTextureSize;           // Dynamic Textures
+	uint32 nSummary_TexturesPoolSize;            // Dynamic Textures
+	float  nSummary_TexturesStreamingThroughput; // in KB/sec
+
+	uint32 nStatObj_SummaryTextureSize;
+	uint32 nStatObj_SummaryMeshSize;
+	uint32 nStatObj_TotalCount;                  // Including sub-objects.
+
+	uint32 nChar_SummaryMeshSize;
+	uint32 nChar_SummaryTextureSize;
+	uint32 nChar_NumInstances;
+	SAnimMemoryTracker m_AnimMemoryTracking;
+
+	float fLevelLoadTime;
+	SDebugFPSInfo infoFPS;
+
+	std::vector<StatObjInfo> objects;
+	std::vector<CharacterInfo> characters;
+	std::vector<ITexture*> textures;
+	std::vector<MeshInfo>  meshes;
+	std::vector<SBrushMemInfo> brushes;
+	std::vector<IMaterial*> materials;
+	std::vector<ProfilerInfo> profilers;
+	std::vector<SPeakProfilerInfo> peaks;
+	std::vector<SModuleProfilerInfo>  moduleprofilers;
+	std::vector<SAnimationStatistics> animations;
+#if defined(ENABLE_LOADING_PROFILER)
+	std::vector<SLoadingProfilerInfo> loading;
+#endif
+	std::vector<SEntityInfo> entities;
+
+	MemInfo memInfo;
+>>>>>>> upstream/stabilisation
 };
 
 inline bool CompareFrameProfilersValueStats(const SCryEngineStats::ProfilerInfo& p1, const SCryEngineStats::ProfilerInfo& p2)
@@ -822,15 +1085,20 @@ private: // --------------------------------------------------------------------
 	//   pObj - 0 is ignored
 	//   pMat - 0 if IStatObjet Material should be used
 	void AddResource_StatObjWithLODs(IStatObj* pObj, CrySizerImpl& statObjTextureSizer, IMaterial* pMat = 0);
-	//
-	void AddResource_SingleStatObj(IStatObj& rData);
+	// If the object was not previously registered, returns true. If the object was already registered, returns false.
+	bool AddResource_SingleStatObj(IStatObj& rData);
 	//
 	void AddResource_CharInstance(ICharacterInstance& rData);
 	//
 	void AddResource_Material(IMaterial& rData, const bool bSubMaterial = false);
 
+<<<<<<< HEAD
 	CResourceCollector m_ResourceCollector;       // dependencies between assets
 	SCryEngineStats    m_stats;                   //
+=======
+	CResourceCollector m_ResourceCollector; // dependencies between assets
+	SCryEngineStats m_stats;                //
+>>>>>>> upstream/stabilisation
 
 	friend void SaveLevelStats(IConsoleCmdArgs* pArgs);
 };
@@ -841,7 +1109,11 @@ void CEngineStats::Collect()
 	//////////////////////////////////////////////////////////////////////////
 	// Collect CGFs
 	//////////////////////////////////////////////////////////////////////////
+<<<<<<< HEAD
 	CollectMemInfo(); // First of all collect memory info for modules (must be first).
+=======
+	CollectMemInfo();                       // First of all collect memory info for modules (must be first).
+>>>>>>> upstream/stabilisation
 	CollectGeometry();
 	CollectCharacters();
 	CollectTextures();
@@ -878,10 +1150,10 @@ inline bool CompareRenderMeshByTypeName(IRenderMesh* pRM1, IRenderMesh* pRM2)
 	return strcmp(pRM1->GetTypeName(), pRM2->GetTypeName()) < 0;
 }
 
-void CEngineStats::AddResource_SingleStatObj(IStatObj& rData)
+bool CEngineStats::AddResource_SingleStatObj(IStatObj& rData)
 {
 	if (!m_ResourceCollector.AddResource(rData.GetFilePath()))
-		return;   // was already registered
+		return false;   // was already registered
 
 	// dependencies
 
@@ -893,6 +1165,7 @@ void CEngineStats::AddResource_SingleStatObj(IStatObj& rData)
 
 		m_ResourceCollector.CloseDependencies();
 	}
+	return true;
 }
 
 void CEngineStats::AddResource_CharInstance(ICharacterInstance& rData)
@@ -1010,26 +1283,36 @@ void CEngineStats::AddResource_StatObjWithLODs(IStatObj* pObj, CrySizerImpl& sta
 	if (!pObj)
 		return;
 
+	// Make sure we have not already registered this object
+	if (!AddResource_SingleStatObj(*pObj))
+		return;
+
 	SCryEngineStats::StatObjInfo si;
 
 	si.pStatObj = pObj;
 
 	memset(si.nIndicesPerLod, 0, sizeof(si.nIndicesPerLod));
 
-	// dependencies
-	AddResource_SingleStatObj(*si.pStatObj);
-
 	CrySizerImpl localTextureSizer;
 
+<<<<<<< HEAD
 	si.nLods = 0;
 	si.nDrawCalls = 0;
 	si.nSubMeshCount = 0;
 	si.nNumRefs = 0;
 	si.bSplitLods = false;
+=======
+	si.nLods         = 0;
+	si.nDrawCalls    = 0;
+	si.nSubMeshCount = 0;
+	si.nNumRefs      = 0;
+	si.bSplitLods    = false;
+>>>>>>> upstream/stabilisation
 	// Analyze geom object.
 
 	bool bMultiSubObj = (si.pStatObj->GetFlags() & STATIC_OBJECT_COMPOUND) != 0;
 
+<<<<<<< HEAD
 	si.nMeshSize = 0;
 	si.nTextureSize = 0;
 	si.nIndices = 0;
@@ -1037,16 +1320,30 @@ void CEngineStats::AddResource_StatObjWithLODs(IStatObj* pObj, CrySizerImpl& sta
 	si.nPhysProxySize = 0;
 	si.nPhysProxySizeMax = 0;
 	si.nPhysPrimitives = 0;
+=======
+	si.nMeshSize         = 0;
+	si.nTextureSize      = 0;
+	si.nIndices          = 0;
+	si.nVertices         = 0;
+	si.nPhysProxySize    = 0;
+	si.nPhysProxySizeMax = 0;
+	si.nPhysPrimitives   = 0;
+>>>>>>> upstream/stabilisation
 
 	m_stats.nStatObj_TotalCount++;
 
 	IStatObj::SStatistics stats;
+<<<<<<< HEAD
 	stats.pTextureSizer = &statObjTextureSizer;
+=======
+	stats.pTextureSizer  = &statObjTextureSizer;
+>>>>>>> upstream/stabilisation
 	stats.pTextureSizer2 = &localTextureSizer;
 
 	si.pStatObj->GetStatistics(stats);
 
 	si.nVertices = stats.nVertices;
+<<<<<<< HEAD
 	si.nIndices = stats.nIndices;
 	for (int i = 0; i < MAX_STATOBJ_LODS_NUM; i++)
 		si.nIndicesPerLod[i] = stats.nIndicesPerLod[i];
@@ -1060,6 +1357,21 @@ void CEngineStats::AddResource_StatObjWithLODs(IStatObj* pObj, CrySizerImpl& sta
 	si.nSubMeshCount = stats.nSubMeshCount;
 	si.nNumRefs = stats.nNumRefs;
 	si.bSplitLods = stats.bSplitLods;
+=======
+	si.nIndices  = stats.nIndices;
+	for (int i = 0; i < MAX_STATOBJ_LODS_NUM; i++)
+		si.nIndicesPerLod[i] = stats.nIndicesPerLod[i];
+	si.nMeshSize         = stats.nMeshSize;
+	si.nMeshSizeLoaded   = stats.nMeshSizeLoaded;
+	si.nPhysProxySize    = stats.nPhysProxySize;
+	si.nPhysProxySizeMax = stats.nPhysProxySizeMax;
+	si.nPhysPrimitives   = stats.nPhysPrimitives;
+	si.nLods             = stats.nLods;
+	si.nDrawCalls        = stats.nDrawCalls;
+	si.nSubMeshCount     = stats.nSubMeshCount;
+	si.nNumRefs          = stats.nNumRefs;
+	si.bSplitLods        = stats.bSplitLods;
+>>>>>>> upstream/stabilisation
 
 	si.nTextureSize = localTextureSizer.GetTotalSize();
 
@@ -1075,15 +1387,25 @@ inline bool CompareAnimations(const SAnimationStatistics& p1, const SAnimationSt
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectLoadingData()
 {
+<<<<<<< HEAD
 	#if defined(ENABLE_LOADING_PROFILER)
 	CLoadingProfilerSystem::FillProfilersList(m_stats.loading);
 	#endif
+=======
+#if defined(ENABLE_LOADING_PROFILER)
+	CLoadingProfilerSystem::FillProfilersList(m_stats.loading);
+#endif
+>>>>>>> upstream/stabilisation
 }
 
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectAnimations()
 {
+<<<<<<< HEAD
 	ISystem* pSystem = GetISystem();
+=======
+	ISystem* pSystem     = GetISystem();
+>>>>>>> upstream/stabilisation
 	I3DEngine* p3DEngine = pSystem->GetI3DEngine();
 
 	m_stats.animations.clear();
@@ -1119,12 +1441,21 @@ void GetObjectsByType(EERType objectType, std::vector<IRenderNode*>& lstInstance
 PREFAST_SUPPRESS_WARNING(6262)
 void CEngineStats::CollectGeometry()
 {
+<<<<<<< HEAD
 	ISystem* pSystem = GetISystem();
 	I3DEngine* p3DEngine = pSystem->GetI3DEngine();
 
 	m_stats.nStatObj_SummaryTextureSize = 0;
 	m_stats.nStatObj_SummaryMeshSize = 0;
 	m_stats.nStatObj_TotalCount = 0;
+=======
+	ISystem* pSystem     = GetISystem();
+	I3DEngine* p3DEngine = pSystem->GetI3DEngine();
+
+	m_stats.nStatObj_SummaryTextureSize = 0;
+	m_stats.nStatObj_SummaryMeshSize    = 0;
+	m_stats.nStatObj_TotalCount         = 0;
+>>>>>>> upstream/stabilisation
 
 	CrySizerImpl statObjTextureSizer;
 
@@ -1140,7 +1471,8 @@ void CEngineStats::CollectGeometry()
 	   si.nPhysProxySize = 0;
 	   si.nPhysPrimitives = 0;
 	 */
-	// iterate through all IStatObj
+
+	 // iterate through all IStatObj
 	{
 		int nObjCount = 0;
 
@@ -1168,29 +1500,40 @@ void CEngineStats::CollectGeometry()
 		GetObjectsByType(eERType_Vegetation, lstInstances);
 		GetObjectsByType(eERType_Light, lstInstances);
 		GetObjectsByType(eERType_Decal, lstInstances);
+		GetObjectsByType(eERType_Character, lstInstances);
+		GetObjectsByType(eERType_MovableBrush, lstInstances);
 
 		std::vector<IRenderNode*>::const_iterator itEnd = lstInstances.end();
 		for (std::vector<IRenderNode*>::iterator it = lstInstances.begin(); it != itEnd; ++it)
 		{
 			IRenderNode* pRenderNode = *it;
 
-			const int slotCount = pRenderNode->GetSlotCount();
-			for (int dwSlot = 0; dwSlot < slotCount; ++dwSlot)
+			if (IStatObj* pEntObject = pRenderNode->GetEntityStatObj())
 			{
-				if (IStatObj* pEntObject = pRenderNode->GetEntityStatObj(dwSlot))
-				{
-					m_ResourceCollector.AddInstance(pEntObject->GetFilePath(), pRenderNode);
+				AddResource_StatObjWithLODs(pEntObject, statObjTextureSizer, 0); // Ensure object is registered
+				m_ResourceCollector.AddInstance(pEntObject->GetFilePath(), pRenderNode);
 
+<<<<<<< HEAD
 					if (IMaterial* pMat = pRenderNode->GetMaterial())    // if this rendernode overwrites the IStatObj material
 					{
 						m_ResourceCollector.OpenDependencies(pEntObject->GetFilePath());
 						AddResource_Material(*pMat);    // to report the dependencies of this instance to the IStatObj
 						m_ResourceCollector.CloseDependencies();
 					}
+=======
+				if (IMaterial* pMat = pRenderNode->GetMaterial())    // if this rendernode overwrites the IStatObj material
+				{
+					m_ResourceCollector.OpenDependencies(pEntObject->GetFilePath());
+					AddResource_Material(*pMat);                    // to report the dependencies of this instance to the IStatObj
+					m_ResourceCollector.CloseDependencies();
+>>>>>>> upstream/stabilisation
 				}
+			}
 
-				if (ICharacterInstance* pCharInst = pRenderNode->GetEntityCharacter(dwSlot))
-					m_ResourceCollector.AddInstance(pCharInst->GetFilePath(), pRenderNode);
+			if (ICharacterInstance* pCharInst = pRenderNode->GetEntityCharacter(0))
+			{
+				AddResource_CharInstance(*pCharInst);
+				m_ResourceCollector.AddInstance(pCharInst->GetFilePath(), pRenderNode);
 			}
 		}
 	}
@@ -1202,12 +1545,21 @@ void CEngineStats::CollectGeometry()
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectCharacters() PREFAST_SUPPRESS_WARNING(6262)
 {
+<<<<<<< HEAD
 	ISystem* pSystem = GetISystem();
 	I3DEngine* p3DEngine = pSystem->GetI3DEngine();
 
 	m_stats.nChar_SummaryTextureSize = 0;
 	m_stats.nChar_SummaryMeshSize = 0;
 	m_stats.nChar_NumInstances = 0;
+=======
+	ISystem* pSystem     = GetISystem();
+	I3DEngine* p3DEngine = pSystem->GetI3DEngine();
+
+	m_stats.nChar_SummaryTextureSize = 0;
+	m_stats.nChar_SummaryMeshSize    = 0;
+	m_stats.nChar_NumInstances       = 0;
+>>>>>>> upstream/stabilisation
 
 	CrySizerImpl totalCharactersTextureSizer;
 
@@ -1247,9 +1599,15 @@ void CEngineStats::CollectCharacters() PREFAST_SUPPRESS_WARNING(6262)
 			CrySizerImpl textureSizer;
 
 			si.nInstances = gEnv->pCharacterManager->GetNumInstancesPerModel(*si.pIDefaultSkeleton);
+<<<<<<< HEAD
 			si.nLods = 1; //the base-model can have only 1 LOD
 			si.nIndices = 0;
 			si.nVertices = 0;
+=======
+			si.nLods      = 1; //the base-model can have only 1 LOD
+			si.nIndices   = 0;
+			si.nVertices  = 0;
+>>>>>>> upstream/stabilisation
 			memset(si.nVerticesPerLod, 0, sizeof(si.nVerticesPerLod));
 			memset(si.nIndicesPerLod, 0, sizeof(si.nIndicesPerLod));
 
@@ -1259,18 +1617,31 @@ void CEngineStats::CollectCharacters() PREFAST_SUPPRESS_WARNING(6262)
 			si.pIDefaultSkeleton->GetTextureMemoryUsage2(&textureSizer);
 			si.pIDefaultSkeleton->GetTextureMemoryUsage2(&totalCharactersTextureSizer);
 			si.nPhysProxySize = 0;
+<<<<<<< HEAD
 			bool bLod0_Found = false;
+=======
+			bool bLod0_Found         = false;
+>>>>>>> upstream/stabilisation
 			IRenderMesh* pRenderMesh = si.pIDefaultSkeleton->GetIRenderMesh();
 			if (pRenderMesh)
 			{
 				if (!bLod0_Found)
 				{
+<<<<<<< HEAD
 					bLod0_Found = true;
 					si.nVertices = pRenderMesh->GetVerticesCount();
 					si.nIndices = pRenderMesh->GetIndicesCount();
 				}
 				si.nVerticesPerLod[0] = pRenderMesh->GetVerticesCount();
 				si.nIndicesPerLod[0] = pRenderMesh->GetIndicesCount();
+=======
+					bLod0_Found  = true;
+					si.nVertices = pRenderMesh->GetVerticesCount();
+					si.nIndices  = pRenderMesh->GetIndicesCount();
+				}
+				si.nVerticesPerLod[0] = pRenderMesh->GetVerticesCount();
+				si.nIndicesPerLod[0]  = pRenderMesh->GetIndicesCount();
+>>>>>>> upstream/stabilisation
 			}
 			const phys_geometry* pgeom;
 			{
@@ -1281,7 +1652,11 @@ void CEngineStats::CollectCharacters() PREFAST_SUPPRESS_WARNING(6262)
 						pgeom->pGeom->GetMemoryStatistics(&physMeshSizer);
 						si.nPhysProxySize += physMeshSizer.GetTotalSize();
 					}
+<<<<<<< HEAD
 			}
+=======
+				}
+>>>>>>> upstream/stabilisation
 			si.nTextureSize = textureSizer.GetTotalSize();
 
 			m_stats.nChar_SummaryMeshSize += si.nMeshSize;
@@ -1333,9 +1708,15 @@ void CEngineStats::CollectEntityDependencies()
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectEntities()
 {
+<<<<<<< HEAD
 	ISystem* pSystem = GetISystem();
 	IEntitySystem* pEntitySystem = pSystem->GetIEntitySystem();
 	IEntityItPtr it = pEntitySystem->GetEntityIterator();
+=======
+	ISystem* pSystem             = GetISystem();
+	IEntitySystem* pEntitySystem = pSystem->GetIEntitySystem();
+	IEntityItPtr   it            = pEntitySystem->GetEntityIterator();
+>>>>>>> upstream/stabilisation
 
 	m_stats.entities.clear();
 
@@ -1344,9 +1725,15 @@ void CEngineStats::CollectEntities()
 		IEntity* pEntity = it->Next();
 		SCryEngineStats::SEntityInfo entityInfo;
 
+<<<<<<< HEAD
 		entityInfo.name = pEntity->GetName();
 		entityInfo.bInvisible = !pEntity->IsInvisible();
 		entityInfo.bHidden = pEntity->IsHidden();
+=======
+		entityInfo.name         = pEntity->GetName();
+		entityInfo.bInvisible   = !pEntity->IsInvisible();
+		entityInfo.bHidden      = pEntity->IsHidden();
+>>>>>>> upstream/stabilisation
 		entityInfo.bIsArchetype = false;
 
 		for (size_t j = 0, jCount = pEntity->GetSlotCount(); j < jCount; ++j)
@@ -1379,22 +1766,28 @@ void CEngineStats::CollectBrushes()
 	for (std::vector<IRenderNode*>::iterator it = lstInstances.begin(); it != itEnd; ++it)
 	{
 		IRenderNode* pRenderNode = *it;
+<<<<<<< HEAD
 		const int slotCount = pRenderNode->GetSlotCount();
 		for (int dwSlot = 0; dwSlot < slotCount; ++dwSlot)
-		{
-			if (IStatObj* pEntObject = pRenderNode->GetEntityStatObj(dwSlot))
-			{
-				IMaterial* pMat = NULL;
-				pMat = pRenderNode->GetMaterial();
-				if (!pMat)
-				{
-					pMat = pEntObject->GetMaterial();
-				}
+=======
 
-				if (pMat)
+		if (IStatObj* pEntObject = pRenderNode->GetEntityStatObj())
+>>>>>>> upstream/stabilisation
+		{
+			IMaterial* pMat = NULL;
+			pMat = pRenderNode->GetMaterial();
+			if (!pMat)
+			{
+				pMat = pEntObject->GetMaterial();
+			}
+
+			if (pMat)
+			{
+				for (int idx = 0; idx < 8; idx++)
 				{
-					for (int idx = 0; idx < 8; idx++)
+					if (IRenderMesh* pMesh = pRenderNode->GetRenderMesh(idx))
 					{
+<<<<<<< HEAD
 						if (IRenderMesh* pMesh = pRenderNode->GetRenderMesh(idx))
 						{
 							SCryEngineStats::SBrushMemInfo brushInfo;
@@ -1403,6 +1796,13 @@ void CEngineStats::CollectBrushes()
 							brushInfo.lodNum = idx;
 							m_stats.brushes.push_back(brushInfo);
 						}
+=======
+						SCryEngineStats::SBrushMemInfo brushInfo;
+						brushInfo.brushName         = string(pRenderNode->GetName());
+						brushInfo.usedTextureMemory = pMesh->GetTextureMemoryUsage(pMat);
+						brushInfo.lodNum            = idx;
+						m_stats.brushes.push_back(brushInfo);
+>>>>>>> upstream/stabilisation
 					}
 				}
 			}
@@ -1413,7 +1813,11 @@ void CEngineStats::CollectBrushes()
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectMaterialDependencies()
 {
+<<<<<<< HEAD
 	ISystem* pSystem = GetISystem();
+=======
+	ISystem* pSystem     = GetISystem();
+>>>>>>> upstream/stabilisation
 	I3DEngine* p3DEngine = pSystem->GetI3DEngine();
 
 	IMaterialManager* pManager = p3DEngine->GetMaterialManager();
@@ -1443,16 +1847,26 @@ void CEngineStats::CollectMaterialDependencies()
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectTextures()
 {
+<<<<<<< HEAD
 	ISystem* pSystem = GetISystem();
+=======
+	ISystem* pSystem     = GetISystem();
+>>>>>>> upstream/stabilisation
 	IRenderer* pRenderer = pSystem->GetIRenderer();
 	if (!pRenderer)
 	{
 		return;
 	}
 
+<<<<<<< HEAD
 	m_stats.nSummary_TextureSize = 0;
 	m_stats.nSummary_UserTextureSize = 0;
 	m_stats.nSummary_EngineTextureSize = 0;
+=======
+	m_stats.nSummary_TextureSize                 = 0;
+	m_stats.nSummary_UserTextureSize             = 0;
+	m_stats.nSummary_EngineTextureSize           = 0;
+>>>>>>> upstream/stabilisation
 	m_stats.nSummary_TexturesStreamingThroughput = 0;
 	;
 	pRenderer->EF_Query(EFQ_TexturesPoolSize, m_stats.nSummary_TexturesPoolSize);
@@ -1467,7 +1881,11 @@ void CEngineStats::CollectTextures()
 		for (uint32 i = 0; i < query.numTextures; i++)
 		{
 			ITexture* pTexture = query.pTextures[i];
+<<<<<<< HEAD
 			int nTexSize = pTexture->GetDataSize();
+=======
+			int nTexSize       = pTexture->GetDataSize();
+>>>>>>> upstream/stabilisation
 			if (nTexSize > 0)
 			{
 				m_stats.textures.push_back(pTexture);
@@ -1498,7 +1916,11 @@ void CEngineStats::CollectTextures()
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectMaterials()
 {
+<<<<<<< HEAD
 	ISystem* pSystem = GetISystem();
+=======
+	ISystem* pSystem     = GetISystem();
+>>>>>>> upstream/stabilisation
 	I3DEngine* p3DEngine = pSystem->GetI3DEngine();
 
 	IMaterialManager* pManager = p3DEngine->GetMaterialManager();
@@ -1519,7 +1941,11 @@ void CEngineStats::CollectMaterials()
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectRenderMeshes()
 {
+<<<<<<< HEAD
 	ISystem* pSystem = GetISystem();
+=======
+	ISystem* pSystem     = GetISystem();
+>>>>>>> upstream/stabilisation
 	IRenderer* pRenderer = pSystem->GetIRenderer();
 	if (!pRenderer)
 	{
@@ -1530,10 +1956,17 @@ void CEngineStats::CollectRenderMeshes()
 	m_stats.meshes.reserve(100);
 
 	int nVertices = 0;
+<<<<<<< HEAD
 	int nIndices = 0;
 
 	IRenderMesh** pMeshes = NULL;
 	uint32 nCount = 0;
+=======
+	int nIndices  = 0;
+
+	IRenderMesh** pMeshes = NULL;
+	uint32 nCount         = 0;
+>>>>>>> upstream/stabilisation
 	pRenderer->EF_Query(EFQ_GetAllMeshes, pMeshes, nCount);
 	if (nCount > 0 && pMeshes)
 	{
@@ -1542,10 +1975,17 @@ void CEngineStats::CollectRenderMeshes()
 
 		CrySizerImpl* pTextureSizer = new CrySizerImpl();
 
+<<<<<<< HEAD
 		int nInstances = 0;
 		int nMeshSizeSys = 0;
 		int nMeshSizeDev = 0;
 		const char* sMeshName = 0;
+=======
+		int nInstances            = 0;
+		int nMeshSizeSys          = 0;
+		int nMeshSizeDev          = 0;
+		const char* sMeshName     = 0;
+>>>>>>> upstream/stabilisation
 		const char* sLastMeshName = "";
 		for (size_t i = 0; i < nCount; i++)
 		{
@@ -1555,6 +1995,7 @@ void CEngineStats::CollectRenderMeshes()
 			if ((strcmp(sMeshName, sLastMeshName) != 0 && i != 0))
 			{
 				SCryEngineStats::MeshInfo mi;
+<<<<<<< HEAD
 				mi.nCount = nInstances;
 				mi.nVerticesSum = nVertices;
 				mi.nIndicesSum = nIndices;
@@ -1562,10 +2003,20 @@ void CEngineStats::CollectRenderMeshes()
 				mi.nMeshSizeSys = nMeshSizeSys;
 				mi.nTextureSize = (int)pTextureSizer->GetTotalSize();
 				mi.name = sLastMeshName;
+=======
+				mi.nCount       = nInstances;
+				mi.nVerticesSum = nVertices;
+				mi.nIndicesSum  = nIndices;
+				mi.nMeshSizeDev = nMeshSizeDev;
+				mi.nMeshSizeSys = nMeshSizeSys;
+				mi.nTextureSize = (int)pTextureSizer->GetTotalSize();
+				mi.name         = sLastMeshName;
+>>>>>>> upstream/stabilisation
 				m_stats.meshes.push_back(mi);
 
 				delete pTextureSizer;
 				pTextureSizer = new CrySizerImpl();
+<<<<<<< HEAD
 				nInstances = 0;
 				nMeshSizeSys = 0;
 				nMeshSizeDev = 0;
@@ -1575,18 +2026,34 @@ void CEngineStats::CollectRenderMeshes()
 			sLastMeshName = sMeshName;
 			nMeshSizeSys += pMesh->GetMemoryUsage(0, IRenderMesh::MEM_USAGE_ONLY_SYSTEM); // Collect System+Video memory usage.
 			nMeshSizeDev += pMesh->GetMemoryUsage(0, IRenderMesh::MEM_USAGE_ONLY_VIDEO);  // Collect System+Video memory usage.
+=======
+				nInstances    = 0;
+				nMeshSizeSys  = 0;
+				nMeshSizeDev  = 0;
+				nVertices     = 0;
+				nIndices      = 0;
+			}
+			sLastMeshName = sMeshName;
+			nMeshSizeSys += pMesh->GetMemoryUsage(0, IRenderMesh::MEM_USAGE_ONLY_SYSTEM);    // Collect System+Video memory usage.
+			nMeshSizeDev += pMesh->GetMemoryUsage(0, IRenderMesh::MEM_USAGE_ONLY_VIDEO);     // Collect System+Video memory usage.
+>>>>>>> upstream/stabilisation
 
 			// Vlad: checking default material in render mesh makes little sense, meshes can be used with any material
 			//pMesh->GetTextureMemoryUsage(pMesh->GetMaterial(), pTextureSizer);
 
 			nVertices += pMesh->GetVerticesCount();
+<<<<<<< HEAD
 			nIndices += pMesh->GetIndicesCount();
+=======
+			nIndices  += pMesh->GetIndicesCount();
+>>>>>>> upstream/stabilisation
 
 			nInstances++;
 		}
 		if (nCount > 0 && sMeshName)
 		{
 			SCryEngineStats::MeshInfo mi;
+<<<<<<< HEAD
 			mi.nCount = nInstances;
 			mi.nVerticesSum = nVertices;
 			mi.nIndicesSum = nIndices;
@@ -1594,6 +2061,15 @@ void CEngineStats::CollectRenderMeshes()
 			mi.nMeshSizeDev = nMeshSizeDev;
 			mi.nTextureSize = (int)pTextureSizer->GetTotalSize();
 			mi.name = sMeshName;
+=======
+			mi.nCount       = nInstances;
+			mi.nVerticesSum = nVertices;
+			mi.nIndicesSum  = nIndices;
+			mi.nMeshSizeSys = nMeshSizeSys;
+			mi.nMeshSizeDev = nMeshSizeDev;
+			mi.nTextureSize = (int)pTextureSizer->GetTotalSize();
+			mi.name         = sMeshName;
+>>>>>>> upstream/stabilisation
 			m_stats.meshes.push_back(mi);
 		}
 
@@ -1611,12 +2087,20 @@ void CEngineStats::CollectVoxels()
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectProfileStatistics()
 {
+<<<<<<< HEAD
 	ISystem* pSystem = GetISystem();
+=======
+	ISystem* pSystem               = GetISystem();
+>>>>>>> upstream/stabilisation
 	IFrameProfileSystem* pProfiler = pSystem->GetIProfileSystem();
 
 	m_stats.profilers.clear();
 
+<<<<<<< HEAD
 	uint32 num = pProfiler->GetProfilerCount();//min(20, pProfiler->GetProfilerCount());
+=======
+	uint32 num = pProfiler->GetProfilerCount();                                             //min(20, pProfiler->GetProfilerCount());
+>>>>>>> upstream/stabilisation
 
 	int need = 0;
 
@@ -1635,6 +2119,7 @@ void CEngineStats::CollectProfileStatistics()
 		if (pFrameInfo && pFrameInfo->m_countHistory.GetAverage() > 0 && pFrameInfo->m_totalTimeHistory.GetAverage() > 0.0f)
 		{
 
+<<<<<<< HEAD
 			m_stats.profilers[i].m_count = pFrameInfo->m_countHistory.GetAverage(); //pFrameInfo->m_count;
 			m_stats.profilers[i].m_displayedValue = pFrameInfo->m_selfTimeHistory.GetAverage();
 			m_stats.profilers[i].m_name = pFrameInfo->m_name;
@@ -1646,6 +2131,19 @@ void CEngineStats::CollectProfileStatistics()
 			m_stats.profilers[i].m_max = (float)pFrameInfo->m_selfTimeHistory.GetMax();
 			m_stats.profilers[i].m_mincount = pFrameInfo->m_countHistory.GetMin();
 			m_stats.profilers[i].m_maxcount = pFrameInfo->m_countHistory.GetMax();
+=======
+			m_stats.profilers[i].m_count          = pFrameInfo->m_countHistory.GetAverage();  //pFrameInfo->m_count;
+			m_stats.profilers[i].m_displayedValue = pFrameInfo->m_selfTimeHistory.GetAverage();
+			m_stats.profilers[i].m_name           = pFrameInfo->m_name;
+			m_stats.profilers[i].m_module         = ((CFrameProfileSystem*)pProfiler)->GetModuleName(pFrameInfo);
+			m_stats.profilers[i].m_selfTime       = pFrameInfo->m_selfTime;
+			m_stats.profilers[i].m_totalTime      = pFrameInfo->m_totalTimeHistory.GetAverage();
+			m_stats.profilers[i].m_variance       = pFrameInfo->m_variance;
+			m_stats.profilers[i].m_min            = (float)pFrameInfo->m_selfTimeHistory.GetMin();
+			m_stats.profilers[i].m_max            = (float)pFrameInfo->m_selfTimeHistory.GetMax();
+			m_stats.profilers[i].m_mincount       = pFrameInfo->m_countHistory.GetMin();
+			m_stats.profilers[i].m_maxcount       = pFrameInfo->m_countHistory.GetMax();
+>>>>>>> upstream/stabilisation
 			i++;
 		}
 	}
@@ -1659,6 +2157,7 @@ void CEngineStats::CollectProfileStatistics()
 	for (uint32 i = 0; i < num; ++i)
 	{
 
+<<<<<<< HEAD
 		const SPeakRecord* pPeak = pProfiler->GetPeak(i);
 		CFrameProfiler* pFrameInfo = pPeak->pProfiler;
 
@@ -1680,6 +2179,29 @@ void CEngineStats::CollectProfileStatistics()
 		m_stats.peaks[i].profiler.m_max = (float)pFrameInfo->m_selfTimeHistory.GetMax();
 		m_stats.peaks[i].profiler.m_mincount = pFrameInfo->m_countHistory.GetMin();
 		m_stats.peaks[i].profiler.m_maxcount = pFrameInfo->m_countHistory.GetMax();
+=======
+		const SPeakRecord* pPeak   = pProfiler->GetPeak(i);
+		CFrameProfiler* pFrameInfo = pPeak->pProfiler;
+
+		m_stats.peaks[i].peakValue    = pPeak->peakValue;
+		m_stats.peaks[i].averageValue = pPeak->averageValue;
+		m_stats.peaks[i].variance     = pPeak->variance;
+		m_stats.peaks[i].pageFaults   = pPeak->pageFaults;                                     // Number of page faults at this frame.
+		m_stats.peaks[i].count        = pPeak->count;                                          // Number of times called for peak.
+		m_stats.peaks[i].when         = pPeak->when;                                           // when it added.
+
+		m_stats.peaks[i].profiler.m_count          = pFrameInfo->m_countHistory.GetAverage();  //pFrameInfo->m_count;
+		m_stats.peaks[i].profiler.m_displayedValue = pFrameInfo->m_selfTimeHistory.GetAverage();
+		m_stats.peaks[i].profiler.m_name           = pFrameInfo->m_name;
+		m_stats.peaks[i].profiler.m_module         = ((CFrameProfileSystem*)pProfiler)->GetModuleName(pFrameInfo);
+		m_stats.peaks[i].profiler.m_selfTime       = pFrameInfo->m_selfTime;
+		m_stats.peaks[i].profiler.m_totalTime      = pFrameInfo->m_totalTimeHistory.GetAverage();
+		m_stats.peaks[i].profiler.m_variance       = pFrameInfo->m_variance;
+		m_stats.peaks[i].profiler.m_min            = (float)pFrameInfo->m_selfTimeHistory.GetMin();
+		m_stats.peaks[i].profiler.m_max            = (float)pFrameInfo->m_selfTimeHistory.GetMax();
+		m_stats.peaks[i].profiler.m_mincount       = pFrameInfo->m_countHistory.GetMin();
+		m_stats.peaks[i].profiler.m_maxcount       = pFrameInfo->m_countHistory.GetMax();
+>>>>>>> upstream/stabilisation
 	}
 
 	int modules = ((CFrameProfileSystem*)pProfiler)->GetModuleCount();
@@ -1688,14 +2210,22 @@ void CEngineStats::CollectProfileStatistics()
 	for (int i = 0; i < modules; i++)
 	{
 		float ratio = ((CFrameProfileSystem*)pProfiler)->GetOverBudgetRatio(i);
+<<<<<<< HEAD
 		m_stats.moduleprofilers[i].name = ((CFrameProfileSystem*)pProfiler)->GetModuleName(i);
+=======
+		m_stats.moduleprofilers[i].name           = ((CFrameProfileSystem*)pProfiler)->GetModuleName(i);
+>>>>>>> upstream/stabilisation
 		m_stats.moduleprofilers[i].overBugetRatio = ratio;
 	}
 
 }
 
 //////////////////////////////////////////////////////////////////////////
+<<<<<<< HEAD
 	#if CRY_PLATFORM_WINDOWS
+=======
+#if CRY_PLATFORM_WINDOWS
+>>>>>>> upstream/stabilisation
 
 /*static*/ bool QueryModuleMemoryInfo(SCryEngineStatsModuleInfo& moduleInfo, int index)
 {
@@ -1708,7 +2238,11 @@ void CEngineStats::CollectProfileStatistics()
 	if (!fpCryModuleGetAllocatedMemory)
 		return false;
 
+<<<<<<< HEAD
 	PEHeader_DLL pe_header;
+=======
+	PEHeader_DLL  pe_header;
+>>>>>>> upstream/stabilisation
 	PEHeader_DLL* header = &pe_header;
 
 	const IMAGE_DOS_HEADER* dos_head = (IMAGE_DOS_HEADER*)hModule;
@@ -1718,9 +2252,15 @@ void CEngineStats::CollectProfileStatistics()
 		return false;
 	}
 	header = (PEHeader_DLL*)(const void*)((char*)dos_head + dos_head->e_lfanew);
+<<<<<<< HEAD
 	moduleInfo.moduleStaticSize = header->opt_head.SizeOfInitializedData + header->opt_head.SizeOfUninitializedData + header->opt_head.SizeOfCode + header->opt_head.SizeOfHeaders;
 	moduleInfo.SizeOfCode = header->opt_head.SizeOfCode;
 	moduleInfo.SizeOfInitializedData = header->opt_head.SizeOfInitializedData;
+=======
+	moduleInfo.moduleStaticSize        = header->opt_head.SizeOfInitializedData + header->opt_head.SizeOfUninitializedData + header->opt_head.SizeOfCode + header->opt_head.SizeOfHeaders;
+	moduleInfo.SizeOfCode              = header->opt_head.SizeOfCode;
+	moduleInfo.SizeOfInitializedData   = header->opt_head.SizeOfInitializedData;
+>>>>>>> upstream/stabilisation
 	moduleInfo.SizeOfUninitializedData = header->opt_head.SizeOfUninitializedData;
 
 	fpCryModuleGetAllocatedMemory(&moduleInfo.memInfo);
@@ -1729,7 +2269,11 @@ void CEngineStats::CollectProfileStatistics()
 	return true;
 }
 
+<<<<<<< HEAD
 	#else //Another platform
+=======
+#else   //Another platform
+>>>>>>> upstream/stabilisation
 
 /*static */ bool QueryModuleMemoryInfo(SCryEngineStatsModuleInfo& moduleInfo, int index)
 {
@@ -1739,14 +2283,24 @@ void CEngineStats::CollectProfileStatistics()
 	return true;
 }
 
+<<<<<<< HEAD
 	#endif
+=======
+#endif
+>>>>>>> upstream/stabilisation
 
 //////////////////////////////////////////////////////////////////////////
 void CEngineStats::CollectMemInfo()
 {
+<<<<<<< HEAD
 	m_stats.memInfo.totalUsedInModules = 0;
 	m_stats.memInfo.totalCodeAndStatic = 0;
 	m_stats.memInfo.countedMemoryModules = 0;
+=======
+	m_stats.memInfo.totalUsedInModules      = 0;
+	m_stats.memInfo.totalCodeAndStatic      = 0;
+	m_stats.memInfo.countedMemoryModules    = 0;
+>>>>>>> upstream/stabilisation
 	m_stats.memInfo.totalAllocatedInModules = 0;
 	m_stats.memInfo.totalNumAllocsInModules = 0;
 
@@ -1763,14 +2317,22 @@ void CEngineStats::CollectMemInfo()
 		SCryEngineStatsModuleInfo moduleInfo;
 		ZeroStruct(moduleInfo.memInfo);
 		moduleInfo.moduleStaticSize = moduleInfo.SizeOfCode = moduleInfo.SizeOfInitializedData = moduleInfo.SizeOfUninitializedData = moduleInfo.usedInModule = 0;
+<<<<<<< HEAD
 		moduleInfo.name = szModule;
+=======
+		moduleInfo.name             = szModule;
+>>>>>>> upstream/stabilisation
 
 		if (!QueryModuleMemoryInfo(moduleInfo, i))
 			continue;
 
 		m_stats.memInfo.totalNumAllocsInModules += moduleInfo.memInfo.num_allocations;
 		m_stats.memInfo.totalAllocatedInModules += moduleInfo.memInfo.allocated;
+<<<<<<< HEAD
 		m_stats.memInfo.totalUsedInModules += moduleInfo.usedInModule;
+=======
+		m_stats.memInfo.totalUsedInModules      += moduleInfo.usedInModule;
+>>>>>>> upstream/stabilisation
 		m_stats.memInfo.countedMemoryModules++;
 		m_stats.memInfo.totalCodeAndStatic += moduleInfo.moduleStaticSize;
 
@@ -1797,6 +2359,7 @@ public:
 	void Export(XmlNodeRef Workbook, SCryEngineStats& stats);
 
 private:
+<<<<<<< HEAD
 	void       ExportSummary(SCryEngineStats& stats);
 	void       ExportStatObjects(SCryEngineStats& stats);
 	void       ExportCharacters(SCryEngineStats& stats);
@@ -1819,6 +2382,30 @@ private:
 	void       ExportEntitiesStatistics(SCryEngineStats& stats);
 
 	void       InitExcelWorkbook(XmlNodeRef Workbook);
+=======
+	void ExportSummary(SCryEngineStats& stats);
+	void ExportStatObjects(SCryEngineStats& stats);
+	void ExportCharacters(SCryEngineStats& stats);
+	void ExportRenderMeshes(SCryEngineStats& stats);
+	void ExportBrushes(SCryEngineStats& stats);
+	void ExportTextures(SCryEngineStats& stats);
+	void ExportMaterials(SCryEngineStats& stats);
+	void ExportMemStats(SCryEngineStats& stats);
+	void ExportMemInfo(SCryEngineStats& stats);
+	void ExportTimeDemoInfo();
+	void ExportStreamingInfo(SStreamEngineStatistics& stats);
+	void ExportAnimationInfo(SCryEngineStats& stats);
+	void ExportDependencies(CResourceCollector& stats);
+	void ExportProfilerStatistics(SCryEngineStats& stats);
+	void ExportAnimationStatistics(SCryEngineStats& stats);
+	void ExportAllLoadingStatistics(SCryEngineStats& stats);
+	void ExportLoadingStatistics(SCryEngineStats& stats);
+	void ExportFPSBuckets();
+	void ExportPhysEntStatistics(SCryEngineStats& stats);
+	void ExportEntitiesStatistics(SCryEngineStats& stats);
+
+	void InitExcelWorkbook(XmlNodeRef Workbook);
+>>>>>>> upstream/stabilisation
 
 	XmlNodeRef NewWorksheet(const char* name);
 	void       FreezeFirstRow();
@@ -1968,7 +2555,11 @@ void CStatsToExcelExporter::AutoFilter(int nRow, int nNumColumns)
 	options->setAttr("xmlns", "urn:schemas-microsoft-com:office:excel");
 	string range;
 	range.Format("R%dC1:R%dC%d", nRow, nRow, nNumColumns);
+<<<<<<< HEAD
 	options->setAttr("x:Range", range);  // x:Range="R1C1:R1C8"
+=======
+	options->setAttr("x:Range", range);   // x:Range="R1C1:R1C8"
+>>>>>>> upstream/stabilisation
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1998,7 +2589,11 @@ void CStatsToExcelExporter::AddCell_SumOfRows(int nRows)
 void CStatsToExcelExporter::AddCell(float number)
 {
 	XmlNodeRef cell = m_CurrRow->newChild("Cell");
+<<<<<<< HEAD
 	cell->setAttr("ss:StyleID", "s23"); // Centered
+=======
+	cell->setAttr("ss:StyleID", "s23");  // Centered
+>>>>>>> upstream/stabilisation
 	XmlNodeRef data = cell->newChild("Data");
 	data->setAttr("ss:Type", "Number");
 	char str[128];
@@ -2011,7 +2606,11 @@ void CStatsToExcelExporter::AddCell(float number)
 void CStatsToExcelExporter::AddCell(int number)
 {
 	XmlNodeRef cell = m_CurrRow->newChild("Cell");
+<<<<<<< HEAD
 	cell->setAttr("ss:StyleID", "s22"); // Centered
+=======
+	cell->setAttr("ss:StyleID", "s22");  // Centered
+>>>>>>> upstream/stabilisation
 	XmlNodeRef data = cell->newChild("Data");
 	data->setAttr("ss:Type", "Number");
 	char str[128];
@@ -2024,7 +2623,11 @@ void CStatsToExcelExporter::AddCell(int number)
 void CStatsToExcelExporter::AddCell(uint32 number)
 {
 	XmlNodeRef cell = m_CurrRow->newChild("Cell");
+<<<<<<< HEAD
 	cell->setAttr("ss:StyleID", "s22"); // Centered
+=======
+	cell->setAttr("ss:StyleID", "s22");  // Centered
+>>>>>>> upstream/stabilisation
 	XmlNodeRef data = cell->newChild("Data");
 	data->setAttr("ss:Type", "Number");
 	char str[128];
@@ -2180,7 +2783,11 @@ void CStatsToExcelExporter::ExportSummary(SCryEngineStats& stats)
 	char sVersion[128];
 	ver.ToString(sVersion);
 	string levelName = "no_level";
+<<<<<<< HEAD
 	ICVar* sv_map = gEnv->pConsole->GetCVar("sv_map");
+=======
+	ICVar* sv_map    = gEnv->pConsole->GetCVar("sv_map");
+>>>>>>> upstream/stabilisation
 	if (sv_map)
 		levelName = sv_map->GetString();
 
@@ -2189,11 +2796,19 @@ void CStatsToExcelExporter::ExportSummary(SCryEngineStats& stats)
 	AddRow();
 	AddCell(string("Level ") + levelName);
 	AddRow();
+<<<<<<< HEAD
 	#if CRY_PLATFORM_WINDOWS && CRY_PLATFORM_64BIT
 	AddCell("Running in 64bit version");
 	#else
 	AddCell("Running in 32bit version");
 	#endif
+=======
+#if CRY_PLATFORM_WINDOWS && CRY_PLATFORM_64BIT
+	AddCell("Running in 64bit version");
+#else
+	AddCell("Running in 32bit version");
+#endif
+>>>>>>> upstream/stabilisation
 	AddRow();
 	AddCell("Level Load Time (sec):");
 	AddCell((int)stats.fLevelLoadTime);
@@ -2480,7 +3095,11 @@ void CStatsToExcelExporter::ExportAllLoadingStatistics(SCryEngineStats& stats)
 	ExportLoadingStatistics(stats);
 }
 
+<<<<<<< HEAD
 struct CrySizerNaive : ICrySizer
+=======
+struct CrySizerNaive:ICrySizer
+>>>>>>> upstream/stabilisation
 {
 	CrySizerNaive() : m_count(0), m_size(0) {}
 	virtual void                Release()        {}
@@ -2504,7 +3123,11 @@ struct CrySizerNaive : ICrySizer
 //////////////////////////////////////////////////////////////////////////
 void CStatsToExcelExporter::ExportLoadingStatistics(SCryEngineStats& stats)
 {
+<<<<<<< HEAD
 	#if defined(ENABLE_LOADING_PROFILER)
+=======
+#if defined(ENABLE_LOADING_PROFILER)
+>>>>>>> upstream/stabilisation
 	NewWorksheet("Load Stats");
 
 	FreezeFirstRow();
@@ -2563,7 +3186,11 @@ void CStatsToExcelExporter::ExportLoadingStatistics(SCryEngineStats& stats)
 		AddCell(an.callsTotal);
 		AddCell((float)an.memorySize);
 		AddCell((float)an.selfInfo.m_dOperationSize / 1024.0f);
+<<<<<<< HEAD
 		float bandwithSelf = an.selfTime > 0. ? (float)(an.selfInfo.m_dOperationSize / an.selfTime / 1024.0) : 0.0f;
+=======
+		float bandwithSelf  = an.selfTime > 0. ? (float)(an.selfInfo.m_dOperationSize / an.selfTime / 1024.0) : 0.0f;
+>>>>>>> upstream/stabilisation
 		float bandwithTotal = an.totalTime > 0. ? (float)(an.totalInfo.m_dOperationSize / an.totalTime / 1024.0) : 0.0f;
 		AddCell(bandwithSelf);
 		AddCell(bandwithTotal);
@@ -2574,7 +3201,11 @@ void CStatsToExcelExporter::ExportLoadingStatistics(SCryEngineStats& stats)
 		AddCell(an.totalInfo.m_nFileReadCount);
 		AddCell(an.totalInfo.m_nSeeksCount);
 	}
+<<<<<<< HEAD
 	#endif
+=======
+#endif
+>>>>>>> upstream/stabilisation
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2880,7 +3511,11 @@ void CStatsToExcelExporter::ExportProfilerStatistics(SCryEngineStats& stats)
 	for (int i = 0; i < nRows; i++)
 	{
 		SCryEngineStats::SPeakProfilerInfo& peak = stats.peaks[i];
+<<<<<<< HEAD
 		SCryEngineStats::ProfilerInfo& pi = stats.peaks[i].profiler;
+=======
+		SCryEngineStats::ProfilerInfo& pi        = stats.peaks[i].profiler;
+>>>>>>> upstream/stabilisation
 		AddRow();
 		AddCell(pi.m_module);
 		AddCell(pi.m_name);
@@ -3110,7 +3745,11 @@ void CStatsToExcelExporter::ExportDependencies(CResourceCollector& stats)
 		std::set<CResourceCollector::SDependencyPair>::const_iterator it, end = stats.m_Dependencies.end();
 
 		uint32 dwCurrentAssetID = 0xffffffff;
+<<<<<<< HEAD
 		uint32 dwSumFile = 0, dwSum = 0;
+=======
+		uint32 dwSumFile        = 0, dwSum = 0;
+>>>>>>> upstream/stabilisation
 
 		for (it = stats.m_Dependencies.begin();; ++it)
 		{
@@ -3132,7 +3771,11 @@ void CStatsToExcelExporter::ExportDependencies(CResourceCollector& stats)
 				}
 
 				dwSumFile = 0;
+<<<<<<< HEAD
 				dwSum = 0;
+=======
+				dwSum     = 0;
+>>>>>>> upstream/stabilisation
 
 				if (it == end)
 					break;
@@ -3174,7 +3817,11 @@ void CStatsToExcelExporter::ExportDependencies(CResourceCollector& stats)
 		std::set<CResourceCollector::SDependencyPair>::const_iterator it, end = stats.m_Dependencies.end();
 
 		uint32 dwCurrentAssetID = 0xffffffff;
+<<<<<<< HEAD
 		uint32 dwSumFile = 0, dwSum = 0;
+=======
+		uint32 dwSumFile        = 0, dwSum = 0;
+>>>>>>> upstream/stabilisation
 
 		for (it = stats.m_Dependencies.begin();; ++it)
 		{
@@ -3190,7 +3837,11 @@ void CStatsToExcelExporter::ExportDependencies(CResourceCollector& stats)
 				}
 
 				dwSumFile = 0;
+<<<<<<< HEAD
 				dwSum = 0;
+=======
+				dwSum     = 0;
+>>>>>>> upstream/stabilisation
 
 				if (it == end)
 					break;
@@ -3400,7 +4051,11 @@ void CStatsToExcelExporter::ExportMaterials(SCryEngineStats& stats)
 				bool isMaterialRowAdded = false;
 
 				IShader* pShader = pSubMat->GetShaderItem().m_pShader;
+<<<<<<< HEAD
 				int nTech = max(0, pSubMat->GetShaderItem().m_nTechnique);
+=======
+				int nTech        = max(0, pSubMat->GetShaderItem().m_nTechnique);
+>>>>>>> upstream/stabilisation
 
 				if (!pShader)
 					continue;
@@ -3515,7 +4170,11 @@ void CStatsToExcelExporter::ExportTextures(SCryEngineStats& stats)
 		else
 		{
 			const char* pTexDesc = "Static";
+<<<<<<< HEAD
 			uint32 texFlags = pTexture->GetFlags();
+=======
+			uint32 texFlags      = pTexture->GetFlags();
+>>>>>>> upstream/stabilisation
 			if (texFlags & FT_USAGE_RENDERTARGET)
 				pTexDesc = "Render Target";
 			else if (texFlags & FT_USAGE_DYNAMIC)
@@ -3651,7 +4310,11 @@ void CStatsToExcelExporter::ExportMemStats(SCryEngineStats& stats)
 //////////////////////////////////////////////////////////////////////////
 
 void CStatsToExcelExporter::ExportStreamingInfo(
+<<<<<<< HEAD
   SStreamEngineStatistics& stats)
+=======
+	SStreamEngineStatistics& stats)
+>>>>>>> upstream/stabilisation
 {
 	NewWorksheet("Streaming Info");
 
@@ -3726,11 +4389,19 @@ void CStatsToExcelExporter::ExportStreamingInfo(
 	AddRow();
 	AddCell("Texture - Average Read Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeTexture].nTotalReadBytes /
+<<<<<<< HEAD
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeTexture].nTotalStreamingRequestCount) / 1024));
 	AddRow();
 	AddCell("Texture - Average Request Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeTexture].nTotalRequestDataSize /
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeTexture].nTotalStreamingRequestCount) / 1024));
+=======
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeTexture].nTotalStreamingRequestCount) / 1024));
+	AddRow();
+	AddCell("Texture - Average Request Size (KB):", CELL_BOLD);
+	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeTexture].nTotalRequestDataSize /
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeTexture].nTotalStreamingRequestCount) / 1024));
+>>>>>>> upstream/stabilisation
 
 	AddRow();
 
@@ -3753,11 +4424,19 @@ void CStatsToExcelExporter::ExportStreamingInfo(
 	AddRow();
 	AddCell("Geometry - Average Read Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeGeometry].nTotalReadBytes /
+<<<<<<< HEAD
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeGeometry].nTotalStreamingRequestCount) / 1024));
 	AddRow();
 	AddCell("Geometry - Average Request Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeGeometry].nTotalRequestDataSize /
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeGeometry].nTotalStreamingRequestCount) / 1024));
+=======
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeGeometry].nTotalStreamingRequestCount) / 1024));
+	AddRow();
+	AddCell("Geometry - Average Request Size (KB):", CELL_BOLD);
+	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeGeometry].nTotalRequestDataSize /
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeGeometry].nTotalStreamingRequestCount) / 1024));
+>>>>>>> upstream/stabilisation
 
 	AddRow();
 
@@ -3780,11 +4459,19 @@ void CStatsToExcelExporter::ExportStreamingInfo(
 	AddRow();
 	AddCell("Terrain - Average Read Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeTerrain].nTotalReadBytes /
+<<<<<<< HEAD
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeTerrain].nTotalStreamingRequestCount) / 1024));
 	AddRow();
 	AddCell("Terrain - Average Request Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeTerrain].nTotalRequestDataSize /
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeTerrain].nTotalStreamingRequestCount) / 1024));
+=======
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeTerrain].nTotalStreamingRequestCount) / 1024));
+	AddRow();
+	AddCell("Terrain - Average Request Size (KB):", CELL_BOLD);
+	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeTerrain].nTotalRequestDataSize /
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeTerrain].nTotalStreamingRequestCount) / 1024));
+>>>>>>> upstream/stabilisation
 
 	AddRow();
 
@@ -3807,11 +4494,19 @@ void CStatsToExcelExporter::ExportStreamingInfo(
 	AddRow();
 	AddCell("Animation - Average Read Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeAnimation].nTotalReadBytes /
+<<<<<<< HEAD
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeAnimation].nTotalStreamingRequestCount) / 1024));
 	AddRow();
 	AddCell("Animation - Average Request Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeAnimation].nTotalRequestDataSize /
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeAnimation].nTotalStreamingRequestCount) / 1024));
+=======
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeAnimation].nTotalStreamingRequestCount) / 1024));
+	AddRow();
+	AddCell("Animation - Average Request Size (KB):", CELL_BOLD);
+	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeAnimation].nTotalRequestDataSize /
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeAnimation].nTotalStreamingRequestCount) / 1024));
+>>>>>>> upstream/stabilisation
 
 	AddRow();
 
@@ -3834,11 +4529,19 @@ void CStatsToExcelExporter::ExportStreamingInfo(
 	AddRow();
 	AddCell("Sound - Average Read Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeSound].nTotalReadBytes /
+<<<<<<< HEAD
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeSound].nTotalStreamingRequestCount) / 1024));
 	AddRow();
 	AddCell("Sound - Average Request Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeSound].nTotalRequestDataSize /
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeSound].nTotalStreamingRequestCount) / 1024));
+=======
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeSound].nTotalStreamingRequestCount) / 1024));
+	AddRow();
+	AddCell("Sound - Average Request Size (KB):", CELL_BOLD);
+	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeSound].nTotalRequestDataSize /
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeSound].nTotalStreamingRequestCount) / 1024));
+>>>>>>> upstream/stabilisation
 
 	AddRow();
 
@@ -3861,11 +4564,19 @@ void CStatsToExcelExporter::ExportStreamingInfo(
 	AddRow();
 	AddCell("Shader - Average Read Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeShader].nTotalReadBytes /
+<<<<<<< HEAD
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeShader].nTotalStreamingRequestCount) / 1024));
 	AddRow();
 	AddCell("Shader - Average Request Size (KB):", CELL_BOLD);
 	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeShader].nTotalRequestDataSize /
 	                 max((uint32)1, stats.typeInfo[eStreamTaskTypeShader].nTotalStreamingRequestCount) / 1024));
+=======
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeShader].nTotalStreamingRequestCount) / 1024));
+	AddRow();
+	AddCell("Shader - Average Request Size (KB):", CELL_BOLD);
+	AddCell((uint32)(stats.typeInfo[eStreamTaskTypeShader].nTotalRequestDataSize /
+	  max((uint32)1, stats.typeInfo[eStreamTaskTypeShader].nTotalStreamingRequestCount) / 1024));
+>>>>>>> upstream/stabilisation
 }
 
 void CStatsToExcelExporter::ExportAnimationInfo(SCryEngineStats& stats)
@@ -4056,7 +4767,7 @@ void CStatsToExcelExporter::ExportTimeDemoInfo()
 	AddCell(pTD->lastPlayedTotalTime);
 	AddRow();
 	AddCell("Num Frames:", CELL_BOLD);
-	AddCell(pTD->nFrameCount);
+	AddCell((int)pTD->frames.size());
 	AddRow();
 	AddCell("Average FPS:", CELL_BOLD);
 	AddCell(pTD->lastAveFrameRate);
@@ -4072,10 +4783,10 @@ void CStatsToExcelExporter::ExportTimeDemoInfo()
 	AddCell(pTD->maxFPS_Frame);
 	AddRow();
 	AddCell("Average Tri/Sec:", CELL_BOLD);
-	AddCell((uint32)(pTD->nTotalPolysPlayed / pTD->lastPlayedTotalTime));
+	AddCell((uint32)((float)pTD->nTotalPolysPlayed / pTD->lastPlayedTotalTime));
 	AddRow();
 	AddCell("Average Tri/Frame:", CELL_BOLD);
-	AddCell((uint32)(pTD->nTotalPolysPlayed / pTD->nFrameCount));
+	AddCell((uint32)((float)pTD->nTotalPolysPlayed / pTD->frames.size()));
 	AddRow();
 	AddCell("Played/Recorded Tris ratio:", CELL_BOLD);
 	AddCell(pTD->nTotalPolysRecorded ? (float)pTD->nTotalPolysPlayed / pTD->nTotalPolysRecorded : 0.f);
@@ -4099,13 +4810,13 @@ void CStatsToExcelExporter::ExportTimeDemoInfo()
 
 	AddRow();
 
-	for (int i = 0; i < pTD->nFrameCount; i++)
+	for (int i = 0; i < pTD->frames.size(); i++)
 	{
 		AddRow();
 		AddCell(i);
-		AddCell(pTD->pFrames[i].fFrameRate);
-		AddCell(pTD->pFrames[i].nPolysRendered);
-		AddCell(pTD->pFrames[i].nDrawCalls);
+		AddCell(pTD->frames[i].fFrameRate);
+		AddCell(pTD->frames[i].nPolysRendered);
+		AddCell(pTD->frames[i].nDrawCalls);
 	}
 }
 
@@ -4148,10 +4859,14 @@ void CStatsToExcelExporter::ExportFPSBuckets()
 //////////////////////////////////////////////////////////////////////////
 static void SaveLevelStats(IConsoleCmdArgs* pArgs)
 {
+<<<<<<< HEAD
 	#if !defined(_RELEASE)
+=======
+#if !defined(_RELEASE)
+>>>>>>> upstream/stabilisation
 	CryLog("Execute SaveLevelStats");
 
-	CDebugAllowFileAccess allowFileAccess;
+	SCOPED_ALLOW_FILE_ACCESS_FROM_THIS_THREAD();
 
 	{
 		string levelName = "no_level";
@@ -4196,10 +4911,17 @@ static void SaveLevelStats(IConsoleCmdArgs* pArgs)
 		}
 
 	}
+<<<<<<< HEAD
 	#endif
 }
 
 #else // (!defined (_RELEASE) || defined(ENABLE_PROFILING_CODE))
+=======
+#endif
+}
+
+#else  // (!defined (_RELEASE) || defined(ENABLE_PROFILING_CODE))
+>>>>>>> upstream/stabilisation
 
 bool QueryModuleMemoryInfo(SCryEngineStatsModuleInfo& moduleInfo, int index)
 {
@@ -4212,8 +4934,14 @@ void RegisterEngineStatistics()
 {
 #if (!defined (_RELEASE) || defined(ENABLE_PROFILING_CODE))
 	REGISTER_COMMAND("SaveLevelStats", SaveLevelStats, 0,
+<<<<<<< HEAD
 	                 "Calling this command creates multiple XML files with level statistics.\n"
 	                 "The data includes file usage, dependencies, size in more/disk.\n"
 	                 "The files can be loaded in Excel.");
+=======
+	  "Calling this command creates multiple XML files with level statistics.\n"
+	  "The data includes file usage, dependencies, size in more/disk.\n"
+	  "The files can be loaded in Excel.");
+>>>>>>> upstream/stabilisation
 #endif
 }

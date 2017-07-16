@@ -105,16 +105,12 @@ void CCentralInterestManager::Reset()
 			CryLog("Registering CentralInterestManager with EntitySystem");
 			gEnv->pEntitySystem->AddSink(this, IEntitySystem::OnSpawn | IEntitySystem::OnRemove, 0);
 			m_bEntityEventListenerInstalled = true;
-
-			gEnv->pEntitySystem->GetIEntityPoolManager()->AddListener(this, "CCentralInterestManager", (IEntityPoolListener::EntityPreparedFromPool | IEntityPoolListener::EntityReturnedToPool));
 		}
 		else
 		{
 			CryLog("Unregistering CentralInterestManager from EntitySystem");
 			gEnv->pEntitySystem->RemoveSink(this);
 			m_bEntityEventListenerInstalled = false;
-
-			gEnv->pEntitySystem->GetIEntityPoolManager()->RemoveListener(this);
 		}
 	}
 }
@@ -131,15 +127,9 @@ bool CCentralInterestManager::Enable(bool bEnable)
 		{
 			if (!m_pPersistentDebug)
 			{
-				IGameFramework* pGameFramework(NULL);
-				if (gEnv->pGame)
+				if (gEnv->pGameFramework)
 				{
-					pGameFramework = gEnv->pGame->GetIGameFramework();
-				}
-
-				if (pGameFramework)
-				{
-					m_pPersistentDebug = pGameFramework->GetIPersistantDebug();
+					m_pPersistentDebug = gEnv->pGameFramework->GetIPersistantDebug();
 				}
 			}
 		}
@@ -517,7 +507,7 @@ void CCentralInterestManager::AddDebugTag(EntityId entityId, const char* szStrin
 
 		if (!m_pPersistentDebug)
 		{
-			m_pPersistentDebug = gEnv->pGame->GetIGameFramework()->GetIPersistantDebug();
+			m_pPersistentDebug = gEnv->pGameFramework->GetIPersistantDebug();
 		}
 
 		if (fTime < 0.f)
@@ -709,24 +699,6 @@ bool CCentralInterestManager::OnRemove(IEntity* pEntity)
 	}
 
 	return true;
-}
-
-//------------------------------------------------------------------------------------------------------------------------
-
-void CCentralInterestManager::OnEntityReturnedToPool(EntityId entityId, IEntity* pEntity)
-{
-	// Remove old if it exists
-	DeregisterObject(pEntity);
-}
-
-//------------------------------------------------------------------------------------------------------------------------
-
-void CCentralInterestManager::OnEntityPreparedFromPool(EntityId entityId, IEntity* pEntity)
-{
-	// Handle entity again as if it was spawned
-	SEntitySpawnParams temp;
-	OnSpawn(pEntity, temp);
-	RegisterObject(pEntity);
 }
 
 //------------------------------------------------------------------------------------------------------------------------

@@ -32,7 +32,8 @@ struct SPostEffectsUtils
 	static void Release();
 
 	// Create a render target
-	static bool CreateRenderTarget(const char* szTexName, CTexture*& pTex, int iWidth, int iHeight, const ColorF& cClear, bool bUseAlpha, bool bMipMaps = 0, ETEX_Format pTexFormat = eTF_R8G8B8A8, int nCustomID = -1, int nFlags = 0);
+	static bool GetOrCreateRenderTarget(const char* szTexName, CTexture*& pTex, int iWidth, int iHeight, const ColorF& cClear, bool bUseAlpha, bool bMipMaps = 0, ETEX_Format pTexFormat = eTF_R8G8B8A8, int nCustomID = -1, int nFlags = 0);
+	static bool GetOrCreateDepthStencil(const char* szTexName, CTexture*& pTex, int iWidth, int iHeight, const ColorF& cClear, bool bUseAlpha, bool bMipMaps = 0, ETEX_Format pTexFormat = eTF_R8G8B8A8, int nCustomID = -1, int nFlags = 0);
 
 	////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Utilities to void some code duplication
@@ -52,6 +53,12 @@ struct SPostEffectsUtils
 
 	static void GetFullScreenTri(SVF_P3F_C4B_T2F pResult[3], int nTexWidth, int nTexHeight, float z = 0, const RECT* pSrcRegion = NULL);
 	static void GetFullScreenTriWPOS(SVF_P3F_T2F_T3F pResult[3], int nTexWidth, int nTexHeight, float z = 0, const RECT* pSrcRegion = NULL);
+<<<<<<< HEAD
+=======
+
+	static void GetFullScreenQuad(SVF_P3F_C4B_T2F pResult[4], int nTexWidth, int nTexHeight, float z = 0, const RECT* pSrcRegion = NULL);
+	static void GetFullScreenQuadWPOS(SVF_P3F_T2F_T3F pResult[4], int nTexWidth, int nTexHeight, float z = 0, const RECT* pSrcRegion = NULL);
+>>>>>>> upstream/stabilisation
 
 	// Draws fullscreen aligned triangle
 	static void DrawFullScreenTri(int nTexWidth, int nTexHeight, float z = 0, const RECT* pSrcRegion = NULL);
@@ -69,7 +76,7 @@ struct SPostEffectsUtils
 	                     const Vec2& uvA = Vec2(0, 0), const Vec2& uvB = Vec2(0, 1), const Vec2& uvC = Vec2(1, 1), const Vec2& uvD = Vec2(1, 0));
 
 	// Sets a texture
-	static void SetTexture(CTexture* pTex, int nStage, int nFilter = FILTER_LINEAR, int nClamp = 1, bool bSRGBLookup = false, DWORD dwBorderColor = 0);
+	static void SetTexture(CTexture* pTex, int nStage, int nFilter = FILTER_LINEAR, ESamplerAddressMode eMode = eSamplerAddressMode_Clamp, bool bSRGBLookup = false, DWORD dwBorderColor = 0);
 
 	// Copy a texture into other texture
 	virtual void StretchRect(CTexture* pSrc, CTexture*& pDst, bool bClearAlpha = false, bool bDecodeSrcRGBK = false, bool bEncodeDstRGBK = false, bool bBigDownsample = false, EDepthDownsample depthDownsampleMode = eDepthDownsample_None, bool bBindMultisampled = false, const RECT* srcRegion = NULL) = 0;
@@ -82,6 +89,8 @@ struct SPostEffectsUtils
 
 	// Clear active render target region
 	static void ClearScreen(float r, float g, float b, float a);
+
+	static void GetFrustumCorners(Vec3& vRT, Vec3& vLT, Vec3& vLB, Vec3& vRB, const CRenderCamera& rc, bool bMirrorCull);
 
 	static void UpdateFrustumCorners();
 	static void UpdateOverscanBorderAspectRatio();
@@ -228,8 +237,9 @@ public:
 	static float          m_fWaterLevel;
 
 	// frustrum corners
-	static Vec3 m_vRT, m_vLT, m_vLB, m_vRB;
-	static int  m_nFrustrumFrameID;
+	static Vec3          m_vRT, m_vLT, m_vLB, m_vRB;
+	static int           m_nFrustrumFrameID;
+	static CRenderCamera m_cachedRenderCamera;
 
 protected:
 

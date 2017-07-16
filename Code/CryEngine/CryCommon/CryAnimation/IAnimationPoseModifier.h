@@ -196,6 +196,21 @@ DECLARE_SHARED_POINTERS(IAnimationPoseModifier);
 
 //
 
+struct IAnimationPoseModifierSetup :
+	public IAnimationSerializable
+{
+	CRYINTERFACE_DECLARE(IAnimationPoseModifierSetup, 0x59b4f3ae61974bee, 0xba60d361b7975e69)
+
+	// <interfuscator:shuffle>
+	virtual IAnimationPoseModifier* GetEntry(int index) = 0;
+	virtual int GetEntryCount() = 0;
+	// </interfuscator:shuffle>
+};
+
+DECLARE_SHARED_POINTERS(IAnimationPoseModifierSetup);
+
+//
+
 struct IAnimationOperatorQueue :
 	public IAnimationPoseModifier
 {
@@ -324,13 +339,13 @@ struct IAnimationPoseAligner :
 	CRYINTERFACE_DECLARE(IAnimationPoseAligner, 0x5c852e726d447cb0, 0x9f7f5c80c41b429a);
 
 	// <interfuscator:shuffle>
-	virtual bool Initialize(IEntity& entity) = 0;
+	virtual bool Initialize(IEntity& entity, ICharacterInstance* pCharacter) = 0;
 	virtual void Clear() = 0;
 
 	virtual void SetRootOffsetEnable(bool bEnable) = 0;
 	virtual void SetBlendWeight(float weight) = 0;
 
-	virtual void Update(const QuatT& location, const float time) = 0;
+	virtual void Update(ICharacterInstance* pCharacter, const QuatT& location, const float time) = 0;
 	// </interfuscator:shuffle>
 };
 

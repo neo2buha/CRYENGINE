@@ -211,7 +211,6 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 
 	int32 numLODs = 1;
 	int index = 0;
-	Vec3 trans = rRenderMat34.GetTranslation();
 	float color[4] = { 1, 1, 1, 1 };
 
 	int nTris = m_pIRenderMesh->GetVerticesCount();
@@ -221,6 +220,14 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 	string shortName = PathUtil::GetFile(pCSkel->GetModelFilePath());
 
 	IRenderAuxGeom* pAuxGeom = g_pIRenderer->GetIRenderAuxGeom();
+
+	// Convert "camera space" to "world space"
+	Matrix34 tm = rRenderMat34;	
+	if (pObj->m_ObjFlags & FOB_NEAREST)
+	{
+		tm.AddTranslation(gEnv->pRenderer->GetCamera().GetPosition());
+	}
+	Vec3 trans = tm.GetTranslation();
 
 	if (nMats)
 	{
@@ -234,9 +241,11 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 
 	switch (DebugMode)
 	{
-	case 1:
-		g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%s\n%d LOD(%i\\%i)", shortName.c_str(), nTris, nLOD + 1, numLODs);
-		pAuxGeom->DrawAABB(pCSkel->m_ModelAABB, rRenderMat34, false, ColorB(0, 255, 255, 128), eBBD_Faceted);
+		case 1:
+		{
+			IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%s\n%d LOD(%i\\%i)", shortName.c_str(), nTris, nLOD + 1, numLODs);
+			pAuxGeom->DrawAABB(pCSkel->m_ModelAABB, rRenderMat34, false, ColorB(0, 255, 255, 128), eBBD_Faceted);
+		}
 		break;
 	case 2:
 		{
@@ -264,7 +273,7 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 			pObj->m_II.m_AmbColor = ColorF(clr.r /*/155.0f*/, clr.g /*/155.0f*/, clr.b /*/155.0f*/, 1);
 
 			if (!bNoText)
-				g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%d", nTris);
+				IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%d", nTris);
 
 		}
 		break;
@@ -309,7 +318,7 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 			}
 
 			if (numLODs > 1 && !bNoText)
-				g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%d/%d", nLOD + 1, numLODs);
+				IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%d/%d", nLOD + 1, numLODs);
 		}
 		break;
 
@@ -317,7 +326,7 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 		if (m_pIRenderMesh)
 		{
 			int nTexMemUsage = m_pIRenderMesh->GetTextureMemoryUsage(pMaterial);
-			g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%d", nTexMemUsage / 1024);
+			IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%d", nTexMemUsage / 1024);
 		}
 
 		break;
@@ -343,13 +352,13 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 			pObj->m_II.m_AmbColor = ColorF(clr.r, clr.g, clr.b, 1);
 
 			if (!bNoText)
-				g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%d", nRenderMats);
+				IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%d", nRenderMats);
 		}
 		break;
 
 	case 6:
 		{
-			g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%d,%d,%d,%d",
+		IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%d,%d,%d,%d",
 			                          (int)(RendParams.AmbientColor.r * 255.0f), (int)(RendParams.AmbientColor.g * 255.0f), (int)(RendParams.AmbientColor.b * 255.0f), (int)(RendParams.AmbientColor.a * 255.0f)
 			                          );
 		}
@@ -359,7 +368,7 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 		if (m_pIRenderMesh)
 		{
 			int nTexMemUsage = m_pIRenderMesh->GetTextureMemoryUsage(pMaterial);
-			g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%d,%d,%d", nTris, nRenderMats, nTexMemUsage / 1024);
+			IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%d,%d,%d", nTris, nRenderMats, nTexMemUsage / 1024);
 		}
 		break;
 	case 21:
@@ -371,7 +380,7 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 			trans = (bbox.max + bbox.min) / 2;
 			Vec3 pos = g_pI3DEngine->GetRenderingCamera().GetPosition();
 			float fEntDistance = sqrt_tpl(Distance::Point_AABBSq(pos, bbox)); // activate objects before they get really visible
-			g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%.2f", fEntDistance);
+			IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%.2f", fEntDistance);
 		}
 		break;
 
@@ -384,7 +393,7 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 			trans = (bbox.max + bbox.min) / 2;
 			Vec3 pos = g_pI3DEngine->GetRenderingCamera().GetPosition();
 			float fEntDistance = sqrt_tpl(Distance::Point_AABBSq(pos, bbox)); // activate objects before they get really visible
-			g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%.2f (%s)", fEntDistance, m_pIRenderMesh->GetSourceName());
+			IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%.2f (%s)", fEntDistance, m_pIRenderMesh->GetSourceName());
 		}
 		break;
 
@@ -411,7 +420,7 @@ void CModelMesh::DrawDebugInfo(CDefaultSkeleton* pCSkel, int nLOD, const Matrix3
 			if (nPhysTrisCount == 0)
 				color[3] = 0.1f;
 
-			g_pIRenderer->DrawLabelEx(trans, 1.3f, color, true, true, "%d", nPhysTrisCount);
+			IRenderAuxText::DrawLabelExF(trans, 1.3f, color, true, true, "%d", nPhysTrisCount);
 		}
 		break;
 

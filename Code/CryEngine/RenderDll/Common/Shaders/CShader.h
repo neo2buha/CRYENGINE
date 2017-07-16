@@ -7,10 +7,11 @@
 #include "CShaderBin.h"
 #include "ShaderSerialize.h"
 #include "ShaderCache.h"
+#include "ShaderComponents.h" // ECGParam
 #include "../ResFileLookupDataMan.h"
 
 struct SRenderBuf;
-class CRendElementBase;
+class CRenderElement;
 struct SEmitter;
 struct SParticleInfo;
 struct SPartMoveStage;
@@ -254,6 +255,8 @@ private:
 	bool           CheckAllFilesAreWritable(const char* szDir) const;
 #endif
 
+	static void    FilterShaderCacheGenListForOrbis(FXShaderCacheCombinations& combinations);
+
 public:
 	char*                 m_pCurScript;
 	CShaderManBin         m_Bin;
@@ -289,7 +292,10 @@ public:
 	bool                       m_bInitialized;
 	bool                       m_bLoadedSystem;
 
+	string                     m_ShadersGamePath;
+	string                     m_ShadersGameExtPath;
 	const char*                m_ShadersPath;
+	const char*                m_ShadersExtPath;
 	const char*                m_ShadersCache;
 	const char*                m_ShadersFilter;
 	const char*                m_ShadersMergeCachePath;
@@ -324,7 +330,6 @@ public:
 	static CShader*              s_ShaderTreeSprites;
 	static CShader*              s_ShaderScaleForm;
 	static CShader*              s_ShaderStars;
-	static CShader*              s_ShaderLPV;
 	static CShader*              s_ShaderShadowBlur;
 	static CShader*              s_ShaderShadowMaskGen;
 #if defined(FEATURE_SVO_GI)
@@ -343,6 +348,7 @@ public:
 	static CShader*              s_ShaderDXTCompress;
 	static CShader*              s_ShaderStereo;
 	static CShader*              s_ShaderClouds;
+	static CShader*              s_ShaderMobileComposition;
 
 	const SInputShaderResources* m_pCurInputResources;
 	SShaderGen*                  m_pGlobalExt;
@@ -359,7 +365,6 @@ public:
 
 	EShaderCacheMode             m_eCacheMode;
 
-	bool                         m_bActivatePhase;
 	char*                        m_szShaderPrecache;
 
 	FXShaderCacheCombinations    m_ShaderCacheCombinations[2];
@@ -543,10 +548,6 @@ public:
 	const char*       mfGetLevelListName() const;
 	void              mfExportShaders();
 
-	bool              mfReleasePreactivatedShaderData();
-	bool              mfPreactivateShaders2(const char* szPak, const char* szPath, bool bPersistent, const char* szBindRoot);
-	bool              mfPreactivate2(CResFileLookupDataMan& LevelLookup, string szPathPerLevel, string szPathGlobal, bool bVS, bool bPersistent);
-
 	bool              mfPreloadBinaryShaders();
 
 	bool              LoadShaderStartupCache();
@@ -572,7 +573,7 @@ public:
 
 #if CRY_PLATFORM_WINDOWS && CRY_PLATFORM_64BIT
 	#pragma warning( push )           //AMD Port
-	#pragma warning( disable : 4267 )     // conversion from 'size_t' to 'XXX', possible loss of data
+	#pragma warning( disable : 4267 ) // conversion from 'size_t' to 'XXX', possible loss of data
 #endif
 
 	int Size()
@@ -600,9 +601,9 @@ public:
 };
 
 #if CRY_PLATFORM_WINDOWS && CRY_PLATFORM_64BIT
-	#pragma warning( pop )            //AMD Port
+	#pragma warning( pop ) //AMD Port
 #endif
 
 //=====================================================================
 
-#endif  // __CSHADER_H__
+#endif                   // __CSHADER_H__

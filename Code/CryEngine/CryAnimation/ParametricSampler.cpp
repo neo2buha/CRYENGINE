@@ -1200,8 +1200,8 @@ int SParametricSamplerInternal::GetWeights1D(f32 fDesiredParameter, const Global
 	{
 		if (rLMG.m_arrBSAnnotations[f].num == 2)
 		{
-			int32 i0 = rLMG.m_arrBSAnnotations[f].idx0;
-			int32 i1 = rLMG.m_arrBSAnnotations[f].idx1;
+			int32 i0 = rLMG.m_arrBSAnnotations[f].idx[0];
+			int32 i1 = rLMG.m_arrBSAnnotations[f].idx[1];
 			f32 x0 = rLMG.m_arrParameter[i0].m_Para.x;
 			f32 x1 = rLMG.m_arrParameter[i1].m_Para.x;
 
@@ -1269,8 +1269,8 @@ int SParametricSamplerInternal::GetWeights1D(f32 fDesiredParameter, const Global
 		{
 			if (rLMG.m_arrBSAnnotations[f].num == 2)
 			{
-				int32 i0 = rLMG.m_arrBSAnnotations[f].idx0;
-				int32 i1 = rLMG.m_arrBSAnnotations[f].idx1;
+				int32 i0 = rLMG.m_arrBSAnnotations[f].idx[0];
+				int32 i1 = rLMG.m_arrBSAnnotations[f].idx[1];
 				f32 x0 = rLMG.m_arrParameter[i0].m_Para.x;
 				f32 x1 = rLMG.m_arrParameter[i1].m_Para.x;
 
@@ -1306,8 +1306,8 @@ int SParametricSamplerInternal::GetWeights1D(f32 fDesiredParameter, const Global
 
 		if (nLineNo != -1)
 		{
-			int32 i0 = rLMG.m_arrBSAnnotations[nLineNo].idx0;
-			int32 i1 = rLMG.m_arrBSAnnotations[nLineNo].idx1;
+			int32 i0 = rLMG.m_arrBSAnnotations[nLineNo].idx[0];
+			int32 i1 = rLMG.m_arrBSAnnotations[nLineNo].idx[1];
 			f32 x0 = rLMG.m_arrParameter[i0].m_Para.x;
 			f32 x1 = rLMG.m_arrParameter[i1].m_Para.x;
 #ifdef BLENDSPACE_VISUALIZATION
@@ -1369,10 +1369,9 @@ int SParametricSamplerInternal::GetWeights2D(const Vec2& vDesiredParameter, cons
 		for (uint32 b = 0; b < numBlocks; b++)
 		{
 			uint32 numPoints = rLMG.m_arrBSAnnotations[b].num;
-			const uint8* indices = &rLMG.m_arrBSAnnotations[b].idx0;
 			for (uint32 e = 0; e < numPoints; e++)
 			{
-				i[e] = indices[e];
+				i[e] = rLMG.m_arrBSAnnotations[b].idx[e];
 				v[e] = Vec3(rLMG.m_arrParameter[i[e]].m_Para.x, rLMG.m_arrParameter[i[e]].m_Para.y, rLMG.m_arrParameter[i[e]].m_Para.z);
 			}
 
@@ -1417,10 +1416,9 @@ int SParametricSamplerInternal::GetWeights3D(const Vec3& vDesiredParameter, cons
 		for (uint32 b = 0; b < numBlocks; b++)
 		{
 			uint32 numPoints = rLMG.m_arrBSAnnotations[b].num;
-			const uint8* indices = &rLMG.m_arrBSAnnotations[b].idx0;
 			for (uint32 e = 0; e < numPoints; e++)
 			{
-				i[e] = indices[e];
+				i[e] = rLMG.m_arrBSAnnotations[b].idx[e];
 				v[e] = Vec3(rLMG.m_arrParameter[i[e]].m_Para.x, rLMG.m_arrParameter[i[e]].m_Para.y, rLMG.m_arrParameter[i[e]].m_Para.z);
 			}
 
@@ -2230,13 +2228,15 @@ void SParametricSamplerInternal::VisualizeBlendSpace(const IAnimationSet* _pAnim
 			const ColorB faceColor = (selectedFace == f) ? selFaceColor : unselFaceColor;
 
 			const BSBlendable& face = rLMG.m_arrBSAnnotations[f];
-			const Vec4& vP0 = rLMG.m_arrParameter[face.idx0].m_Para;
-			Vec3 v0 = Vec3(vP0.x, vP0.y, vP0.z) * scl + off;
-			const uint8* pIdxs = &face.idx0;
+
+			if (face.num < 3)
+			{
+				continue;
+			}
 
 			for (uint32 i = 0; i < face.num; i++)
 			{
-				Vec3 pt(rLMG.m_arrParameter[pIdxs[i]].m_Para.x, rLMG.m_arrParameter[pIdxs[i]].m_Para.y, rLMG.m_arrParameter[pIdxs[i]].m_Para.z);
+				const Vec3 pt(rLMG.m_arrParameter[face.idx[i]].m_Para.x, rLMG.m_arrParameter[face.idx[i]].m_Para.y, rLMG.m_arrParameter[face.idx[i]].m_Para.z);
 				facePts[i] = pt * scl + off;
 			}
 
@@ -2358,7 +2358,7 @@ void SParametricSamplerInternal::VisualizeBlendSpace(const IAnimationSet* _pAnim
 				vCharCol.x = 0.0f, vCharCol.y = 1.0f, vCharCol.z = 0.0f, col[p] = RGBA8(0x00, 0xff, 0x00, 0x00); //time-scaled asset
 
 			g_pAuxGeom->DrawOBB(_obb, pos, 1, col[p], eBBD_Extremes_Color_Encoded);
-			g_pIRenderer->DrawLabel(pos, 1.5f, "%d", p);
+			IRenderAuxText::DrawLabelF(pos, 1.5f, "%d", p);
 
 			const char* pAnimName = rLMG.m_arrParameter[p].m_animName.GetName_DEBUG();
 			pSkeletonAnim->StartAnimation(pAnimName, AParams);
@@ -2386,7 +2386,7 @@ void SParametricSamplerInternal::VisualizeBlendSpace(const IAnimationSet* _pAnim
 			vCharCol.z = 0.0f;
 			col[p] = RGBA8(0xff, 0x00, 0x00, 0x00);
 			g_pAuxGeom->DrawOBB(_obb, pos, 1, col[p], eBBD_Extremes_Color_Encoded);
-			g_pIRenderer->DrawLabel(pos, 1.5f, "%d", p);
+			IRenderAuxText::DrawLabelF(pos, 1.5f, "%d", p);
 
 			int32 i0 = rLMG.m_arrParameter[p].i0;
 			f32 w0 = rLMG.m_arrParameter[p].w0;

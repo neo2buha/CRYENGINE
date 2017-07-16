@@ -6,11 +6,10 @@
 
 namespace CryVR
 {
-std::vector<IVRCmdListener*> CVars::ms_listener;
-
 int CVars::hmd_info = 0;
-int CVars::hmd_social_screen = static_cast<int>(EHmdSocialScreen::eHmdSocialScreen_DistortedDualImage);
+int CVars::hmd_social_screen = static_cast<int>(EHmdSocialScreen::DistortedDualImage);
 int CVars::hmd_social_screen_keep_aspect = 0;
+<<<<<<< HEAD
 int CVars::hmd_driver = 0;
 int CVars::hmd_post_inject_camera = 0;
 #if defined(INCLUDE_OCULUS_SDK)
@@ -28,4 +27,10 @@ float CVars::hmd_quad_distance = 0.25f;
 float CVars::hmd_quad_width = 1.0f;
 int CVars::hmd_quad_absolute = 1;
 #endif // defined(INCLUDE_OPENVR_SDK)
+=======
+int CVars::hmd_tracking_origin = static_cast<int>(EHmdTrackingOrigin::Floor);
+float CVars::hmd_resolution_scale = 1.f;
+ICVar* CVars::pSelectedHmdNameVar = nullptr;
+>>>>>>> upstream/stabilisation
 }
+	

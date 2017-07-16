@@ -232,6 +232,7 @@ public:
 	IPhysicalEntity*         RelinquishCharacterPhysics(const Matrix34& mtx, float stiffness, bool bCopyJointVelocities, const Vec3& velHost);
 	void                     DestroyCharacterPhysics(int iMode = 0);
 	bool                     AddImpact(int partid, Vec3 point, Vec3 impact);
+	void                     RequestForcedPostSynchronization();
 
 	void                     SetJointPhysInfo(uint32 iJoint, const CryBonePhysics& pi, int nLod);
 	const CryBonePhysics&    GetJointPhysInfo(uint32 iJoint, int nLod) const;
@@ -319,6 +320,7 @@ private:
 	bool m_bPhysicsSynchronize;
 	bool m_bPhysicsSynchronizeFromEntity;
 	bool m_bPhysBufferFilled;
+	int  m_idLastSyncFrame = 0;
 
 	struct PhysAuxData
 	{
@@ -370,10 +372,11 @@ private:
 	CSkeletonPose*       m_pSkeletonPose;
 	CSkeletonAnim*       m_pSkeletonAnim;
 
-	bool                 m_bLimpRagdoll           : 1;
-	bool                 m_bSetDefaultPoseExecute : 1;
+	bool                 m_bLimpRagdoll              : 1;
+	bool                 m_bSetDefaultPoseExecute    : 1;
 
-	bool                 m_bFullSkeletonUpdate    : 1;
+	bool                 m_bFullSkeletonUpdate       : 1;
+	bool                 m_bForcePostSynchronization : 1;
 
 	DynArray<CCGAJoint>* m_arrCGAJoints;
 

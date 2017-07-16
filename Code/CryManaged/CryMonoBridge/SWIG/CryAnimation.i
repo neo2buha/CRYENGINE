@@ -1,6 +1,7 @@
 %include "CryEngine.swig"
 
 %import "CryCommon.i"
+%import "CryEntitySystem.i"
 
 %{
 #include <CryAnimation/ICryAnimation.h>
@@ -9,6 +10,7 @@
 #include <CryAnimation/IFacialAnimation.h>
 %}
 
+%ignore IAnimationEngineModule;
 %ignore IAnimationSerializable;
 %ignore CreateCharManager;
 %include "../../../../CryEngine/CryCommon/CryAnimation/ICryAnimation.h"

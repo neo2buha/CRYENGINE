@@ -16,7 +16,7 @@
 #endif
 
 #if defined(USE_NV_API)
-	#include <NVAPI/nvapi.h>
+	#include NV_API_HEADER
 #endif
 
 #include <CrySystem/VR/IHMDManager.h>
@@ -26,7 +26,7 @@
 	#include <IBenchmarkRendererSensorManager.h>
 #endif
 
-#if defined(AMD_LIQUID_VR) && !defined(OPENGL)
+#if defined(AMD_LIQUID_VR) && !CRY_RENDERER_OPENGL
 	#ifdef _M_AMD64
 		#define DXX_DLL_NAME "atidxx64.dll"
 		#define CFX_DLL_NAME "aticfx64.dll"
@@ -61,8 +61,6 @@ CD3DStereoRenderer::CD3DStereoRenderer(CD3D9Renderer& renderer, EStereoDevice de
 	, m_nvStereoStrength(0.0f)
 	, m_nvStereoActivated(0)
 	, m_curEye(LEFT_EYE)
-	, m_frontBufWidth(0)
-	, m_frontBufHeight(0)
 	, m_stereoStrength(0.0f)
 	, m_zeroParallaxPlaneDist(0.25f)
 	, m_maxSeparationScene(0.0f)
@@ -78,6 +76,7 @@ CD3DStereoRenderer::CD3DStereoRenderer(CD3D9Renderer& renderer, EStereoDevice de
 	, m_pHmdDevice(nullptr)
 	, m_bAsyncCameraMatrixValid(false)
 	, m_asyncCameraMatrix(IDENTITY)
+	, m_bPreviousCameraValid(false)
 {
 	if (device == STEREO_DEVICE_DEFAULT)
 		SelectDefaultDevice();
@@ -85,7 +84,7 @@ CD3DStereoRenderer::CD3DStereoRenderer(CD3D9Renderer& renderer, EStereoDevice de
 	memset(m_pVrQuadLayerTex, 0, sizeof(m_pVrQuadLayerTex));
 	m_bDisplayStereoDone = false;
 
-#if defined(AMD_LIQUID_VR) && !defined(OPENGL)
+#if defined(AMD_LIQUID_VR) && !CRY_RENDERER_OPENGL
 	//////////////////////////////////////////////////////////////////////////
 	// INTIALIZE LIQUID VR (to be relocated where appropriate later)
 	//////////////////////////////////////////////////////////////////////////
@@ -120,17 +119,7 @@ CD3DStereoRenderer::~CD3DStereoRenderer()
 
 void CD3DStereoRenderer::SelectDefaultDevice()
 {
-	EStereoDevice device = STEREO_DEVICE_NONE;
-
-#if CRY_PLATFORM_WINDOWS
-	device = STEREO_DEVICE_FRAMECOMP;
-#elif CRY_PLATFORM_DURANGO || CRY_PLATFORM_ORBIS
-	device = STEREO_DEVICE_FRAMECOMP;
-#elif CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID || CRY_PLATFORM_APPLE
-	device = STEREO_DEVICE_FRAMECOMP;
-#endif
-
-	m_device = device;
+	m_device = STEREO_DEVICE_FRAMECOMP;
 }
 
 void CD3DStereoRenderer::InitDeviceBeforeD3D()
@@ -198,7 +187,7 @@ void CD3DStereoRenderer::InitDeviceAfterD3D()
 	LOADING_TIME_PROFILE_SECTION;
 
 	g_pMgpu = NULL;
-#if defined(AMD_LIQUID_VR) && !defined(OPENGL)
+#if (CRY_RENDERER_DIRECT3D >= 110) && (CRY_RENDERER_DIRECT3D < 120) && defined(AMD_LIQUID_VR)
 	//TD need to add AMD lib check
 	// LIQUID
 	HMODULE hDxx = LoadLibraryA(DXX_DLL_NAME);
@@ -210,10 +199,7 @@ void CD3DStereoRenderer::InitDeviceAfterD3D()
 		if (pFnCreate != nullptr)
 		{
 			D3DDevice* device = NULL;
-	#if defined(DIRECT3D10)
 			device = m_renderer.GetDevice().GetRealDevice();
-	#endif
-
 			assert(device);
 			pFnCreate(device, &g_pDxxExt);
 
@@ -238,7 +224,7 @@ void CD3DStereoRenderer::InitDeviceAfterD3D()
 	}
 #endif
 
-#if defined(USE_NV_API)
+#if (CRY_RENDERER_DIRECT3D >= 110) && (CRY_RENDERER_DIRECT3D < 120) && defined(USE_NV_API)
 	if (IsDriver(DRIVER_NV))
 	{
 		if (m_nvStereoHandle)
@@ -284,13 +270,13 @@ void CD3DStereoRenderer::CreateResources()
 
 void CD3DStereoRenderer::CreateIntermediateBuffers()
 {
-	SAFE_RELEASE(CTexture::s_ptexStereoL);
-	SAFE_RELEASE(CTexture::s_ptexStereoR);
-
 	int nWidth = m_renderer.GetWidth();
 	int nHeight = m_renderer.GetHeight();
 
 	uint32 nFlags = FT_DONT_STREAM | FT_USAGE_RENDERTARGET;
+
+	CTexture::s_ptexStereoL = CTexture::GetOrCreateRenderTarget("$StereoL", nWidth, nHeight, Clr_Empty, eTT_2D, nFlags, eTF_R8G8B8A8);
+	CTexture::s_ptexStereoR = CTexture::GetOrCreateRenderTarget("$StereoR", nWidth, nHeight, Clr_Empty, eTT_2D, nFlags, eTF_R8G8B8A8);
 
 	if (m_submission > STEREO_SUBMISSION_SEQUENTIAL)
 	{
@@ -298,8 +284,19 @@ void CD3DStereoRenderer::CreateIntermediateBuffers()
 		m_renderer->GetDevice_Unsynchronized().SwitchNodeVisibility(~UINT(0));
 	}
 
-	CTexture::s_ptexStereoL = CTexture::CreateRenderTarget("$StereoL", nWidth, nHeight, Clr_Empty, eTT_2D, nFlags, eTF_R8G8B8A8);
-	CTexture::s_ptexStereoR = CTexture::CreateRenderTarget("$StereoR", nWidth, nHeight, Clr_Empty, eTT_2D, nFlags, eTF_R8G8B8A8);
+#if (CRY_RENDERER_DIRECT3D >= 120) && DX12_LINKEDADAPTER
+	// NOTE: Workaround for missing MultiGPU-support in the HMD libraries
+	if (m_renderer->GetDevice().GetNodeCount() > 1)
+	{
+		for (uint32 i = 0; i < RenderLayer::eQuadLayers_Total; ++i)
+		{
+			char textureName[16];
+			cry_sprintf(textureName, "$QuadLayer0_%d", i);
+
+			CTexture::s_ptexQuadLayers[i] = CTexture::GetOrCreateRenderTarget(textureName, nWidth, nHeight, Clr_Empty, eTT_2D, nFlags, eTF_R8G8B8A8);
+		}
+	}
+#endif
 
 	if (m_submission > STEREO_SUBMISSION_SEQUENTIAL)
 	{
@@ -312,6 +309,11 @@ void CD3DStereoRenderer::CreateIntermediateBuffers()
 
 void CD3DStereoRenderer::Shutdown()
 {
+	if(m_pHmdRenderer)
+		m_pHmdRenderer->ReleaseBuffers();
+
+	SAFE_DELETE(m_pHmdRenderer);
+
 	ReleaseResources();
 
 	OnHmdDeviceChanged(nullptr);
@@ -360,9 +362,6 @@ bool CD3DStereoRenderer::EnableStereo()
 	}
 #endif
 
-	if (!InitializeHmdRenderer())
-		return false;
-
 	return true;
 }
 
@@ -384,34 +383,7 @@ void CD3DStereoRenderer::DisableStereo()
 
 void CD3DStereoRenderer::ChangeOutputFormat()
 {
-	m_frontBufWidth = 0;
-	m_frontBufHeight = 0;
-
 	ShutdownHmdRenderer();
-	InitializeHmdRenderer();
-}
-
-bool CD3DStereoRenderer::InitializeHmdRenderer()
-{
-	assert(m_pHmdRenderer == nullptr);
-	m_pHmdRenderer = CreateHmdRenderer(m_output, m_pHmdDevice, &m_renderer, this);
-
-	if (m_pHmdRenderer != nullptr)
-	{
-		if (!m_pHmdRenderer->Initialize())
-		{
-			SAFE_DELETE(m_pHmdRenderer);
-			return false;
-		}
-
-		gEnv->pLog->Log("[HMD] HMD Renderer initialized");
-	}
-	else
-	{
-		gEnv->pLog->Log("[HMD] HMD Renderer not initialized - stereoOuput [%d] hmdDevice [%s null]", m_output, m_pHmdDevice ? "NOT" : "");
-	}
-
-	return m_pHmdRenderer != nullptr;
 }
 
 void CD3DStereoRenderer::ShutdownHmdRenderer()
@@ -444,7 +416,7 @@ void CD3DStereoRenderer::PrepareStereo(EStereoMode mode, EStereoOutput output)
 	if (m_mode != mode || m_output != output)
 	{
 		m_renderer.ForceFlushRTCommands();
-
+		
 		if (m_mode != mode)
 		{
 			m_mode = mode;
@@ -493,6 +465,17 @@ void CD3DStereoRenderer::PrepareStereo(EStereoMode mode, EStereoOutput output)
 
 		// Apply stereo strength
 		m_maxSeparationScene *= m_stereoStrength;
+
+		if (m_output == STEREO_OUTPUT_HMD && m_pHmdRenderer == nullptr && m_pHmdDevice != nullptr)
+		{
+			// Create the HMD renderer
+			m_pHmdRenderer = CreateHmdRenderer(*m_pHmdDevice, &m_renderer, this);
+
+			if (m_pHmdRenderer != nullptr)
+			{
+				m_pHmdRenderer->Initialize();
+			}
+		}
 
 		if (m_pHmdRenderer != nullptr)
 			m_pHmdRenderer->PrepareFrame();
@@ -543,6 +526,7 @@ void CD3DStereoRenderer::Update()
 CCamera CD3DStereoRenderer::PrepareCamera(int nEye, const CCamera& currentCamera)
 {
 	CCamera cam = currentCamera;
+	cam.SetEye(CCamera::EEye(nEye));
 
 	bool renderToHmd = false;
 
@@ -608,16 +592,39 @@ CCamera CD3DStereoRenderer::PrepareCamera(int nEye, const CCamera& currentCamera
 
 void CD3DStereoRenderer::ProcessScene(int sceneFlags, const SRenderingPassInfo& passInfo)
 {
-	int nThreadID = passInfo.ThreadID();
-
-	if (!RequiresSequentialSubmission() && CRenderer::CV_r_StereoMode == STEREO_MODE_DUAL_RENDERING && !passInfo.IsRecursivePass())
+	// for recursive rendering (e.g. rendering to ocean reflection texture), stereo is not needed
+	if (passInfo.IsRecursivePass() || (CRenderer::CV_r_StereoMode != STEREO_MODE_DUAL_RENDERING))
 	{
-		CCamera cam = m_renderer.m_RP.m_TI[nThreadID].m_cam;
+		m_renderer.m_pRT->RC_SetStereoEye(0);
 
-		int sceneFlagsLeft = SHDF_NO_SHADOWGEN;
-		int sceneFlagsRight = SHDF_NO_SHADOWGEN;
+		RenderScene(sceneFlags, passInfo);
 
-		// Left eye
+		return;
+	}
+
+	int nThreadID = passInfo.ThreadID();
+	CRenderView* pRenderView = passInfo.GetRenderView();
+
+	CCamera cameras[] =
+	{
+		PrepareCamera(LEFT_EYE,  m_renderer.m_RP.m_TI[nThreadID].m_cam),
+		PrepareCamera(RIGHT_EYE, m_renderer.m_RP.m_TI[nThreadID].m_cam)
+	};
+
+	if (!m_bPreviousCameraValid)
+	{
+		m_previousCamera[LEFT_EYE] = cameras[LEFT_EYE];
+		m_previousCamera[RIGHT_EYE] = cameras[RIGHT_EYE];
+		m_bPreviousCameraValid = true;
+	}
+
+
+
+	if (!RequiresSequentialSubmission())
+	{
+		int sceneFlagsDual = SHDF_STEREO_LEFT_EYE | SHDF_STEREO_RIGHT_EYE;
+
+		// both eyes
 		{
 			if (g_pMgpu && CRenderer::CV_r_StereoEnableMgpu)
 			{
@@ -625,15 +632,15 @@ void CD3DStereoRenderer::ProcessScene(int sceneFlags, const SRenderingPassInfo& 
 			}
 
 			m_renderer.m_pRT->RC_SetStereoEye(LEFT_EYE);
-			m_renderer.PushProfileMarker("LEFT_EYE");
+			m_renderer.PushProfileMarker("DUAL_EYES");
 
-			//			CCamera camL = PrepareCamera(LEFT_EYE, cam, passInfo);
-			//			m_renderer.SetCamera(camL);
+			pRenderView->SetCameras(cameras, 2);
+			pRenderView->SetPreviousFrameCameras(m_previousCamera, 2);
 
-			RenderScene(sceneFlags | sceneFlagsLeft, passInfo);
-			CopyToStereoFromMainThread(LEFT_EYE);
+			m_renderer.SetCamera(cameras[0]);
+			RenderScene(sceneFlags | sceneFlagsDual, passInfo);
 
-			m_renderer.PopProfileMarker("LEFT_EYE");
+			m_renderer.PopProfileMarker("DUAL_EYES");
 		}
 
 		if (g_pMgpu && CRenderer::CV_r_StereoEnableMgpu)
@@ -641,12 +648,10 @@ void CD3DStereoRenderer::ProcessScene(int sceneFlags, const SRenderingPassInfo& 
 			m_renderer->SelectGPU(GPUMASK_BOTH);
 		}
 	}
-	else if (CRenderer::CV_r_StereoMode == STEREO_MODE_DUAL_RENDERING && !passInfo.IsRecursivePass())   //for recursive rendering (e.g. rendering to ocean reflection texture), stereo is not needed
+	else 
 	{
-		CCamera cam = m_renderer.m_RP.m_TI[nThreadID].m_cam;
-
 		int sceneFlagsLeft = SHDF_STEREO_LEFT_EYE;
-		int sceneFlagsRight = SHDF_NO_SHADOWGEN | SHDF_STEREO_RIGHT_EYE;
+		int sceneFlagsRight = SHDF_STEREO_RIGHT_EYE | SHDF_NO_SHADOWGEN;
 
 		if (g_pMgpu && CRenderer::CV_r_StereoEnableMgpu)
 		{
@@ -670,11 +675,11 @@ void CD3DStereoRenderer::ProcessScene(int sceneFlags, const SRenderingPassInfo& 
 			m_renderer.m_pRT->RC_SetStereoEye(LEFT_EYE);
 			m_renderer.PushProfileMarker("LEFT_EYE");
 
-			CCamera camL = PrepareCamera(LEFT_EYE, cam);
-			m_renderer.SetCamera(camL);
+			m_renderer.SetCamera(cameras[LEFT_EYE]);
+			pRenderView->SetCameras(&cameras[LEFT_EYE], 1);
+			pRenderView->SetPreviousFrameCameras(&m_previousCamera[LEFT_EYE], 1);
 
 			RenderScene(sceneFlags | sceneFlagsLeft, passInfo);
-			CopyToStereoFromMainThread(LEFT_EYE);
 
 			m_renderer.PopProfileMarker("LEFT_EYE");
 		}
@@ -689,11 +694,12 @@ void CD3DStereoRenderer::ProcessScene(int sceneFlags, const SRenderingPassInfo& 
 			m_renderer.m_pRT->RC_SetStereoEye(RIGHT_EYE);
 			m_renderer.PushProfileMarker("RIGHT_EYE");
 
-			CCamera camR = PrepareCamera(RIGHT_EYE, cam);
-			m_renderer.SetCamera(camR);
+			m_renderer.SetCamera(cameras[RIGHT_EYE]);
+			pRenderView->SetCameras(&cameras[RIGHT_EYE], 1);
+			pRenderView->SetPreviousFrameCameras(&m_previousCamera[RIGHT_EYE], 1);
 
 			RenderScene(sceneFlags | sceneFlagsRight, passInfo);
-			CopyToStereoFromMainThread(RIGHT_EYE);
+
 			m_renderer.PopProfileMarker("RIGHT_EYE");
 		}
 
@@ -702,49 +708,9 @@ void CD3DStereoRenderer::ProcessScene(int sceneFlags, const SRenderingPassInfo& 
 			m_renderer->SelectGPU(GPUMASK_BOTH);
 		}
 	}
-	else
-	{
-		if (CRenderer::CV_r_StereoMode != STEREO_MODE_DUAL_RENDERING)
-		{
-			m_renderer.m_pRT->RC_SetStereoEye(0);
-		}
 
-		RenderScene(sceneFlags, passInfo);
-	}
-}
-
-void CD3DStereoRenderer::CopyToStereo(int channel)
-{
-	assert(IsRenderThread());
-
-	PROFILE_LABEL_SCOPE("COPY_TO_STEREO");
-
-	CTexture* pTex;
-
-	if (channel == 0)
-	{
-		//TD FIX with proper version
-		//pTex = CTexture::s_ptexStereoL2;
-		pTex = GetEyeTarget(LEFT_EYE);
-		m_needClearLeft = false;
-	}
-	else
-	{
-		//TD FIX with proper version
-		//pTex = CTexture::s_ptexStereoR2;
-
-		pTex = GetEyeTarget(RIGHT_EYE);
-		m_needClearRight = false;
-	}
-
-	if (pTex == nullptr)
-		return;
-
-	//TD FIX with proper version
-	//GetUtils().CopyScreenToTexture( CTexture::s_ptexSceneDiffuse );
-	//GetUtils().StretchRect(CTexture::s_ptexSceneDiffuse, pTex );
-
-	GetUtils().CopyScreenToTexture(pTex);
+	m_previousCamera[LEFT_EYE] = cameras[LEFT_EYE];
+	m_previousCamera[RIGHT_EYE] = cameras[RIGHT_EYE];
 }
 
 void CD3DStereoRenderer::SubmitFrameToHMD()
@@ -772,6 +738,21 @@ void CD3DStereoRenderer::DisplayStereo()
 	if (!IsStereoEnabled() || m_renderer.m_bDeviceLost)  // When unloading level, m_bDeviceLost is set to 2
 		return;
 
+	// NOTE: Needs to be executed unconditionally if missing MultiGPU-support in the HMD libraries
+	// Otherwise it could possibly be skipped by "m_pHmdRenderer != nullptr"
+	if (m_submission > STEREO_SUBMISSION_SEQUENTIAL)
+	{
+		// NOTE: Magic number to allow MultiGPU driver debugging
+		if (CRenderer::CV_r_StereoEnableMgpu != 111)
+		{
+			// Left eye contains both eye views, copy the content crossed into right eye
+			// Left eye contains now L+R and right eye contains R+L
+			m_renderer->GetDeviceContext().CopyResourceOvercross(
+			  GetEyeTarget(RIGHT_EYE)->GetDevTexture()->GetBaseTexture(),
+			  GetEyeTarget(LEFT_EYE)->GetDevTexture()->GetBaseTexture());
+		}
+	}
+
 	if (m_pHmdRenderer != nullptr)
 	{
 		return;
@@ -785,24 +766,22 @@ void CD3DStereoRenderer::DisplayStereo()
 	m_needClearLeft = true;
 	m_needClearRight = true;
 
+	SDisplayContext* pDC = m_renderer->GetActiveDisplayContext();
+	CTexture* pBB = m_renderer->GetCurrentBackBuffer(pDC);
+
+	const int widthBB = pDC->m_Width;
+	const int heightBB = pDC->m_Height;
+
+	const int width = m_renderer.GetWidth();
+	const int height = m_renderer.GetHeight();
+
 	if ((m_device == STEREO_DEVICE_FRAMECOMP) && (m_output == STEREO_OUTPUT_SIDE_BY_SIDE))
 	{
-		D3DResource* pTarget = nullptr;
-		m_renderer->m_pNewTarget[0]->m_pTarget->GetResource(&pTarget);
+		const SResourceRegionMapping regionL = { { 0, 0, 0, 0 }, { 0           , 0, 0, 0 }, { width, height, 1, 1 } };
+		const SResourceRegionMapping regionR = { { 0, 0, 0, 0 }, { widthBB >> 1, 0, 0, 0 }, { width, height, 1, 1 } };
 
-		//	m_renderer.FX_ClearTarget(GetEyeTarget(LEFT_EYE), Clr_Median);
-		//	m_renderer.FX_ClearTarget(GetEyeTarget(RIGHT_EYE), Clr_Median);
-
-		m_renderer->GetDeviceContext_Unsynchronized().JoinSubresourceRegion(
-		  pTarget,
-		  0,
-		  0,
-		  0,
-		  0,
-		  GetEyeTarget(LEFT_EYE)->GetDevTexture()->GetBaseTexture(),
-		  GetEyeTarget(RIGHT_EYE)->GetDevTexture()->GetBaseTexture(),
-		  0,
-		  nullptr);
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(GetEyeTarget(LEFT_EYE )->GetDevTexture(), pBB->GetDevTexture(), regionL);
+		GetDeviceObjectFactory().GetCoreCommandList().GetCopyInterface()->Copy(GetEyeTarget(RIGHT_EYE)->GetDevTexture(), pBB->GetDevTexture(), regionR);
 
 		return;
 	}
@@ -831,9 +810,14 @@ void CD3DStereoRenderer::DisplayStereo()
 	//		&fullRect);
 	//}
 
+	// Restore original backbuffer on render target stack
+	assert(m_renderer.m_nRTStackLevel[0] == 0);
+//	m_renderer.FX_SetRenderTarget(0, m_renderer.m_pBackBuffer, NULL, 0);
+	m_renderer.FX_SetRenderTarget(0, (D3DSurface*)0xDEADBEEF, NULL, 0);
+
 	// TODO: Fix this properly
 	if (!gEnv->IsEditor())
-		m_renderer.RT_SetViewport(0, 0, m_renderer.GetBackbufferWidth(), m_renderer.GetBackbufferHeight());
+		m_renderer.RT_SetViewport(0, 0, widthBB, heightBB);
 
 	CShader* pSH = m_renderer.m_cEF.s_ShaderStereo;
 	SelectShaderTechnique();
@@ -844,9 +828,6 @@ void CD3DStereoRenderer::DisplayStereo()
 
 	m_renderer.FX_SetActiveRenderTargets();
 	m_renderer.FX_SetState(GS_NODEPTHTEST);
-
-	int width = m_renderer.GetWidth();
-	int height = m_renderer.GetHeight();
 
 	Vec4 pParams = Vec4((float) width, (float) height, 0, 0);
 	CShaderMan::s_shPostEffects->FXSetPSFloat(m_SourceSizeParamName, &pParams, 1);
@@ -869,7 +850,7 @@ void CD3DStereoRenderer::DisplayStereo()
 	pSH->FXEndPass();
 	pSH->FXEnd();
 
-	m_renderer.RT_SetViewport(0, 0, m_renderer.m_backbufferWidth, m_renderer.m_backbufferHeight);
+	m_renderer.RT_SetViewport(0, 0, widthBB, heightBB);
 }
 
 void CD3DStereoRenderer::BeginRenderingMRT(bool disableClear)
@@ -917,7 +898,7 @@ void CD3DStereoRenderer::BeginRenderingTo(StereoEye eye)
 
 	if (eye == LEFT_EYE)
 	{
-		gRenDev->SetProfileMarker("LEFT_EYE", CRenderer::ESPM_PUSH);
+		//gRenDev->SetProfileMarker("LEFT_EYE", CRenderer::ESPM_PUSH);
 		if (m_needClearLeft)
 		{
 			m_needClearLeft = false;
@@ -927,7 +908,7 @@ void CD3DStereoRenderer::BeginRenderingTo(StereoEye eye)
 	}
 	else
 	{
-		gRenDev->SetProfileMarker("RIGHT_EYE", CRenderer::ESPM_PUSH);
+		//gRenDev->SetProfileMarker("RIGHT_EYE", CRenderer::ESPM_PUSH);
 		if (m_needClearRight)
 		{
 			m_needClearRight = false;
@@ -948,13 +929,13 @@ void CD3DStereoRenderer::EndRenderingTo(StereoEye eye)
 {
 	if (eye == LEFT_EYE)
 	{
-		gRenDev->SetProfileMarker("LEFT_EYE", CRenderer::ESPM_POP);
+		//gRenDev->SetProfileMarker("LEFT_EYE", CRenderer::ESPM_POP);
 		GetEyeTarget(LEFT_EYE)->SetResolved(true);
 		m_renderer.FX_PopRenderTarget(0);
 	}
 	else
 	{
-		gRenDev->SetProfileMarker("RIGHT_EYE", CRenderer::ESPM_POP);
+		//gRenDev->SetProfileMarker("RIGHT_EYE", CRenderer::ESPM_POP);
 		GetEyeTarget(RIGHT_EYE)->SetResolved(true);
 		m_renderer.FX_PopRenderTarget(0);
 	}
@@ -1045,11 +1026,6 @@ void CD3DStereoRenderer::RenderScene(int sceneFlags, const SRenderingPassInfo& p
 bool CD3DStereoRenderer::IsRenderThread() const
 {
 	return m_renderer.m_pRT->IsRenderThread();
-}
-
-void CD3DStereoRenderer::CopyToStereoFromMainThread(int channel)
-{
-	m_renderer.m_pRT->RC_CopyToStereoTex(channel);
 }
 
 void CD3DStereoRenderer::PushRenderTargets()
@@ -1148,87 +1124,78 @@ void CD3DStereoRenderer::OnResolutionChanged()
 	}
 }
 
-void CD3DStereoRenderer::CalculateBackbufferResolution(int eyeWidth, int eyeHeight, int* pBackbufferWidth, int* pBackbufferHeight)
+void CD3DStereoRenderer::CalculateBackbufferResolution(int nativeWidth, int nativeHeight, int* pRenderWidth, int *pRenderHeight)
 {
-	if (m_pHmdRenderer != nullptr)
-		m_pHmdRenderer->CalculateBackbufferResolution(eyeWidth, eyeHeight, pBackbufferWidth, pBackbufferHeight);
-	else
+	switch (m_output)
 	{
-		switch (m_output)
-		{
 		case STEREO_OUTPUT_SIDE_BY_SIDE:
-			*pBackbufferWidth = eyeWidth * 2;
-			*pBackbufferHeight = eyeHeight;
+			*pRenderWidth = nativeWidth * 2;
+			*pRenderHeight = nativeHeight;
 			break;
 		case STEREO_OUTPUT_ABOVE_AND_BELOW:
-			*pBackbufferWidth = eyeWidth;
-			*pBackbufferHeight = eyeHeight * 2;
+			*pRenderWidth = nativeWidth;
+			*pRenderHeight = nativeHeight * 2;
+			break;
+		case STEREO_OUTPUT_HMD:
+			if (m_pHmdDevice)
+			{
+				// Update renderer resolution
+				HmdDeviceInfo deviceInfo;
+				m_pHmdDevice->GetDeviceInfo(deviceInfo);
+
+				float resolutionScale = gEnv->pConsole->GetCVar("hmd_resolution_scale")->GetFVal();
+				int screenWidth = (int)floor(float(deviceInfo.screenWidth) * resolutionScale);
+				int screenHeight = (int)floor(float(deviceInfo.screenHeight) * resolutionScale);
+
+				*pRenderWidth = screenWidth / 2;
+				*pRenderHeight = screenHeight;
+			}
+			else
+			{
+				*pRenderWidth = nativeWidth;
+				*pRenderHeight = nativeHeight;
+			}
 			break;
 		default:
-			*pBackbufferWidth = eyeWidth;
-			*pBackbufferHeight = eyeHeight;
+			*pRenderWidth = nativeWidth;
+			*pRenderHeight = nativeHeight;
 			break;
-		}
 	}
 }
 
 void CD3DStereoRenderer::OnHmdDeviceChanged(IHmdDevice* pHmdDevice)
 {
-	static bool firstInitialization = true;
-
-	ShutdownHmdRenderer();
-
 	m_pHmdDevice = pHmdDevice;
 
-	InitializeHmdRenderer();
-
-	//Do an initial initialization for the hmd renderer when not activated as output so it can setup it's state if needed (at least osvr needs to initialize the renderer before it can be queried for the preferred resolution)
-	if (m_pHmdDevice && !m_pHmdRenderer && m_output != STEREO_OUTPUT_HMD && firstInitialization)
+	if (m_pHmdDevice == nullptr)
 	{
-		m_pHmdRenderer = CreateHmdRenderer(STEREO_OUTPUT_HMD, m_pHmdDevice, &m_renderer, this);
-
-		if (m_pHmdRenderer != nullptr)
-		{
-			m_pHmdRenderer->Initialize();
-		}
-		ShutdownHmdRenderer();
+		m_device = STEREO_DEVICE_NONE;
+		return;
 	}
 
-	firstInitialization = false;
-
+	// Make sure PrepareStereo is called in Update by specifying a device
+	SelectDefaultDevice();
 }
 
-IHmdRenderer* CD3DStereoRenderer::CreateHmdRenderer(EStereoOutput stereoOutput, IHmdDevice* pDevice, CD3D9Renderer* pRenderer, CD3DStereoRenderer* pStereoRenderer)
+IHmdRenderer* CD3DStereoRenderer::CreateHmdRenderer(IHmdDevice& device, CD3D9Renderer* pRenderer, CD3DStereoRenderer* pStereoRenderer)
 {
-	if (pDevice)
+#if defined(INCLUDE_VR_RENDERING)
+	switch (device.GetClass())
 	{
-		const EHmdClass deviceClass = pDevice->GetClass();
-		switch (deviceClass)
-		{
-#if defined(INCLUDE_OCULUS_SDK)
-		case eHmdClass_Oculus:
-			{
-				if (stereoOutput == STEREO_OUTPUT_HMD && pDevice != nullptr && pDevice->GetClass() == eHmdClass_Oculus)
-					return new CD3DOculusRenderer(static_cast<CryVR::Oculus::IOculusDevice*>(pDevice), pRenderer, pStereoRenderer);
-			}
-			break;
-#endif
-#if defined(INCLUDE_OPENVR_SDK)
-		case eHmdClass_OpenVR:
-			if (stereoOutput == STEREO_OUTPUT_HMD && pDevice != NULL && pDevice->GetClass() == eHmdClass_OpenVR)
-				return new CD3DOpenVRRenderer(static_cast<CryVR::OpenVR::IOpenVRDevice*>(pDevice), pRenderer, pStereoRenderer);
-			break;
-#endif
-#if defined(INCLUDE_OSVR_SDK)
-		case eHmdClass_Osvr:
-			if (stereoOutput == STEREO_OUTPUT_HMD && pDevice != NULL && pDevice->GetClass() == eHmdClass_Osvr)
-				return new CryVR::Osvr::CD3DOsvrRenderer(static_cast<CryVR::Osvr::IOsvrDevice*>(pDevice), pRenderer, pStereoRenderer);
-#endif
-		case eHmdClass_Null:
-		default:
-			break;
-		}
+	case eHmdClass_Oculus:
+		return new CD3DOculusRenderer(static_cast<CryVR::Oculus::IOculusDevice*>(&device), pRenderer, pStereoRenderer);
+	case eHmdClass_OpenVR:
+		return new CD3DOpenVRRenderer(static_cast<CryVR::OpenVR::IOpenVRDevice*>(&device), pRenderer, pStereoRenderer);
+	case eHmdClass_Osvr:
+		return new CryVR::Osvr::CD3DOsvrRenderer(static_cast<CryVR::Osvr::IOsvrDevice*>(&device), pRenderer, pStereoRenderer);
+	default:
+		iLog->LogError("Tried to create HMD renderer for unknown headset!");
+		break;
 	}
+#else
+	iLog->LogError("Tried to create HMD renderer with VR rendering support disabled for renderer at compile-time!");
+#endif
+
 	return nullptr;
 }
 
@@ -1267,4 +1234,29 @@ void CD3DStereoRenderer::TryInjectHmdCameraAsync(CRenderView* pRenderView)
 	currentCamera.SetMatrix(m_asyncCameraMatrix);
 	CCamera newCamera = PrepareCamera(m_renderer.m_CurRenderEye, currentCamera);
 	m_renderer.SetCamera(newCamera);
+}
+
+//////////////////////////////////////////////////////////////////////////
+CTexture* CD3DStereoRenderer::WrapD3DRenderTarget(D3DTexture* d3dTexture, uint32 width, uint32 height, DXGI_FORMAT format, const char* name, bool shaderResourceView)
+{
+	ETEX_Format texFormat = DeviceFormats::ConvertToTexFormat(format);
+	CTexture* texture = CTexture::GetOrCreateTextureObject(name, width, height, 1, eTT_2D, FT_DONT_RELEASE | FT_DONT_STREAM | FT_USAGE_RENDERTARGET, texFormat);
+	if (texture == nullptr)
+	{
+		gEnv->pLog->Log("[HMD][Oculus] Unable to create texture object!");
+		return nullptr;
+	}
+
+	// CTexture::CreateTextureObject does not set width and height if the texture already existed
+	assert(texture->GetWidth() == width);
+	assert(texture->GetHeight() == height);
+	assert(texture->GetDepth() == 1);
+
+	d3dTexture->AddRef();
+
+	texture->SRGBRead(DeviceFormats::ConvertToSRGB(format) == format);
+	texture->SetDevTexture(CDeviceTexture::Associate(texture->GetLayout(), d3dTexture));
+	texture->SetClosestFormatSupported();
+
+	return texture;
 }

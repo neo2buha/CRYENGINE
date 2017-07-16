@@ -34,7 +34,7 @@
 	#define UIACTION_ERROR   (void)
 #endif
 
-class CAutoRegUIFlowNode;
+class CFlashUiFlowNodeFactory;
 struct CUIActionManager;
 class CFlashUIActionEvents;
 
@@ -51,7 +51,10 @@ class CFlashUI
 	CRYINTERFACE_ADD(IFlashUI)
 	CRYINTERFACE_END()
 
-	CRYGENERATE_SINGLETONCLASS(CFlashUI, IFlashUIExtensionName, 0x35AE7F0FBB13437B, 0x9C5FFCD2568616A5)
+	CRYGENERATE_SINGLETONCLASS(CFlashUI, "FlashUI", 0x35AE7F0FBB13437B, 0x9C5FFCD2568616A5)
+
+	CFlashUI();
+	virtual ~CFlashUI() {}
 
 public:
 	// IFlashUI
@@ -59,6 +62,7 @@ public:
 	virtual bool                      PostInit() override;
 	virtual void                      Update(float fDeltatime) override;
 	virtual void                      Reload() override;
+	virtual void                      ClearUIActions() override { ClearActions(); }
 	virtual void                      Shutdown() override;
 
 	virtual bool                      LoadElementsFromFile(const char* sFileName) override;
@@ -107,10 +111,10 @@ public:
 
 	virtual void                      GetMemoryStatistics(ICrySizer* s) const override;
 
-#if !defined(_LIB) || defined(IS_EAAS)
-	virtual SUIItemLookupSet_Impl<SUIParameterDesc>* CreateLookupParameter() { return new SUIItemLookupSet_Impl<SUIParameterDesc>(); };
-	virtual SUIItemLookupSet_Impl<SUIMovieClipDesc>* CreateLookupMovieClip() { return new SUIItemLookupSet_Impl<SUIMovieClipDesc>(); };
-	virtual SUIItemLookupSet_Impl<SUIEventDesc>*     CreateLookupEvent()     { return new SUIItemLookupSet_Impl<SUIEventDesc>(); };
+#if !defined(_LIB)
+	virtual SUIItemLookupSet_Impl<SUIParameterDesc>* CreateLookupParameter() override { return new SUIItemLookupSet_Impl<SUIParameterDesc>(); };
+	virtual SUIItemLookupSet_Impl<SUIMovieClipDesc>* CreateLookupMovieClip() override { return new SUIItemLookupSet_Impl<SUIMovieClipDesc>(); };
+	virtual SUIItemLookupSet_Impl<SUIEventDesc>*     CreateLookupEvent() override { return new SUIItemLookupSet_Impl<SUIEventDesc>(); };
 #endif
 	// ~IFlashUI
 
@@ -176,7 +180,6 @@ public:
 
 	EPlatformUI GetCurrentPlatform();
 
-	typedef std::vector<CAutoRegUIFlowNode*> TUIFlowNodes;
 private:
 	CFlashUI(const CFlashUI&) : m_modules(8) {}
 
@@ -248,7 +251,7 @@ private:
 	typedef std::vector<IFlashPlayer*> TPlayerList;
 	TPlayerList           m_loadtimePlayerList;
 
-	TUIFlowNodes          m_UINodes;
+	std::vector<CFlashUiFlowNodeFactory*> m_UINodes;
 
 	typedef std::map<ITexture*, string> TTextureMap;
 	TTextureMap       m_preloadedTextures;

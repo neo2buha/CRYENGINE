@@ -8,7 +8,7 @@
 
    -------------------------------------------------------------------------
    History:
-   - 7:9:2004   17:47 : Created by Márcio Martins
+   - 7:9:2004   17:47 : Created by MÃ¡rcio Martins
    - 15:9:2010  12:30 : Revised by Dean Claassen
 
 *************************************************************************/
@@ -112,6 +112,9 @@ public:
 	void AddExtraActionListener(IActionListener* pExtraActionListener);
 	void RemoveExtraActionListener(IActionListener* pExtraActionListener);
 	void NotifyExtraActionListeners(const ActionId& action, int currentState, float value);
+	void AddFlowNodeActionListener(IActionListener* pExtraActionListener);
+	void RemoveFlowNodeActionListener(IActionListener* pExtraActionListener);
+	void NotifyFlowNodeActionListeners(const ActionId& action, int currentState, float value);
 
 private:
 	CActionMapAction* CreateAndGetAction(const ActionId& actionId);
@@ -139,6 +142,7 @@ private:
 	TActionMap          m_actions;
 	EntityId            m_listenerId;
 	TActionMapListeners m_actionMapListeners;
+	TActionMapListeners m_flownodesListeners;
 	string              m_name;
 	int                 m_iNumRebindedInputs;
 };
